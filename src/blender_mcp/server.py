@@ -13,6 +13,9 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
+# Import our installation manager
+from .installation_manager import get_installation_manager
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -206,9 +209,69 @@ mcp = FastMCP(
 _blender_connection = None
 _polyhaven_enabled = False  # Add this global variable
 
+def get_intelligent_error_response(original_error: str) -> str:
+    """Generate intelligent error response with setup guidance"""
+    try:
+        installer = get_installation_manager()
+        diagnosis = installer.diagnose_connection_issue()
+        
+        # Try auto-fix if possible
+        auto_fix_attempted = False
+        if diagnosis.get("can_auto_fix", False):
+            logger.info("Attempting auto-fix for connection issue...")
+            
+            if diagnosis["issue"] == "addon_not_installed" and diagnosis.get("can_auto_fix"):
+                blender_path = diagnosis.get("blender_path")
+                if blender_path:
+                    success, msg = installer.install_addon_automatically(blender_path)
+                    auto_fix_attempted = True
+                    if success:
+                        return f"""✅ **Auto-Installation Successful!**
+
+{msg}
+
+**Next Steps:**
+1. Open Blender (with GUI)  
+2. Press 'N' in 3D Viewport to open sidebar
+3. Find "BlenderMCP" tab  
+4. Click "Connect to Claude" to start the server
+5. Try your request again
+
+The BlenderMCP addon has been automatically installed and enabled!"""
+                    else:
+                        logger.warning(f"Auto-installation failed: {msg}")
+        
+        # Generate setup instructions
+        instructions = installer.get_setup_instructions(diagnosis)
+        
+        error_response = f"""🔧 **BlenderMCP Setup Required**
+
+{instructions}
+
+---
+*Original error: {original_error}*
+
+{'*Auto-installation was attempted but failed. Please follow manual steps above.*' if auto_fix_attempted else ''}"""
+        
+        return error_response
+        
+    except Exception as e:
+        logger.error(f"Error generating intelligent response: {str(e)}")
+        # Fallback to basic error message
+        return f"""🔧 **BlenderMCP Connection Error**
+
+Could not connect to Blender. Please ensure:
+
+1. **Blender 3.0+** is installed and running
+2. **BlenderMCP addon** is installed and enabled  
+3. **MCP server** is started in Blender (BlenderMCP tab → "Connect to Claude")
+
+*Error details: {original_error}*"""
+
+
 def get_blender_connection():
-    """Get or create a persistent Blender connection"""
-    global _blender_connection, _polyhaven_enabled  # Add _polyhaven_enabled to globals
+    """Get or create a persistent Blender connection with intelligent error handling"""
+    global _blender_connection, _polyhaven_enabled
     
     # If we have an existing connection, check if it's still valid
     if _blender_connection is not None:
@@ -235,7 +298,12 @@ def get_blender_connection():
         if not _blender_connection.connect():
             logger.error("Failed to connect to Blender")
             _blender_connection = None
-            raise Exception("Could not connect to Blender. Make sure the Blender addon is running.")
+            
+            # Generate intelligent error response instead of generic exception
+            basic_error = "Could not connect to Blender. Make sure the Blender addon is running."
+            intelligent_error = get_intelligent_error_response(basic_error)
+            raise Exception(intelligent_error)
+            
         logger.info("Created new persistent connection to Blender")
     
     return _blender_connection
