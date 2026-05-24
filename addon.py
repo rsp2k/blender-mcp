@@ -1,10 +1,11 @@
 # Code created by Siddharth Ahuja: www.github.com/ahujasid © 2025
+# Transformed for FastMCP OAuth Message Bus Integration
 
 import bpy
+import bmesh
 import mathutils
 import json
 import threading
-import socket
 import time
 import requests
 import tempfile
@@ -12,17 +13,55 @@ import traceback
 import os
 import shutil
 import zipfile
+import uuid
+import hashlib
+import base64
+import logging
+from datetime import datetime, timedelta
 from bpy.props import StringProperty, IntProperty, BoolProperty, EnumProperty
 import io
 from contextlib import redirect_stdout, suppress
+from urllib.parse import urlparse, parse_qs
+from queue import PriorityQueue, Queue
+import asyncio
+from typing import Optional, Dict, Any, List
+import weakref
+
+# FastMCP imports - install in Blender's Python:
+#   <blender_python> -m pip install fastmcp
+try:
+    from fastmcp import Client as FastMCPClient
+    from fastmcp.client.transports import StreamableHttpTransport
+    FASTMCP_AVAILABLE = True
+except ImportError:
+    FASTMCP_AVAILABLE = False
+    print("[BlenderMCP] fastmcp not installed - run: <blender_python> -m pip install fastmcp")
+
+# heapq for priority queue
+import heapq
+
+# Cryptography imports for secure token storage
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
+    print("Cryptography library not available - using fallback token encryption")
+
+import platform
 
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 2),
+    "version": (2, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
-    "description": "Connect Blender to Claude via MCP",
+    "description": (
+        "Connect Blender to the BlenderMCP server as a bus client. "
+        "Requires fastmcp: <blender_python> -m pip install fastmcp"
+    ),
     "category": "Interface",
 }
 
@@ -32,153 +71,481 @@ RODIN_FREE_TRIAL_KEY = "k9TcfFoEhNd9cCPP2guHAHHHkctZHIRhZDywZ1euGUXwihbYLpOjQhof
 REQ_HEADERS = requests.utils.default_headers()
 REQ_HEADERS.update({"User-Agent": "blender-mcp"})
 
-class BlenderMCPServer:
-    def __init__(self, host='localhost', port=9876):
-        self.host = host
-        self.port = port
+# Sticky UUID Management
+class StickyUUIDManager:
+    """Manages persistent client UUID for message bus registration"""
+    
+    def __init__(self):
+        self.uuid_file = os.path.join(bpy.utils.resource_path('USER'), "config", "blender_mcp_uuid.txt")
+        self.client_id = self._load_or_generate_uuid()
+    
+    def _load_or_generate_uuid(self) -> str:
+        """Load existing UUID or generate new one"""
+        try:
+            if os.path.exists(self.uuid_file):
+                with open(self.uuid_file, 'r') as f:
+                    stored_uuid = f.read().strip()
+                    if len(stored_uuid) == 36:  # Valid UUID length
+                        print(f"Loaded existing client UUID: blender-{stored_uuid[:8]}")
+                        return f"blender-{stored_uuid}"
+        except Exception as e:
+            print(f"Error loading UUID: {e}")
+        
+        # Generate new UUID
+        new_uuid = str(uuid.uuid4())
+        try:
+            os.makedirs(os.path.dirname(self.uuid_file), exist_ok=True)
+            with open(self.uuid_file, 'w') as f:
+                f.write(new_uuid)
+            print(f"Generated new client UUID: blender-{new_uuid[:8]}")
+        except Exception as e:
+            print(f"Error saving UUID: {e}")
+        
+        return f"blender-{new_uuid}"
+    
+    def get_client_id(self) -> str:
+        return self.client_id
+
+
+# OAuth Token Management
+class OAuthTokenManager:
+    """Manages OAuth tokens with secure storage and automatic refresh"""
+    
+    def __init__(self):
+        self.token_file = os.path.join(bpy.utils.resource_path('USER'), "config", "blender_mcp_tokens.json")
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expires = None
+        self._load_tokens()
+    
+    def _load_tokens(self):
+        """Load tokens from encrypted secure storage"""
+        try:
+            if os.path.exists(self.token_file):
+                with open(self.token_file, 'r') as f:
+                    data = json.load(f)
+                    
+                    # Decrypt tokens using helper methods
+                    if data.get('access_token'):
+                        self.access_token = self._decrypt_token(data['access_token'])
+                    
+                    if data.get('refresh_token'):
+                        self.refresh_token = self._decrypt_token(data['refresh_token'])
+                    
+                    if data.get('expires_at'):
+                        self.token_expires = datetime.fromisoformat(data['expires_at'])
+                        
+        except Exception as e:
+            print(f"Error loading tokens: {e}")
+            self._clear_tokens()
+    
+    def _get_encryption_key(self) -> bytes:
+        """Generate machine-specific encryption key"""
+        machine_id = platform.node() + platform.machine() + str(bpy.app.version)
+        
+        if CRYPTOGRAPHY_AVAILABLE:
+            # Use proper key derivation
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=b'blender_mcp_addon_salt',  # Fixed salt for consistency
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(machine_id.encode()))
+            return key
+        else:
+            # Fallback to simple hash-based key
+            return base64.urlsafe_b64encode(hashlib.sha256(machine_id.encode()).digest())
+    
+    def _encrypt_token(self, token: str) -> str:
+        """Encrypt token for storage"""
+        if CRYPTOGRAPHY_AVAILABLE:
+            encryption_key = self._get_encryption_key()
+            cipher = Fernet(encryption_key)
+            encrypted = cipher.encrypt(token.encode('utf-8'))
+            return base64.urlsafe_b64encode(encrypted).decode('utf-8')
+        else:
+            # Fallback: simple base64 encoding (not secure but better than plaintext)
+            return base64.b64encode(token.encode('utf-8')).decode('utf-8')
+    
+    def _decrypt_token(self, encrypted_token: str) -> str:
+        """Decrypt token from storage"""
+        if CRYPTOGRAPHY_AVAILABLE:
+            encryption_key = self._get_encryption_key()
+            cipher = Fernet(encryption_key)
+            encrypted_bytes = base64.urlsafe_b64decode(encrypted_token)
+            return cipher.decrypt(encrypted_bytes).decode('utf-8')
+        else:
+            # Fallback: simple base64 decoding
+            return base64.b64decode(encrypted_token).decode('utf-8')
+    
+    def _save_tokens(self):
+        """Save tokens to encrypted secure storage"""
+        try:
+            os.makedirs(os.path.dirname(self.token_file), exist_ok=True)
+            
+            data = {}
+            if self.access_token:
+                data['access_token'] = self._encrypt_token(self.access_token)
+            
+            if self.refresh_token:
+                data['refresh_token'] = self._encrypt_token(self.refresh_token)
+            
+            if self.token_expires:
+                data['expires_at'] = self.token_expires.isoformat()
+            
+            # Add security metadata
+            data['created_at'] = datetime.now().isoformat()
+            data['encryption_method'] = 'fernet' if CRYPTOGRAPHY_AVAILABLE else 'base64_fallback'
+            
+            # Set secure file permissions
+            with open(self.token_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            # Restrict file access (Unix-like systems)
+            try:
+                import stat
+                os.chmod(self.token_file, stat.S_IRUSR | stat.S_IWUSR)  # 600 permissions
+            except (ImportError, OSError):
+                pass  # Windows or permission error
+                
+        except Exception as e:
+            print(f"Error saving tokens: {e}")
+    
+    def _clear_tokens(self):
+        """Clear all stored tokens"""
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expires = None
+        try:
+            if os.path.exists(self.token_file):
+                os.remove(self.token_file)
+        except Exception as e:
+            print(f"Error clearing tokens: {e}")
+    
+    def set_tokens(self, access_token: str, refresh_token: str = None, expires_in: int = 3600):
+        """Set new tokens"""
+        self.access_token = access_token
+        if refresh_token:
+            self.refresh_token = refresh_token
+        self.token_expires = datetime.now() + timedelta(seconds=expires_in - 60)  # 60s buffer
+        self._save_tokens()
+    
+    def get_valid_token(self) -> Optional[str]:
+        """Get valid access token, refreshing if needed"""
+        if not self.access_token:
+            return None
+        
+        if self.token_expires and datetime.now() >= self.token_expires:
+            if self.refresh_token:
+                self._refresh_token()
+            else:
+                self._clear_tokens()
+                return None
+        
+        return self.access_token
+    
+    def _refresh_token(self):
+        """Refresh the access token"""
+        # This would connect to the OAuth server to refresh the token
+        # For now, we'll just clear the tokens to force re-authentication
+        print("Token expired - clearing tokens for re-authentication")
+        self._clear_tokens()
+    
+    def is_authenticated(self) -> bool:
+        """Check if we have valid authentication"""
+        return self.get_valid_token() is not None
+
+
+# ============================================================================
+# BlenderMCP Client - FastMCP client that subscribes to the server's
+# _message_bus log channel, executes received jobs, reports results.
+# ============================================================================
+
+# MCP log levels (RFC 5424) repurposed as job priorities (lower = more urgent)
+LOG_LEVEL_TO_PRIORITY = {
+    "emergency": 0, "alert": 1, "critical": 2, "error": 3,
+    "warning": 4, "notice": 5, "info": 6, "debug": 7,
+}
+
+_MESSAGE_BUS_LOGGER = "_message_bus"
+
+
+class BlenderMCPClient:
+    """FastMCP client subscribed to server's _message_bus log channel."""
+
+    def __init__(self, server_url: str, jwt_token: str, client_uuid: str):
+        self.server_url = server_url
+        self.jwt_token = jwt_token
+        self.client_uuid = client_uuid
+
+        self.client = None              # fastmcp.Client (inside worker loop)
+        self.loop = None                # asyncio loop on worker thread
+        self.thread = None
         self.running = False
-        self.socket = None
-        self.server_thread = None
+        self.connected = False
+        self.last_error = None
+
+        # Priority queue: (priority_int, timestamp, job_payload)
+        self.job_queue = []
+        self.queue_lock = threading.Lock()
+        self.active_jobs = {}
+        self._timer_registered = False
+
+    # --- Lifecycle ----------------------------------------------------------
 
     def start(self):
+        """Start worker thread with its own asyncio loop."""
         if self.running:
-            print("Server is already running")
+            return
+        if not FASTMCP_AVAILABLE:
+            self.last_error = "fastmcp not installed"
+            print(f"[BlenderMCP] {self.last_error}")
             return
 
         self.running = True
+        self.thread = threading.Thread(target=self._thread_main, daemon=True)
+        self.thread.start()
 
-        try:
-            # Create socket
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
-            self.socket.listen(1)
+        # Register the queue drain timer on Blender's main thread
+        if not self._timer_registered:
+            bpy.app.timers.register(self._drain_queue, first_interval=0.1)
+            self._timer_registered = True
 
-            # Start server thread
-            self.server_thread = threading.Thread(target=self._server_loop)
-            self.server_thread.daemon = True
-            self.server_thread.start()
-
-            print(f"BlenderMCP server started on {self.host}:{self.port}")
-        except Exception as e:
-            print(f"Failed to start server: {str(e)}")
-            self.stop()
+        print(f"[BlenderMCP] Client starting: {self.client_uuid} -> {self.server_url}")
 
     def stop(self):
+        """Signal worker to exit, then join."""
         self.running = False
+        self.connected = False
 
-        # Close socket
-        if self.socket:
+        # Wake the worker loop
+        if self.loop and self.loop.is_running():
             try:
-                self.socket.close()
-            except:
+                self.loop.call_soon_threadsafe(lambda: None)
+            except Exception:
                 pass
-            self.socket = None
 
-        # Wait for thread to finish
-        if self.server_thread:
-            try:
-                if self.server_thread.is_alive():
-                    self.server_thread.join(timeout=1.0)
-            except:
-                pass
-            self.server_thread = None
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3.0)
+        self.thread = None
+        self.loop = None
+        self.client = None
+        self._timer_registered = False  # timer self-removes when running=False
+        print(f"[BlenderMCP] Client stopped: {self.client_uuid}")
 
-        print("BlenderMCP server stopped")
+    # --- Worker thread / asyncio loop --------------------------------------
 
-    def _server_loop(self):
-        """Main server loop in a separate thread"""
-        print("Server thread started")
-        self.socket.settimeout(1.0)  # Timeout to allow for stopping
-
-        while self.running:
-            try:
-                # Accept new connection
-                try:
-                    client, address = self.socket.accept()
-                    print(f"Connected to client: {address}")
-
-                    # Handle client in a separate thread
-                    client_thread = threading.Thread(
-                        target=self._handle_client,
-                        args=(client,)
-                    )
-                    client_thread.daemon = True
-                    client_thread.start()
-                except socket.timeout:
-                    # Just check running condition
-                    continue
-                except Exception as e:
-                    print(f"Error accepting connection: {str(e)}")
-                    time.sleep(0.5)
-            except Exception as e:
-                print(f"Error in server loop: {str(e)}")
-                if not self.running:
-                    break
-                time.sleep(0.5)
-
-        print("Server thread stopped")
-
-    def _handle_client(self, client):
-        """Handle connected client"""
-        print("Client handler started")
-        client.settimeout(None)  # No timeout
-        buffer = b''
-
+    def _thread_main(self):
+        """Run the asyncio loop on this thread."""
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
         try:
-            while self.running:
-                # Receive data
-                try:
-                    data = client.recv(8192)
-                    if not data:
-                        print("Client disconnected")
-                        break
-
-                    buffer += data
-                    try:
-                        # Try to parse command
-                        command = json.loads(buffer.decode('utf-8'))
-                        buffer = b''
-
-                        # Execute command in Blender's main thread
-                        def execute_wrapper():
-                            try:
-                                response = self.execute_command(command)
-                                response_json = json.dumps(response)
-                                try:
-                                    client.sendall(response_json.encode('utf-8'))
-                                except:
-                                    print("Failed to send response - client disconnected")
-                            except Exception as e:
-                                print(f"Error executing command: {str(e)}")
-                                traceback.print_exc()
-                                try:
-                                    error_response = {
-                                        "status": "error",
-                                        "message": str(e)
-                                    }
-                                    client.sendall(json.dumps(error_response).encode('utf-8'))
-                                except:
-                                    pass
-                            return None
-
-                        # Schedule execution in main thread
-                        bpy.app.timers.register(execute_wrapper, first_interval=0.0)
-                    except json.JSONDecodeError:
-                        # Incomplete data, wait for more
-                        pass
-                except Exception as e:
-                    print(f"Error receiving data: {str(e)}")
-                    break
+            self.loop.run_until_complete(self._run())
         except Exception as e:
-            print(f"Error in client handler: {str(e)}")
+            self.last_error = f"Worker crashed: {e}"
+            print(f"[BlenderMCP] {self.last_error}")
+            traceback.print_exc()
         finally:
             try:
-                client.close()
-            except:
+                self.loop.close()
+            except Exception:
                 pass
-            print("Client handler stopped")
 
+    async def _run(self):
+        """Connect, register, subscribe to log notifications, await stop."""
+        transport = StreamableHttpTransport(
+            url=self.server_url,
+            headers={"Authorization": f"Bearer {self.jwt_token}"},
+        )
+
+        try:
+            async with FastMCPClient(transport, message_handler=self._on_message) as client:
+                self.client = client
+
+                # Subscribe to all priority levels
+                try:
+                    await client.set_logging_level("debug")
+                except Exception as e:
+                    print(f"[BlenderMCP] set_logging_level failed: {e}")
+
+                # Register with server
+                try:
+                    await client.call_tool("blender_register_client", {
+                        "client_uuid": self.client_uuid,
+                        "client_type": "blender",
+                        "is_persistent": True,
+                        "capabilities": [
+                            "python_execution", "modeling", "rendering",
+                            "scene_management", "asset_processing",
+                        ],
+                    })
+                    self.connected = True
+                    print(f"[BlenderMCP] Registered as {self.client_uuid}")
+                except Exception as e:
+                    self.last_error = f"register_client failed: {e}"
+                    print(f"[BlenderMCP] {self.last_error}")
+                    return
+
+                # Wait until stop() flips running
+                while self.running:
+                    await asyncio.sleep(0.2)
+
+                # Graceful unregister
+                try:
+                    await client.call_tool("blender_unregister_client",
+                                           {"client_uuid": self.client_uuid})
+                except Exception as e:
+                    print(f"[BlenderMCP] unregister_client failed: {e}")
+        except Exception as e:
+            self.last_error = f"Connection failed: {e}"
+            print(f"[BlenderMCP] {self.last_error}")
+        finally:
+            self.connected = False
+            self.client = None
+
+    # --- Incoming message handler ------------------------------------------
+
+    async def _on_message(self, message):
+        """Filter MCP logging notifications on the _message_bus logger."""
+        try:
+            # Notifications have a .root for Notification union types in mcp.types
+            inner = getattr(message, "root", message)
+            method = getattr(inner, "method", None)
+            if method != "notifications/message":
+                return
+
+            params = getattr(inner, "params", None)
+            if params is None:
+                return
+
+            # params may be a pydantic model or a dict
+            logger_name = getattr(params, "logger", None) or (
+                params.get("logger") if isinstance(params, dict) else None
+            )
+            if logger_name != _MESSAGE_BUS_LOGGER:
+                return
+
+            level = getattr(params, "level", None) or (
+                params.get("level") if isinstance(params, dict) else None
+            )
+            data = getattr(params, "data", None) or (
+                params.get("data") if isinstance(params, dict) else None
+            )
+
+            if data is None:
+                return
+
+            # Decode data if it's a JSON string
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    return
+
+            priority = LOG_LEVEL_TO_PRIORITY.get(str(level).lower(), 6)
+            self._enqueue_job(priority, data)
+        except Exception as e:
+            print(f"[BlenderMCP] _on_message error: {e}")
+
+    def _enqueue_job(self, priority: int, log_data: dict):
+        """Add a job to the priority queue."""
+        with self.queue_lock:
+            heapq.heappush(self.job_queue, (priority, time.time(), log_data))
+
+    # --- Main-thread execution (Blender) -----------------------------------
+
+    def _drain_queue(self):
+        """Timer callback on Blender's main thread. Returns next interval or None to stop."""
+        if not self.running:
+            self._timer_registered = False
+            return None  # unregister timer
+
+        with self.queue_lock:
+            if not self.job_queue:
+                return 0.1
+            _, _, log_data = heapq.heappop(self.job_queue)
+
+        # Server wire shape: {user_id, from_uuid, target_uuid, routing, payload,
+        #                     job_id, message_id, priority, timestamp}
+        # `payload` holds the LLM-sent dict, expected: {message_type, job_id, script, ...}
+        target = log_data.get("target_uuid")
+        if target and target != self.client_uuid:
+            return 0.0  # not for us, check next
+
+        payload = log_data.get("payload", log_data)
+        msg_type = payload.get("message_type")
+        if msg_type != "job_dispatch":
+            return 0.0
+
+        job_id = payload.get("job_id")
+        script = payload.get("script", "")
+        if not job_id or not script:
+            return 0.0
+
+        self._execute_script(job_id, script)
+        return 0.0  # immediately check for next
+
+    def _execute_script(self, job_id: str, script: str):
+        """Execute script in Blender context; capture stdout; report result."""
+        self.active_jobs[job_id] = time.time()
+        output = io.StringIO()
+        errbuf = io.StringIO()
+        exec_globals = {
+            "bpy": bpy,
+            "bmesh": bmesh,
+            "mathutils": mathutils,
+            "executor": _executor,  # access to bpy-side helpers (polyhaven, etc.)
+            "__name__": "__blender_mcp_job__",
+        }
+        try:
+            with redirect_stdout(output):
+                exec(compile(script, f"<job_{job_id}>", "exec"), exec_globals)
+            self._submit_job_update(job_id, "completed",
+                                    result=output.getvalue(), error="")
+        except Exception as e:
+            tb = traceback.format_exc()
+            self._submit_job_update(job_id, "failed",
+                                    result=output.getvalue(),
+                                    error=f"{e}\n{tb}")
+        finally:
+            self.active_jobs.pop(job_id, None)
+
+    def _submit_job_update(self, job_id: str, status: str,
+                           result: str = "", error: str = ""):
+        """Schedule job_update on the worker loop from Blender's main thread."""
+        if not (self.loop and self.client and self.loop.is_running()):
+            print(f"[BlenderMCP] Cannot report job {job_id}: client not connected")
+            return
+
+        # Server derives caller identity from auth context; only 4 fields accepted.
+        coro = self.client.call_tool("blender_job_update", {
+            "job_id": job_id,
+            "status": status,
+            "result": result,
+            "error": error,
+        })
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+        # Non-blocking: log errors when they complete
+        def _log_err(fut):
+            try:
+                fut.result(timeout=0)
+            except Exception as e:
+                print(f"[BlenderMCP] job_update for {job_id} failed: {e}")
+        future.add_done_callback(_log_err)
+
+
+# Module-level singleton for the BlenderCommandExecutor (helpers reachable
+# from scripts via globals)
+_executor = None
+_client = None
+
+
+# Main command executor class - inherits all existing functionality
+class BlenderCommandExecutor:
+    """Executes Blender commands - used by both old socket system (compatibility) and new message bus"""
+    
     def execute_command(self, command):
         """Execute a command in the main Blender thread"""
         try:
@@ -204,6 +571,42 @@ class BlenderMCPServer:
             "get_object_info": self.get_object_info,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
+            "get_console_output": lambda p=params: self.get_console_output(
+                level=p.get("level", "all"),
+                page=p.get("page", 1),
+                page_size=p.get("page_size", 50)
+            ),
+            "console_operations": lambda p=params: self.console_operations(
+                operation=p.get("operation", "get_info"),
+                params=p.get("params", None)
+            ),
+            "msgbus_clear_by_owner": lambda p=params: self.msgbus_clear_by_owner(
+                owner_id=p.get("owner_id", "default")
+            ),
+            "msgbus_publish_rna": lambda p=params: self.msgbus_publish_rna(
+                data_path=p.get("data_path", None),
+                key=p.get("key", None)
+            ),
+            "msgbus_subscribe_rna": lambda p=params: self.msgbus_subscribe_rna(
+                owner_id=p.get("owner_id", "default"),
+                data_path=p.get("data_path"),
+                notify_type=p.get("notify_type", "UPDATE"),
+                persistent=p.get("persistent", True)
+            ),
+            "msgbus_get_notifications": lambda p=params: self.msgbus_get_notifications(
+                owner_id=p.get("owner_id", None),
+                clear=p.get("clear", False)
+            ),
+            "msgbus_list_subscriptions": lambda p=params: self.msgbus_list_subscriptions(
+                owner_id=p.get("owner_id", None)
+            ),
+            "browse_data": lambda p=params: self.browse_data(
+                collection=p.get("collection", None),
+                item_name=p.get("item_name", None),
+                page=p.get("page", 1),
+                page_size=p.get("page_size", 50),
+                detail_level=p.get("detail_level", "summary")
+            ),
             "get_polyhaven_status": self.get_polyhaven_status,
             "get_hyper3d_status": self.get_hyper3d_status,
             "get_sketchfab_status": self.get_sketchfab_status,
@@ -249,6 +652,8 @@ class BlenderMCPServer:
                 return {"status": "error", "message": str(e)}
         else:
             return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
+
+    # All existing methods from the original class continue here unchanged...
 
 
 
@@ -418,6 +823,861 @@ class BlenderMCPServer:
             return {"executed": True, "result": captured_output}
         except Exception as e:
             raise Exception(f"Code execution error: {str(e)}")
+    
+    def console_operations(self, operation, params=None):
+        """Execute various console operations using bpy.ops.console
+        
+        Args:
+            operation: The console operation to perform
+            params: Optional parameters for the operation
+        """
+        try:
+            import bpy
+            
+            # Ensure we have a console area
+            console_area = None
+            for area in bpy.context.screen.areas:
+                if area.type == 'CONSOLE':
+                    console_area = area
+                    break
+            
+            if not console_area and operation != "create":
+                # Try to create a console if it doesn't exist
+                for area in bpy.context.screen.areas:
+                    if area.type == 'VIEW_3D':  # Convert a 3D view to console
+                        area.type = 'CONSOLE'
+                        console_area = area
+                        break
+            
+            if not console_area and operation != "create":
+                return {"error": "No console area available. Use operation='create' first."}
+            
+            # Override context for console operations
+            if console_area:
+                override = {'area': console_area}
+                for region in console_area.regions:
+                    if region.type == 'WINDOW':
+                        override['region'] = region
+                        break
+            
+            result = {}
+            
+            # Execute the requested operation
+            if operation == "create":
+                # Create a new console area
+                for area in bpy.context.screen.areas:
+                    if area.type in ['VIEW_3D', 'TEXT_EDITOR', 'INFO']:
+                        area.type = 'CONSOLE'
+                        result = {"success": True, "message": "Console area created"}
+                        break
+                else:
+                    result = {"error": "Could not create console area - no suitable area to convert"}
+            
+            elif operation == "execute":
+                # Execute code in console (bpy.ops.console.execute)
+                if params and "code" in params:
+                    # Set the console input
+                    if console_area:
+                        with bpy.context.temp_override(**override):
+                            # Clear current line
+                            bpy.ops.console.clear_line()
+                            # Insert the code
+                            bpy.ops.console.insert(text=params["code"])
+                            # Execute it
+                            bpy.ops.console.execute()
+                            result = {"success": True, "message": "Code executed in console"}
+                else:
+                    result = {"error": "No code provided for execution"}
+            
+            elif operation == "autocomplete":
+                # Autocomplete in console (bpy.ops.console.autocomplete)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.autocomplete()
+                result = {"success": True, "message": "Autocomplete triggered"}
+            
+            elif operation == "clear":
+                # Clear console output (bpy.ops.console.clear)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.clear(scrollback=params.get("scrollback", True) if params else True,
+                                         history=params.get("history", False) if params else False)
+                result = {"success": True, "message": "Console cleared"}
+            
+            elif operation == "clear_line":
+                # Clear current line (bpy.ops.console.clear_line)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.clear_line()
+                result = {"success": True, "message": "Current line cleared"}
+            
+            elif operation == "copy":
+                # Copy selected text (bpy.ops.console.copy)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.copy()
+                result = {"success": True, "message": "Text copied to clipboard"}
+            
+            elif operation == "copy_as_script":
+                # Copy full history as script (bpy.ops.console.copy_as_script)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.copy_as_script()
+                result = {"success": True, "message": "Console history copied as script"}
+            
+            elif operation == "paste":
+                # Paste from clipboard (bpy.ops.console.paste)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.paste()
+                result = {"success": True, "message": "Text pasted from clipboard"}
+            
+            elif operation == "history_cycle":
+                # Cycle through history (bpy.ops.console.history_cycle)
+                direction = params.get("direction", "BACKWARD") if params else "BACKWARD"
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.history_cycle(reverse=(direction == "FORWARD"))
+                result = {"success": True, "message": f"History cycled {direction}"}
+            
+            elif operation == "history_append":
+                # Append to history (bpy.ops.console.history_append)
+                if params and "text" in params:
+                    with bpy.context.temp_override(**override):
+                        bpy.ops.console.history_append(text=params["text"],
+                                                      current_character=params.get("current_character", 0),
+                                                      remove_duplicates=params.get("remove_duplicates", True))
+                    result = {"success": True, "message": "Added to history"}
+                else:
+                    result = {"error": "No text provided for history"}
+            
+            elif operation == "insert":
+                # Insert text at cursor (bpy.ops.console.insert)
+                if params and "text" in params:
+                    with bpy.context.temp_override(**override):
+                        bpy.ops.console.insert(text=params["text"])
+                    result = {"success": True, "message": "Text inserted"}
+                else:
+                    result = {"error": "No text provided for insertion"}
+            
+            elif operation == "indent":
+                # Indent current line (bpy.ops.console.indent)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.indent()
+                result = {"success": True, "message": "Line indented"}
+            
+            elif operation == "unindent":
+                # Unindent current line (bpy.ops.console.unindent)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.unindent()
+                result = {"success": True, "message": "Line unindented"}
+            
+            elif operation == "select_all":
+                # Select all text (bpy.ops.console.select_all)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.select_all()
+                result = {"success": True, "message": "All text selected"}
+            
+            elif operation == "select_word":
+                # Select word at cursor (bpy.ops.console.select_word)
+                with bpy.context.temp_override(**override):
+                    bpy.ops.console.select_word()
+                result = {"success": True, "message": "Word selected"}
+            
+            elif operation == "scrollback_append":
+                # Append to scrollback (bpy.ops.console.scrollback_append)
+                if params and "text" in params:
+                    with bpy.context.temp_override(**override):
+                        bpy.ops.console.scrollback_append(text=params["text"],
+                                                         type=params.get("type", "OUTPUT"))
+                    result = {"success": True, "message": "Added to scrollback"}
+                else:
+                    result = {"error": "No text provided for scrollback"}
+            
+            elif operation == "get_info":
+                # Get console information
+                info = {
+                    "has_console": console_area is not None,
+                    "console_type": console_area.type if console_area else None,
+                }
+                
+                if console_area:
+                    for space in console_area.spaces:
+                        if space.type == 'CONSOLE':
+                            info["language"] = getattr(space, "language", "python")
+                            info["font_size"] = getattr(space, "font_size", 12)
+                            info["select_start"] = getattr(space, "select_start", 0)
+                            info["select_end"] = getattr(space, "select_end", 0)
+                            break
+                
+                result = {"success": True, "info": info}
+            
+            else:
+                result = {"error": f"Unknown console operation: {operation}"}
+            
+            return result
+            
+        except Exception as e:
+            return {"error": f"Console operation failed: {str(e)}"}
+    
+    def msgbus_clear_by_owner(self, owner_id):
+        """Clear all message bus subscriptions by owner
+        
+        Args:
+            owner_id: Unique identifier for the owner
+        """
+        try:
+            import bpy
+            
+            # Clear all subscriptions for this owner
+            bpy.msgbus.clear_by_owner(owner_id)
+            
+            return {
+                "success": True,
+                "message": f"Cleared all message bus subscriptions for owner: {owner_id}"
+            }
+        except Exception as e:
+            return {"error": f"Failed to clear message bus: {str(e)}"}
+    
+    def msgbus_publish_rna(self, data_path=None, key=None):
+        """Publish an RNA property change to the message bus
+        
+        Args:
+            data_path: Optional data path to publish (e.g., "frame_current")
+            key: Optional specific key to publish
+        """
+        try:
+            import bpy
+            
+            if key:
+                # Publish with specific key
+                bpy.msgbus.publish_rna(key=key)
+                return {
+                    "success": True,
+                    "message": f"Published RNA message with key: {key}"
+                }
+            elif data_path:
+                # Try to construct key from data path
+                # Common patterns for RNA paths
+                if data_path == "frame_current":
+                    key = (bpy.types.Scene, "frame_current")
+                elif data_path == "active_object":
+                    key = (bpy.types.ViewLayer, "objects")
+                elif data_path == "selected_objects":
+                    key = (bpy.types.Object, "select_set")
+                elif "." in data_path:
+                    # Try to parse complex paths
+                    parts = data_path.split(".")
+                    return {
+                        "error": f"Complex data path '{data_path}' requires manual key construction"
+                    }
+                else:
+                    return {
+                        "error": f"Unknown data path '{data_path}'. Please provide a specific key."
+                    }
+                
+                bpy.msgbus.publish_rna(key=key)
+                return {
+                    "success": True,
+                    "message": f"Published RNA message for data path: {data_path}"
+                }
+            else:
+                # Publish all pending messages
+                bpy.msgbus.publish_rna()
+                return {
+                    "success": True,
+                    "message": "Published all pending RNA messages"
+                }
+                
+        except Exception as e:
+            return {"error": f"Failed to publish RNA message: {str(e)}"}
+    
+    # Storage for message bus subscriptions and callbacks
+    _msgbus_subscriptions = {}
+    _msgbus_callbacks = {}
+    
+    def msgbus_subscribe_rna(self, owner_id, data_path, notify_type="UPDATE", persistent=True):
+        """Subscribe to RNA property changes via message bus
+        
+        Args:
+            owner_id: Unique identifier for the subscription owner
+            data_path: RNA data path to monitor (e.g., "frame_current", "active_object")
+            notify_type: Type of notification (UPDATE, PERSISTENT, etc.)
+            persistent: Whether the subscription persists across file loads
+        """
+        try:
+            import bpy
+            from bpy.types import Scene, ViewLayer, Object, Material
+            
+            # Map common data paths to RNA keys
+            key = None
+            context_obj = None
+            
+            if data_path == "frame_current":
+                key = (Scene, "frame_current")
+                context_obj = bpy.context.scene
+            elif data_path == "active_object":
+                key = (ViewLayer, "objects")
+                context_obj = bpy.context.view_layer
+            elif data_path == "selected_objects":
+                key = (Object, "select_set")
+                context_obj = bpy.context.active_object if bpy.context.active_object else None
+            elif data_path == "active_material":
+                key = (Object, "active_material")
+                context_obj = bpy.context.active_object if bpy.context.active_object else None
+            elif data_path.startswith("scene."):
+                # Scene properties
+                prop = data_path.replace("scene.", "")
+                key = (Scene, prop)
+                context_obj = bpy.context.scene
+            elif data_path.startswith("object."):
+                # Object properties
+                prop = data_path.replace("object.", "")
+                key = (Object, prop)
+                context_obj = bpy.context.active_object
+            else:
+                return {
+                    "error": f"Unsupported data path: {data_path}. Supported paths: frame_current, active_object, selected_objects, active_material, scene.*, object.*"
+                }
+            
+            if not key:
+                return {"error": "Could not determine RNA key for data path"}
+            
+            # Create a unique subscription ID
+            sub_id = f"{owner_id}_{data_path}"
+            
+            # Store the subscription info
+            if owner_id not in self._msgbus_subscriptions:
+                self._msgbus_subscriptions[owner_id] = {}
+            
+            # Create callback function that stores the notification
+            def callback(*args):
+                # Store the notification in a queue
+                if sub_id not in self._msgbus_callbacks:
+                    self._msgbus_callbacks[sub_id] = []
+                
+                import time
+                notification = {
+                    "timestamp": time.time(),
+                    "data_path": data_path,
+                    "owner_id": owner_id,
+                    "context": str(args) if args else None
+                }
+                
+                # Keep only last 100 notifications per subscription
+                self._msgbus_callbacks[sub_id].append(notification)
+                if len(self._msgbus_callbacks[sub_id]) > 100:
+                    self._msgbus_callbacks[sub_id] = self._msgbus_callbacks[sub_id][-100:]
+                
+                # Log for debugging
+                print(f"Message Bus: {data_path} changed for owner {owner_id}")
+            
+            # Subscribe to the message bus
+            subscribe_options = {
+                "key": key,
+                "owner": owner_id,
+                "args": (sub_id,),
+                "notify": callback
+            }
+            
+            if persistent:
+                subscribe_options["options"] = {"PERSISTENT"}
+            
+            bpy.msgbus.subscribe_rna(**subscribe_options)
+            
+            # Store subscription info
+            self._msgbus_subscriptions[owner_id][data_path] = {
+                "key": str(key),
+                "persistent": persistent,
+                "notify_type": notify_type,
+                "active": True
+            }
+            
+            return {
+                "success": True,
+                "message": f"Subscribed to {data_path} for owner {owner_id}",
+                "subscription_id": sub_id,
+                "key": str(key)
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to subscribe to RNA: {str(e)}"}
+    
+    def msgbus_get_notifications(self, owner_id=None, clear=False):
+        """Get pending message bus notifications
+        
+        Args:
+            owner_id: Optional owner ID to filter notifications
+            clear: Whether to clear notifications after reading
+        """
+        try:
+            notifications = []
+            
+            # Filter by owner if specified
+            for sub_id, notifs in self._msgbus_callbacks.items():
+                if owner_id and not sub_id.startswith(owner_id + "_"):
+                    continue
+                notifications.extend(notifs)
+            
+            # Sort by timestamp
+            notifications.sort(key=lambda x: x.get("timestamp", 0))
+            
+            # Clear if requested
+            if clear:
+                if owner_id:
+                    # Clear only for specific owner
+                    keys_to_clear = [k for k in self._msgbus_callbacks.keys() 
+                                    if k.startswith(owner_id + "_")]
+                    for k in keys_to_clear:
+                        self._msgbus_callbacks[k] = []
+                else:
+                    # Clear all
+                    self._msgbus_callbacks.clear()
+            
+            return {
+                "success": True,
+                "notifications": notifications,
+                "count": len(notifications)
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to get notifications: {str(e)}"}
+    
+    def msgbus_list_subscriptions(self, owner_id=None):
+        """List active message bus subscriptions
+        
+        Args:
+            owner_id: Optional owner ID to filter subscriptions
+        """
+        try:
+            subscriptions = []
+            
+            if owner_id:
+                if owner_id in self._msgbus_subscriptions:
+                    for data_path, info in self._msgbus_subscriptions[owner_id].items():
+                        subscriptions.append({
+                            "owner_id": owner_id,
+                            "data_path": data_path,
+                            **info
+                        })
+            else:
+                # List all subscriptions
+                for owner_id, paths in self._msgbus_subscriptions.items():
+                    for data_path, info in paths.items():
+                        subscriptions.append({
+                            "owner_id": owner_id,
+                            "data_path": data_path,
+                            **info
+                        })
+            
+            return {
+                "success": True,
+                "subscriptions": subscriptions,
+                "count": len(subscriptions),
+                "owners": list(self._msgbus_subscriptions.keys())
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to list subscriptions: {str(e)}"}
+    
+    def browse_data(self, collection=None, item_name=None, page=1, page_size=50, detail_level="summary"):
+        """Browse bpy.data collections with pagination and detail levels
+        
+        Args:
+            collection: Data collection to browse (e.g., "objects", "materials", "scenes")
+            item_name: Specific item name to get details for
+            page: Page number for pagination
+            page_size: Items per page
+            detail_level: Level of detail ("summary", "detailed", "full")
+        """
+        try:
+            import bpy
+            
+            # Map of available data collections
+            data_collections = {
+                "actions": bpy.data.actions,
+                "armatures": bpy.data.armatures,
+                "brushes": bpy.data.brushes,
+                "cache_files": bpy.data.cache_files,
+                "cameras": bpy.data.cameras,
+                "collections": bpy.data.collections,
+                "curves": bpy.data.curves,
+                "fonts": bpy.data.fonts,
+                "grease_pencils": bpy.data.grease_pencils,
+                "hair_curves": bpy.data.hair_curves,
+                "images": bpy.data.images,
+                "lattices": bpy.data.lattices,
+                "libraries": bpy.data.libraries,
+                "lightprobes": bpy.data.lightprobes,
+                "lights": bpy.data.lights,
+                "linestyles": bpy.data.linestyles,
+                "masks": bpy.data.masks,
+                "materials": bpy.data.materials,
+                "meshes": bpy.data.meshes,
+                "metaballs": bpy.data.metaballs,
+                "movieclips": bpy.data.movieclips,
+                "node_groups": bpy.data.node_groups,
+                "objects": bpy.data.objects,
+                "paint_curves": bpy.data.paint_curves,
+                "palettes": bpy.data.palettes,
+                "particles": bpy.data.particles,
+                "pointclouds": bpy.data.pointclouds,
+                "scenes": bpy.data.scenes,
+                "screens": bpy.data.screens,
+                "shape_keys": bpy.data.shape_keys,
+                "sounds": bpy.data.sounds,
+                "speakers": bpy.data.speakers,
+                "texts": bpy.data.texts,
+                "textures": bpy.data.textures,
+                "volumes": bpy.data.volumes,
+                "window_managers": bpy.data.window_managers,
+                "workspaces": bpy.data.workspaces,
+                "worlds": bpy.data.worlds,
+            }
+            
+            # If no collection specified, list available collections
+            if not collection:
+                collections_info = []
+                for name, coll in data_collections.items():
+                    try:
+                        count = len(coll)
+                        collections_info.append({
+                            "name": name,
+                            "count": count,
+                            "type": str(type(coll).__name__)
+                        })
+                    except:
+                        pass
+                
+                return {
+                    "success": True,
+                    "collections": collections_info,
+                    "total": len(collections_info)
+                }
+            
+            # Check if collection exists
+            if collection not in data_collections:
+                return {
+                    "error": f"Unknown collection: {collection}",
+                    "available": list(data_collections.keys())
+                }
+            
+            data_collection = data_collections[collection]
+            
+            # If specific item requested
+            if item_name:
+                if item_name in data_collection:
+                    item = data_collection[item_name]
+                    item_info = self._get_data_item_info(item, collection, detail_level)
+                    return {
+                        "success": True,
+                        "item": item_info,
+                        "collection": collection
+                    }
+                else:
+                    return {
+                        "error": f"Item '{item_name}' not found in {collection}",
+                        "available_count": len(data_collection)
+                    }
+            
+            # Browse collection with pagination
+            items = list(data_collection)
+            total_items = len(items)
+            total_pages = (total_items + page_size - 1) // page_size
+            
+            # Calculate pagination
+            start_idx = (page - 1) * page_size
+            end_idx = min(start_idx + page_size, total_items)
+            page_items = items[start_idx:end_idx]
+            
+            # Get info for each item
+            items_info = []
+            for item in page_items:
+                try:
+                    item_info = self._get_data_item_info(item, collection, "summary")
+                    items_info.append(item_info)
+                except Exception as e:
+                    items_info.append({
+                        "name": getattr(item, "name", "unknown"),
+                        "error": str(e)
+                    })
+            
+            return {
+                "success": True,
+                "collection": collection,
+                "items": items_info,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_items": total_items
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to browse data: {str(e)}"}
+    
+    def _get_data_item_info(self, item, collection_type, detail_level="summary"):
+        """Get information about a data item"""
+        info = {
+            "name": getattr(item, "name", "unnamed"),
+            "type": type(item).__name__,
+            "collection": collection_type
+        }
+        
+        # Add common properties
+        if hasattr(item, "users"):
+            info["users"] = item.users
+        if hasattr(item, "use_fake_user"):
+            info["use_fake_user"] = item.use_fake_user
+        if hasattr(item, "library"):
+            info["library"] = item.library.filepath if item.library else None
+        
+        # Collection-specific info
+        if collection_type == "objects":
+            info["type_specific"] = item.type
+            if detail_level != "summary":
+                info["location"] = list(item.location)
+                info["rotation"] = list(item.rotation_euler)
+                info["scale"] = list(item.scale)
+                info["visible"] = item.visible_get()
+                if item.data:
+                    info["data_name"] = item.data.name
+                    info["data_type"] = type(item.data).__name__
+        
+        elif collection_type == "materials":
+            info["node_tree"] = item.node_tree is not None
+            if detail_level != "summary":
+                info["use_nodes"] = item.use_nodes
+                if item.node_tree and detail_level == "full":
+                    info["nodes_count"] = len(item.node_tree.nodes)
+        
+        elif collection_type == "meshes":
+            info["vertices"] = len(item.vertices)
+            info["edges"] = len(item.edges) 
+            info["faces"] = len(item.polygons)
+            if detail_level != "summary":
+                info["has_custom_normals"] = item.has_custom_normals
+                info["materials_count"] = len(item.materials)
+        
+        elif collection_type == "scenes":
+            info["frame_start"] = item.frame_start
+            info["frame_end"] = item.frame_end
+            info["frame_current"] = item.frame_current
+            if detail_level != "summary":
+                info["render_engine"] = item.render.engine
+                info["camera"] = item.camera.name if item.camera else None
+                info["world"] = item.world.name if item.world else None
+        
+        elif collection_type == "images":
+            info["size"] = list(item.size)
+            info["filepath"] = item.filepath
+            if detail_level != "summary":
+                info["source"] = item.source
+                info["packed"] = item.packed_file is not None
+                info["has_data"] = item.has_data
+        
+        elif collection_type == "collections":
+            info["objects_count"] = len(item.objects)
+            info["children_count"] = len(item.children)
+            if detail_level != "summary":
+                info["hide_viewport"] = item.hide_viewport
+                info["hide_render"] = item.hide_render
+        
+        elif collection_type == "node_groups":
+            info["type"] = item.type
+            if detail_level != "summary" and item.nodes:
+                info["nodes_count"] = len(item.nodes)
+                info["links_count"] = len(item.links)
+        
+        elif collection_type == "texts":
+            info["filepath"] = item.filepath
+            info["is_dirty"] = item.is_dirty
+            info["is_in_memory"] = item.is_in_memory
+            if detail_level == "full":
+                info["lines_count"] = len(item.lines)
+                if detail_level == "full" and len(item.lines) < 100:
+                    info["content_preview"] = "\n".join([line.body for line in item.lines[:10]])
+        
+        elif collection_type == "actions":
+            info["frame_range"] = list(item.frame_range)
+            if detail_level != "summary":
+                info["fcurves_count"] = len(item.fcurves)
+                info["groups_count"] = len(item.groups)
+        
+        elif collection_type == "worlds":
+            info["use_nodes"] = item.use_nodes
+            if detail_level != "summary" and item.node_tree:
+                info["nodes_count"] = len(item.node_tree.nodes)
+        
+        return info
+    
+    def get_console_output(self, level="all", page=1, page_size=50):
+        """Get recent console output from Blender's internal console with filtering and pagination
+        
+        Args:
+            level: Filter by message level - "all", "info", "warning", "error", "output"
+            page: Page number (1-based)
+            page_size: Number of lines per page
+        """
+        try:
+            import sys
+            import io
+            import re
+            
+            # Store all console lines with their types
+            console_lines = []
+            
+            # Helper function to classify line type
+            def classify_line(line):
+                """Classify line based on content and Blender's report types"""
+                line_lower = line.lower()
+                # Check for Blender's standard report prefixes
+                if line.startswith("Error:") or 'error' in line_lower or 'exception' in line_lower or 'traceback' in line_lower:
+                    return 'error'
+                elif line.startswith("Warning:") or 'warning' in line_lower or 'warn' in line_lower:
+                    return 'warning'
+                elif line.startswith("Info:") or 'info:' in line_lower:
+                    return 'info'
+                elif line.startswith(">>> ") or line.startswith("... "):  # Python prompt
+                    return 'input'
+                else:
+                    return 'output'
+            
+            # First, try to get recent operator reports using Blender's report system
+            # These are the official reports with proper severity levels
+            if hasattr(bpy.context.window_manager, "operators"):
+                try:
+                    # Get the last operator that was executed
+                    for op in reversed(list(bpy.context.window_manager.operators)):
+                        if hasattr(op, 'report'):
+                            # This operator has reports
+                            pass  # Reports are shown in UI but not directly accessible via API
+                except:
+                    pass
+            
+            # Access report messages through the Python console's report callback
+            # Note: Blender uses these report types: {'DEBUG', 'INFO', 'OPERATOR', 'PROPERTY', 'WARNING', 'ERROR', 'ERROR_INVALID_INPUT', 'ERROR_INVALID_CONTEXT', 'ERROR_OUT_OF_MEMORY'}
+            import bpy.types
+            
+            # Try to capture recent reports if they're stored
+            # Unfortunately, Blender doesn't store a history of reports in a directly accessible way
+            # But we can intercept them when they happen using handlers
+            
+            # Try to access the Python console buffer using proper API
+            console_found = False
+            if hasattr(bpy.context, "screen") and bpy.context.screen:
+                for area in bpy.context.screen.areas:
+                    if area.type == 'CONSOLE':
+                        console_found = True
+                        # Access console through proper API
+                        try:
+                            for space in area.spaces:
+                                if space.type == 'CONSOLE':
+                                    # Access console history and scrollback
+                                    # History contains previously executed commands
+                                    if hasattr(space, 'history'):
+                                        for item in space.history:
+                                            if hasattr(item, 'body'):
+                                                text = item.body
+                                                console_lines.append({
+                                                    'text': text,
+                                                    'type': 'input',
+                                                    'source': 'history'
+                                                })
+                                    
+                                    # Scrollback contains console output
+                                    if hasattr(space, 'scrollback'):
+                                        for line in space.scrollback:
+                                            if hasattr(line, 'body'):
+                                                text = line.body
+                                                line_type = classify_line(text)
+                                                # Check line type attribute if available
+                                                if hasattr(line, 'type'):
+                                                    # Blender console line types: OUTPUT, INPUT, INFO, ERROR
+                                                    if line.type == 'ERROR':
+                                                        line_type = 'error'
+                                                    elif line.type == 'INFO':
+                                                        line_type = 'info'
+                                                    elif line.type == 'INPUT':
+                                                        line_type = 'input'
+                                                    elif line.type == 'OUTPUT':
+                                                        line_type = 'output'
+                                                console_lines.append({
+                                                    'text': text,
+                                                    'type': line_type,
+                                                    'source': 'console'
+                                                })
+                                    break
+                        except Exception as e:
+                            console_lines.append({
+                                'text': f"(Could not access console: {e})",
+                                'type': 'error',
+                                'source': 'system'
+                            })
+            
+            # Get Info area messages (warnings, errors from operators)
+            if hasattr(bpy.context, "screen") and bpy.context.screen:
+                for area in bpy.context.screen.areas:
+                    if area.type == 'INFO':
+                        # Info area contains operator reports
+                        # We can't directly access the text, but we know it exists
+                        console_lines.append({
+                            'text': "(Info area detected - operator messages displayed in UI)",
+                            'type': 'info',
+                            'source': 'info_area'
+                        })
+                        break
+            
+            # On macOS, get system console output
+            import platform
+            if platform.system() == "Darwin":
+                try:
+                    import subprocess
+                    # Get recent console messages for Blender
+                    result = subprocess.run(
+                        ["log", "show", "--predicate", "process == 'Blender'", "--last", "1m"],
+                        capture_output=True, text=True, timeout=2
+                    )
+                    if result.stdout:
+                        # Parse system log lines
+                        for line in result.stdout.split('\n')[-100:]:  # Last 100 lines
+                            if line.strip():
+                                line_type = classify_line(line)
+                                console_lines.append({
+                                    'text': line,
+                                    'type': line_type,
+                                    'source': 'system'
+                                })
+                except Exception as e:
+                    console_lines.append({
+                        'text': f"Could not access system console: {e}",
+                        'type': 'warning',
+                        'source': 'system'
+                    })
+            
+            # Filter by level if specified
+            if level != "all":
+                console_lines = [line for line in console_lines if line['type'] == level]
+            
+            # Calculate pagination
+            total_lines = len(console_lines)
+            total_pages = (total_lines + page_size - 1) // page_size
+            start_idx = (page - 1) * page_size
+            end_idx = min(start_idx + page_size, total_lines)
+            
+            # Get the requested page
+            page_lines = console_lines[start_idx:end_idx]
+            
+            # Format output
+            formatted_lines = []
+            for line in page_lines:
+                prefix = f"[{line['type'].upper()}]" if line['type'] != 'output' else ""
+                formatted_lines.append(f"{prefix} {line['text']}" if prefix else line['text'])
+            
+            return {
+                "console_output": "\n".join(formatted_lines) if formatted_lines else "No console output available",
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_lines": total_lines,
+                "level": level,
+                "has_console": console_found,
+                "lines": page_lines  # Include structured data
+            }
+        except Exception as e:
+            return {"error": f"Failed to get console output: {str(e)}"}
 
 
 
@@ -1689,7 +2949,9 @@ class BlenderMCPServer:
             return {"error": f"Failed to download model: {str(e)}"}
     #endregion
 
+# ============================================================================
 # Blender UI Panel
+# ============================================================================
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
     bl_label = "Blender MCP"
     bl_idname = "BLENDERMCP_PT_Panel"
@@ -1701,24 +2963,59 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        layout.prop(scene, "blendermcp_port")
-        layout.prop(scene, "blendermcp_use_polyhaven", text="Use assets from Poly Haven")
+        # --- Connection section ---
+        col = layout.column(align=True)
+        col.label(text="MCP Server Connection:", icon='NETWORK_DRIVE')
 
-        layout.prop(scene, "blendermcp_use_hyper3d", text="Use Hyper3D Rodin 3D model generation")
-        if scene.blendermcp_use_hyper3d:
-            layout.prop(scene, "blendermcp_hyper3d_mode", text="Rodin Mode")
-            layout.prop(scene, "blendermcp_hyper3d_api_key", text="API Key")
-            layout.operator("blendermcp.set_hyper3d_free_trial_api_key", text="Set Free Trial API Key")
+        # Server URL + JWT input
+        col.prop(scene, "blendermcp_server_url", text="URL")
+        col.prop(scene, "blendermcp_jwt_token", text="JWT")
 
-        layout.prop(scene, "blendermcp_use_sketchfab", text="Use assets from Sketchfab")
-        if scene.blendermcp_use_sketchfab:
-            layout.prop(scene, "blendermcp_sketchfab_api_key", text="API Key")
+        if getattr(scene, "blendermcp_client_id", ""):
+            col.label(text=f"Client: {scene.blendermcp_client_id[:24]}")
 
+        # Buttons
+        row = col.row(align=True)
         if not scene.blendermcp_server_running:
-            layout.operator("blendermcp.start_server", text="Connect to MCP server")
+            row.operator("blendermcp.start_server", text="Connect", icon='PLAY')
         else:
-            layout.operator("blendermcp.stop_server", text="Disconnect from MCP server")
-            layout.label(text=f"Running on port {scene.blendermcp_port}")
+            row.operator("blendermcp.stop_server", text="Disconnect", icon='PAUSE')
+
+        # Status indicator
+        client = _client
+        if client:
+            if client.connected:
+                col.label(text="Status: Connected", icon='CHECKMARK')
+                with client.queue_lock:
+                    qlen = len(client.job_queue)
+                col.label(text=f"Queue: {qlen} pending  Active: {len(client.active_jobs)}")
+            elif client.running:
+                col.label(text="Status: Connecting...", icon='TIME')
+            if client.last_error:
+                col.label(text=f"Last error: {client.last_error[:40]}", icon='ERROR')
+
+        col.separator()
+        if not FASTMCP_AVAILABLE:
+            col.label(text="fastmcp not installed", icon='ERROR')
+            col.label(text="Install in Blender's Python:")
+            col.label(text="python -m pip install fastmcp")
+            col.separator()
+
+        # --- Asset integrations ---
+        col.label(text="Asset Integrations:", icon='ASSET_MANAGER')
+        col.prop(scene, "blendermcp_use_polyhaven", text="Poly Haven Assets")
+        col.prop(scene, "blendermcp_use_hyper3d", text="Hyper3D Rodin Generation")
+        if scene.blendermcp_use_hyper3d:
+            sub = col.column(align=True)
+            sub.prop(scene, "blendermcp_hyper3d_mode", text="Mode")
+            sub.prop(scene, "blendermcp_hyper3d_api_key", text="API Key")
+            sub.operator("blendermcp.set_hyper3d_free_trial_api_key", text="Free Trial Key")
+
+        col.prop(scene, "blendermcp_use_sketchfab", text="Sketchfab Models")
+        if scene.blendermcp_use_sketchfab:
+            sub = col.column(align=True)
+            sub.prop(scene, "blendermcp_sketchfab_api_key", text="API Key")
+
 
 # Operator to set Hyper3D API Key
 class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
@@ -1731,70 +3028,108 @@ class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
         self.report({'INFO'}, "API Key set successfully!")
         return {'FINISHED'}
 
-# Operator to start the server
+
+# Connect to MCP server
 class BLENDERMCP_OT_StartServer(bpy.types.Operator):
     bl_idname = "blendermcp.start_server"
-    bl_label = "Connect to Claude"
-    bl_description = "Start the BlenderMCP server to connect with Claude"
+    bl_label = "Connect to BlenderMCP Server"
+    bl_description = "Connect to the BlenderMCP server's _message_bus channel"
 
     def execute(self, context):
+        global _client, _executor
         scene = context.scene
 
-        # Create a new server instance
-        if not hasattr(bpy.types, "blendermcp_server") or not bpy.types.blendermcp_server:
-            bpy.types.blendermcp_server = BlenderMCPServer(port=scene.blendermcp_port)
+        if not FASTMCP_AVAILABLE:
+            self.report({'ERROR'},
+                        "fastmcp not installed. Run: <blender_python> -m pip install fastmcp")
+            return {'CANCELLED'}
 
-        # Start the server
-        bpy.types.blendermcp_server.start()
-        scene.blendermcp_server_running = True
+        if not scene.blendermcp_jwt_token:
+            self.report({'ERROR'}, "JWT token required (paste from OAuth login)")
+            return {'CANCELLED'}
+
+        try:
+            if _executor is None:
+                _executor = BlenderCommandExecutor()
+
+            if _client is None:
+                uuid_mgr = StickyUUIDManager()
+                _client = BlenderMCPClient(
+                    server_url=scene.blendermcp_server_url,
+                    jwt_token=scene.blendermcp_jwt_token,
+                    client_uuid=uuid_mgr.get_client_id(),
+                )
+                scene.blendermcp_client_id = _client.client_uuid
+
+            _client.start()
+            scene.blendermcp_server_running = True
+            self.report({'INFO'}, f"Connecting as {scene.blendermcp_client_id}")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to start client: {e}")
+            traceback.print_exc()
+            return {'CANCELLED'}
 
         return {'FINISHED'}
 
-# Operator to stop the server
+
+# Disconnect from MCP server
 class BLENDERMCP_OT_StopServer(bpy.types.Operator):
     bl_idname = "blendermcp.stop_server"
-    bl_label = "Stop the connection to Claude"
-    bl_description = "Stop the connection to Claude"
+    bl_label = "Disconnect from BlenderMCP Server"
+    bl_description = "Disconnect from the MCP message bus"
 
     def execute(self, context):
+        global _client
         scene = context.scene
-
-        # Stop the server if it exists
-        if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
-            bpy.types.blendermcp_server.stop()
-            del bpy.types.blendermcp_server
-
-        scene.blendermcp_server_running = False
-
+        try:
+            if _client is not None:
+                _client.stop()
+                _client = None
+            scene.blendermcp_server_running = False
+            self.report({'INFO'}, "Disconnected")
+        except Exception as e:
+            self.report({'ERROR'}, f"Error during disconnect: {e}")
+            traceback.print_exc()
         return {'FINISHED'}
 
 # Registration functions
+_CLASSES = (
+    BLENDERMCP_PT_Panel,
+    BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
+    BLENDERMCP_OT_StartServer,
+    BLENDERMCP_OT_StopServer,
+)
+
+
 def register():
-    bpy.types.Scene.blendermcp_port = IntProperty(
-        name="Port",
-        description="Port for the BlenderMCP server",
-        default=9876,
-        min=1024,
-        max=65535
+    # Connection settings
+    bpy.types.Scene.blendermcp_server_url = bpy.props.StringProperty(
+        name="Server URL",
+        description="BlenderMCP server's Streamable HTTP endpoint",
+        default="http://localhost:8000/mcp",
     )
-
+    bpy.types.Scene.blendermcp_jwt_token = bpy.props.StringProperty(
+        name="JWT Token",
+        description="Bearer token obtained via OAuth login",
+        subtype="PASSWORD",
+        default="",
+    )
     bpy.types.Scene.blendermcp_server_running = bpy.props.BoolProperty(
-        name="Server Running",
-        default=False
+        name="Connected", default=False,
+    )
+    bpy.types.Scene.blendermcp_client_id = bpy.props.StringProperty(
+        name="Client ID", default="",
     )
 
+    # Asset integrations
     bpy.types.Scene.blendermcp_use_polyhaven = bpy.props.BoolProperty(
         name="Use Poly Haven",
-        description="Enable Poly Haven asset integration",
-        default=False
+        description="Enable Poly Haven asset integration", default=False,
     )
-
     bpy.types.Scene.blendermcp_use_hyper3d = bpy.props.BoolProperty(
         name="Use Hyper3D Rodin",
-        description="Enable Hyper3D Rodin generatino integration",
-        default=False
+        description="Enable Hyper3D Rodin generation integration", default=False,
     )
-
     bpy.types.Scene.blendermcp_hyper3d_mode = bpy.props.EnumProperty(
         name="Rodin Mode",
         description="Choose the platform used to call Rodin APIs",
@@ -1802,57 +3137,60 @@ def register():
             ("MAIN_SITE", "hyper3d.ai", "hyper3d.ai"),
             ("FAL_AI", "fal.ai", "fal.ai"),
         ],
-        default="MAIN_SITE"
+        default="MAIN_SITE",
     )
-
     bpy.types.Scene.blendermcp_hyper3d_api_key = bpy.props.StringProperty(
-        name="Hyper3D API Key",
-        subtype="PASSWORD",
-        description="API Key provided by Hyper3D",
-        default=""
+        name="Hyper3D API Key", subtype="PASSWORD",
+        description="API Key provided by Hyper3D", default="",
     )
-
     bpy.types.Scene.blendermcp_use_sketchfab = bpy.props.BoolProperty(
         name="Use Sketchfab",
-        description="Enable Sketchfab asset integration",
-        default=False
+        description="Enable Sketchfab asset integration", default=False,
     )
-
     bpy.types.Scene.blendermcp_sketchfab_api_key = bpy.props.StringProperty(
-        name="Sketchfab API Key",
-        subtype="PASSWORD",
-        description="API Key provided by Sketchfab",
-        default=""
+        name="Sketchfab API Key", subtype="PASSWORD",
+        description="API Key provided by Sketchfab", default="",
     )
 
-    bpy.utils.register_class(BLENDERMCP_PT_Panel)
-    bpy.utils.register_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
-    bpy.utils.register_class(BLENDERMCP_OT_StartServer)
-    bpy.utils.register_class(BLENDERMCP_OT_StopServer)
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
 
-    print("BlenderMCP addon registered")
+    print("[BlenderMCP] Addon registered")
+    if not FASTMCP_AVAILABLE:
+        print("[BlenderMCP] WARNING: fastmcp not installed.")
+        print("[BlenderMCP]   Install with: <blender_python> -m pip install fastmcp")
+
 
 def unregister():
-    # Stop the server if it's running
-    if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
-        bpy.types.blendermcp_server.stop()
-        del bpy.types.blendermcp_server
+    global _client, _executor
 
-    bpy.utils.unregister_class(BLENDERMCP_PT_Panel)
-    bpy.utils.unregister_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
-    bpy.utils.unregister_class(BLENDERMCP_OT_StartServer)
-    bpy.utils.unregister_class(BLENDERMCP_OT_StopServer)
+    # Stop any running client
+    if _client is not None:
+        try:
+            _client.stop()
+        except Exception as e:
+            print(f"[BlenderMCP] Error stopping client during unregister: {e}")
+        _client = None
+    _executor = None
 
-    del bpy.types.Scene.blendermcp_port
-    del bpy.types.Scene.blendermcp_server_running
-    del bpy.types.Scene.blendermcp_use_polyhaven
-    del bpy.types.Scene.blendermcp_use_hyper3d
-    del bpy.types.Scene.blendermcp_hyper3d_mode
-    del bpy.types.Scene.blendermcp_hyper3d_api_key
-    del bpy.types.Scene.blendermcp_use_sketchfab
-    del bpy.types.Scene.blendermcp_sketchfab_api_key
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
 
-    print("BlenderMCP addon unregistered")
+    for prop in (
+        "blendermcp_server_url", "blendermcp_jwt_token",
+        "blendermcp_server_running", "blendermcp_client_id",
+        "blendermcp_use_polyhaven", "blendermcp_use_hyper3d",
+        "blendermcp_hyper3d_mode", "blendermcp_hyper3d_api_key",
+        "blendermcp_use_sketchfab", "blendermcp_sketchfab_api_key",
+    ):
+        if hasattr(bpy.types.Scene, prop):
+            delattr(bpy.types.Scene, prop)
+
+    print("[BlenderMCP] Addon unregistered")
+
 
 if __name__ == "__main__":
     register()
