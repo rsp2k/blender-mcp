@@ -91,10 +91,9 @@ from addon.identity import StickyUUIDManager  # noqa: F401  re-exported
 from addon.client import BlenderMCPClient  # noqa: F401  re-exported
 
 
-# Module-level singleton for the BlenderCommandExecutor (helpers reachable
-# from scripts via globals)
-_executor = None
-_client = None
+# (Singletons _client and _executor moved to addon/state.py in phase 6
+# so the extracted UI operators in addon/ui/operators.py can mutate the
+# same instances the panel reads.)
 
 
 # BlenderCommandExecutor moved to addon/executor/ in phase 4 of the
@@ -105,158 +104,13 @@ _client = None
 #   addon/executor/handlers/*.py  — per-domain handler mixins
 from addon.executor import BlenderCommandExecutor  # noqa: F401  re-exported
 
-
-# ============================================================================
-# Blender UI Panel
-# ============================================================================
-class BLENDERMCP_PT_Panel(bpy.types.Panel):
-    bl_label = "Blender MCP"
-    bl_idname = "BLENDERMCP_PT_Panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = 'BlenderMCP'
-
-    def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-
-        # --- Connection section ---
-        col = layout.column(align=True)
-        col.label(text="MCP Server Connection:", icon='NETWORK_DRIVE')
-
-        # Server URL + JWT input
-        col.prop(scene, "blendermcp_server_url", text="URL")
-        col.prop(scene, "blendermcp_jwt_token", text="JWT")
-
-        if getattr(scene, "blendermcp_client_id", ""):
-            col.label(text=f"Client: {scene.blendermcp_client_id[:24]}")
-
-        # Buttons
-        row = col.row(align=True)
-        if not scene.blendermcp_server_running:
-            row.operator("blendermcp.start_server", text="Connect", icon='PLAY')
-        else:
-            row.operator("blendermcp.stop_server", text="Disconnect", icon='PAUSE')
-
-        # Status indicator
-        client = _client
-        if client:
-            if client.connected:
-                col.label(text="Status: Connected", icon='CHECKMARK')
-                with client.queue_lock:
-                    qlen = len(client.job_queue)
-                col.label(text=f"Queue: {qlen} pending  Active: {len(client.active_jobs)}")
-            elif client.running:
-                col.label(text="Status: Connecting...", icon='TIME')
-            if client.last_error:
-                col.label(text=f"Last error: {client.last_error[:40]}", icon='ERROR')
-
-        col.separator()
-        if not FASTMCP_AVAILABLE:
-            col.label(text="fastmcp not installed", icon='ERROR')
-            col.label(text="Install in Blender's Python:")
-            col.label(text="python -m pip install fastmcp")
-            col.separator()
-
-        # --- Asset integrations ---
-        col.label(text="Asset Integrations:", icon='ASSET_MANAGER')
-        col.prop(scene, "blendermcp_use_polyhaven", text="Poly Haven Assets")
-        col.prop(scene, "blendermcp_use_hyper3d", text="Hyper3D Rodin Generation")
-        if scene.blendermcp_use_hyper3d:
-            sub = col.column(align=True)
-            sub.prop(scene, "blendermcp_hyper3d_mode", text="Mode")
-            sub.prop(scene, "blendermcp_hyper3d_api_key", text="API Key")
-            sub.operator("blendermcp.set_hyper3d_free_trial_api_key", text="Free Trial Key")
-
-        col.prop(scene, "blendermcp_use_sketchfab", text="Sketchfab Models")
-        if scene.blendermcp_use_sketchfab:
-            sub = col.column(align=True)
-            sub.prop(scene, "blendermcp_sketchfab_api_key", text="API Key")
-
-
-# Operator to set Hyper3D API Key
-class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
-    bl_idname = "blendermcp.set_hyper3d_free_trial_api_key"
-    bl_label = "Set Free Trial API Key"
-
-    def execute(self, context):
-        context.scene.blendermcp_hyper3d_api_key = RODIN_FREE_TRIAL_KEY
-        context.scene.blendermcp_hyper3d_mode = 'MAIN_SITE'
-        self.report({'INFO'}, "API Key set successfully!")
-        return {'FINISHED'}
-
-
-# Connect to MCP server
-class BLENDERMCP_OT_StartServer(bpy.types.Operator):
-    bl_idname = "blendermcp.start_server"
-    bl_label = "Connect to BlenderMCP Server"
-    bl_description = "Connect to the BlenderMCP server's _message_bus channel"
-
-    def execute(self, context):
-        global _client, _executor
-        scene = context.scene
-
-        if not FASTMCP_AVAILABLE:
-            self.report({'ERROR'},
-                        "fastmcp not installed. Run: <blender_python> -m pip install fastmcp")
-            return {'CANCELLED'}
-
-        if not scene.blendermcp_jwt_token:
-            self.report({'ERROR'}, "JWT token required (paste from OAuth login)")
-            return {'CANCELLED'}
-
-        try:
-            if _executor is None:
-                _executor = BlenderCommandExecutor()
-
-            if _client is None:
-                uuid_mgr = StickyUUIDManager()
-                _client = BlenderMCPClient(
-                    server_url=scene.blendermcp_server_url,
-                    jwt_token=scene.blendermcp_jwt_token,
-                    client_uuid=uuid_mgr.get_client_id(),
-                    executor=_executor,  # injected so drainer can expose to scripts
-                )
-                scene.blendermcp_client_id = _client.client_uuid
-
-            _client.start()
-            scene.blendermcp_server_running = True
-            self.report({'INFO'}, f"Connecting as {scene.blendermcp_client_id}")
-        except Exception as e:
-            self.report({'ERROR'}, f"Failed to start client: {e}")
-            traceback.print_exc()
-            return {'CANCELLED'}
-
-        return {'FINISHED'}
-
-
-# Disconnect from MCP server
-class BLENDERMCP_OT_StopServer(bpy.types.Operator):
-    bl_idname = "blendermcp.stop_server"
-    bl_label = "Disconnect from BlenderMCP Server"
-    bl_description = "Disconnect from the MCP message bus"
-
-    def execute(self, context):
-        global _client
-        scene = context.scene
-        try:
-            if _client is not None:
-                _client.stop()
-                _client = None
-            scene.blendermcp_server_running = False
-            self.report({'INFO'}, "Disconnected")
-        except Exception as e:
-            self.report({'ERROR'}, f"Error during disconnect: {e}")
-            traceback.print_exc()
-        return {'FINISHED'}
-
-# Registration functions
-_CLASSES = (
-    BLENDERMCP_PT_Panel,
-    BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
-    BLENDERMCP_OT_StartServer,
-    BLENDERMCP_OT_StopServer,
-)
+# UI (panel + 3 operators) extracted in phase 6 to addon/ui/.
+# `state` holds the module-level _client / _executor singletons; both
+# the operators in addon/ui/ and the unregister() below need to mutate
+# them via the shared module reference (not via `from ... import _x`,
+# which would shadow on rebinding).
+from addon import state
+from addon.ui import CLASSES as _CLASSES
 
 
 def register():
@@ -320,16 +174,14 @@ def register():
 
 
 def unregister():
-    global _client, _executor
-
-    # Stop any running client
-    if _client is not None:
+    # Stop any running client; state owns the singletons since phase 6.
+    if state._client is not None:
         try:
-            _client.stop()
+            state._client.stop()
         except Exception as e:
             print(f"[BlenderMCP] Error stopping client during unregister: {e}")
-        _client = None
-    _executor = None
+        state._client = None
+    state._executor = None
 
     for cls in reversed(_CLASSES):
         try:
