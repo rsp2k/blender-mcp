@@ -23,12 +23,16 @@ import bpy
 import requests
 
 from ...constants import RODIN_FREE_TRIAL_KEY
+from ..registry import command
+
+_hyper3d_enabled = lambda scene: scene.blendermcp_use_hyper3d  # noqa: E731
 
 
 class Hyper3dHandlersMixin:
     """`get_hyper3d_status`, `create_rodin_job*`, `poll_rodin_job_status*`,
     `import_generated_asset*` handlers."""
 
+    @command("get_hyper3d_status")
     def get_hyper3d_status(self):
         """Get the current status of Hyper3D Rodin integration"""
         enabled = bpy.context.scene.blendermcp_use_hyper3d
@@ -58,6 +62,7 @@ class Hyper3dHandlersMixin:
                             3. Restart the connection to Claude"""
             }
 
+    @command("create_rodin_job", gate=_hyper3d_enabled)
     def create_rodin_job(self, *args, **kwargs):
         match bpy.context.scene.blendermcp_hyper3d_mode:
             case "MAIN_SITE":
@@ -127,6 +132,7 @@ class Hyper3dHandlersMixin:
         except Exception as e:
             return {"error": str(e)}
 
+    @command("poll_rodin_job_status", gate=_hyper3d_enabled)
     def poll_rodin_job_status(self, *args, **kwargs):
         match bpy.context.scene.blendermcp_hyper3d_mode:
             case "MAIN_SITE":
@@ -163,6 +169,7 @@ class Hyper3dHandlersMixin:
         data = response.json()
         return data
 
+    @command("import_generated_asset", gate=_hyper3d_enabled)
     def import_generated_asset(self, *args, **kwargs):
         match bpy.context.scene.blendermcp_hyper3d_mode:
             case "MAIN_SITE":

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import bpy
 
+from ..registry import command
+
 
 class MsgbusHandlersMixin:
     """`msgbus_*` family of handlers."""
@@ -20,7 +22,8 @@ class MsgbusHandlersMixin:
     _msgbus_subscriptions: dict = {}
     _msgbus_callbacks: dict = {}
 
-    def msgbus_clear_by_owner(self, owner_id):
+    @command("msgbus_clear_by_owner")
+    def msgbus_clear_by_owner(self, owner_id="default"):
         """Clear all message bus subscriptions by owner
 
         Args:
@@ -37,6 +40,7 @@ class MsgbusHandlersMixin:
         except Exception as e:
             return {"error": f"Failed to clear message bus: {str(e)}"}
 
+    @command("msgbus_publish_rna")
     def msgbus_publish_rna(self, data_path=None, key=None):
         """Publish an RNA property change to the message bus
 
@@ -86,7 +90,8 @@ class MsgbusHandlersMixin:
         except Exception as e:
             return {"error": f"Failed to publish RNA message: {str(e)}"}
 
-    def msgbus_subscribe_rna(self, owner_id, data_path, notify_type="UPDATE", persistent=True):
+    @command("msgbus_subscribe_rna")
+    def msgbus_subscribe_rna(self, owner_id="default", data_path=None, notify_type="UPDATE", persistent=True):
         """Subscribe to RNA property changes via message bus
 
         Args:
@@ -187,6 +192,7 @@ class MsgbusHandlersMixin:
         except Exception as e:
             return {"error": f"Failed to subscribe to RNA: {str(e)}"}
 
+    @command("msgbus_get_notifications")
     def msgbus_get_notifications(self, owner_id=None, clear=False):
         """Get pending message bus notifications
 
@@ -227,6 +233,7 @@ class MsgbusHandlersMixin:
         except Exception as e:
             return {"error": f"Failed to get notifications: {str(e)}"}
 
+    @command("msgbus_list_subscriptions")
     def msgbus_list_subscriptions(self, owner_id=None):
         """List active message bus subscriptions
 

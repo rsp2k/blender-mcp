@@ -6,6 +6,8 @@ import traceback
 
 import bpy
 
+from ..registry import command
+
 
 class SceneHandlersMixin:
     """`get_scene_info`, `get_object_info`, `browse_data` commands.
@@ -15,6 +17,7 @@ class SceneHandlersMixin:
     arrive via MRO once mixed into BlenderCommandExecutor.
     """
 
+    @command("get_scene_info")
     def get_scene_info(self):
         """Get information about the current Blender scene"""
         try:
@@ -49,6 +52,7 @@ class SceneHandlersMixin:
             traceback.print_exc()
             return {"error": str(e)}
 
+    @command("get_object_info")
     def get_object_info(self, name):
         """Get detailed information about a specific object"""
         obj = bpy.data.objects.get(name)
@@ -86,6 +90,7 @@ class SceneHandlersMixin:
 
         return obj_info
 
+    @command("browse_data")
     def browse_data(self, collection=None, item_name=None, page=1, page_size=50, detail_level="summary"):
         """Browse bpy.data collections with pagination and detail levels
 

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import bpy
 
+from ..registry import command
+
 
 class ViewportHandlersMixin:
     """`get_viewport_screenshot` command."""
 
+    @command("get_viewport_screenshot")
     def get_viewport_screenshot(self, max_size=800, filepath=None, format="png"):
         """
         Capture a screenshot of the current 3D viewport and save it to the specified path.

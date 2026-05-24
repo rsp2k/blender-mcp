@@ -18,11 +18,16 @@ from contextlib import suppress
 import bpy
 import requests
 
+from ..registry import command
+
+_sketchfab_enabled = lambda scene: scene.blendermcp_use_sketchfab  # noqa: E731
+
 
 class SketchfabHandlersMixin:
     """`get_sketchfab_status`, `search_sketchfab_models`,
     `download_sketchfab_model` handlers."""
 
+    @command("get_sketchfab_status")
     def get_sketchfab_status(self):
         """Get the current status of Sketchfab integration"""
         enabled = bpy.context.scene.blendermcp_use_sketchfab
@@ -85,6 +90,7 @@ class SketchfabHandlersMixin:
                             4. Restart the connection to Claude"""
             }
 
+    @command("search_sketchfab_models", gate=_sketchfab_enabled)
     def search_sketchfab_models(self, query, categories=None, count=20, downloadable=True):
         """Search for models on Sketchfab based on query and optional filters"""
         try:
@@ -144,6 +150,7 @@ class SketchfabHandlersMixin:
             traceback.print_exc()
             return {"error": str(e)}
 
+    @command("download_sketchfab_model", gate=_sketchfab_enabled)
     def download_sketchfab_model(self, uid):
         """Download a model from Sketchfab by its UID"""
         try:

@@ -13,10 +13,13 @@ from contextlib import redirect_stdout
 
 import bpy
 
+from ..registry import command
+
 
 class CodeExecHandlersMixin:
     """`execute_code` command."""
 
+    @command("execute_code")
     def execute_code(self, code):
         """Execute arbitrary Blender Python code"""
         # This is powerful but potentially dangerous - use with caution

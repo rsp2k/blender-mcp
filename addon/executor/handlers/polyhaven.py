@@ -21,6 +21,11 @@ import bpy
 import requests
 
 from ...constants import REQ_HEADERS
+from ..registry import command
+
+# Gate predicate shared by the gated polyhaven handlers; defined once
+# so all four decorators reference the same callable.
+_polyhaven_enabled = lambda scene: scene.blendermcp_use_polyhaven  # noqa: E731
 
 
 class PolyhavenHandlersMixin:
@@ -28,6 +33,7 @@ class PolyhavenHandlersMixin:
     `search_polyhaven_assets`, `download_polyhaven_asset`, `set_texture`.
     """
 
+    @command("get_polyhaven_categories", gate=_polyhaven_enabled)
     def get_polyhaven_categories(self, asset_type):
         """Get categories for a specific asset type from Polyhaven"""
         try:
@@ -42,6 +48,7 @@ class PolyhavenHandlersMixin:
         except Exception as e:
             return {"error": str(e)}
 
+    @command("search_polyhaven_assets", gate=_polyhaven_enabled)
     def search_polyhaven_assets(self, asset_type=None, categories=None):
         """Search for assets from Polyhaven with optional filtering"""
         try:
@@ -73,6 +80,7 @@ class PolyhavenHandlersMixin:
         except Exception as e:
             return {"error": str(e)}
 
+    @command("download_polyhaven_asset", gate=_polyhaven_enabled)
     def download_polyhaven_asset(self, asset_id, asset_type, resolution="1k", file_format=None):
         try:
             # First get the files information
@@ -396,6 +404,7 @@ class PolyhavenHandlersMixin:
         except Exception as e:
             return {"error": f"Failed to download asset: {str(e)}"}
 
+    @command("set_texture", gate=_polyhaven_enabled)
     def set_texture(self, object_name, texture_id):
         """Apply a previously downloaded Polyhaven texture to an object by creating a new material"""
         try:
@@ -700,6 +709,7 @@ class PolyhavenHandlersMixin:
             traceback.print_exc()
             return {"error": f"Failed to apply texture: {str(e)}"}
 
+    @command("get_polyhaven_status")
     def get_polyhaven_status(self):
         """Get the current status of PolyHaven integration"""
         enabled = bpy.context.scene.blendermcp_use_polyhaven
