@@ -84,24 +84,39 @@ class BlenderInstallationManager:
         return None
     
     def check_running_blender_instances(self) -> List[Dict[str, any]]:
-        """Check for running Blender instances"""
+        """Check for running Blender instances.
+
+        Matches the executable basename exactly ('blender' or 'blender.exe').
+        Excludes our own MCP processes (anything starting with 'blender-mcp')
+        because a loose substring match used to surface 'blender-mcp-stdio'
+        as a running Blender GUI instance, which broke diagnose_connection_issue.
+        """
         blender_processes = []
         try:
             for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
                 try:
-                    if proc.info['name'] and 'blender' in proc.info['name'].lower():
-                        blender_processes.append({
-                            'pid': proc.info['pid'],
-                            'name': proc.info['name'],
-                            'cmdline': proc.info['cmdline'],
-                            'create_time': proc.info['create_time'],
-                            'is_gui': '--background' not in (proc.info['cmdline'] or []) and '-b' not in (proc.info['cmdline'] or [])
-                        })
+                    name = (proc.info.get('name') or '').lower()
+                    if not name:
+                        continue
+                    # Strict match: only the real Blender executable. Skip
+                    # our own MCP-server/companion processes.
+                    if name.startswith('blender-mcp'):
+                        continue
+                    if name not in ('blender', 'blender.exe', 'blender-bin'):
+                        continue
+                    cmdline = proc.info.get('cmdline') or []
+                    blender_processes.append({
+                        'pid': proc.info['pid'],
+                        'name': proc.info['name'],
+                        'cmdline': cmdline,
+                        'create_time': proc.info['create_time'],
+                        'is_gui': '--background' not in cmdline and '-b' not in cmdline,
+                    })
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception as e:
             logger.warning(f"Error checking running processes: {str(e)}")
-        
+
         return blender_processes
     
     def is_blender_mcp_server_running(self) -> bool:
