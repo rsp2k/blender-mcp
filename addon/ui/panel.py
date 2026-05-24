@@ -11,6 +11,7 @@ import bpy
 
 from .. import state
 from ..client.bus_client import FASTMCP_AVAILABLE
+from ..preferences import get_prefs
 
 
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
@@ -23,26 +24,28 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        prefs = get_prefs(context)
 
         # --- Connection section ---
         col = layout.column(align=True)
         col.label(text="MCP Server Connection:", icon='NETWORK_DRIVE')
 
-        col.prop(scene, "blendermcp_server_url", text="URL")
+        col.prop(prefs, "server_url", text="URL")
 
         # --- Login section ---
-        has_jwt = bool(scene.blendermcp_jwt_token)
+        has_jwt = bool(prefs.jwt_token)
         if not has_jwt:
             col.separator()
             col.label(text="Login:", icon='UNLOCKED')
-            col.prop(scene, "blendermcp_username", text="Username")
+            col.prop(prefs, "username", text="Username")
+            # Password remains on Scene (transient _tmp slot — never persisted).
             col.prop(scene, "blendermcp_password_tmp", text="Password")
             col.operator("blendermcp.login", text="Login", icon='KEYINGSET')
         else:
             row = col.row(align=True)
-            row.label(text="JWT: stored", icon='LOCKED')
-            # Clear-JWT path: just clear the property; user can re-login.
-            row.prop(scene, "blendermcp_jwt_token", text="", icon='X')
+            row.label(text=f"Logged in as {prefs.username or '?'}", icon='LOCKED')
+            # Clear-JWT path: clearing the prop forces a re-login.
+            row.prop(prefs, "jwt_token", text="", icon='X')
 
         if getattr(scene, "blendermcp_client_id", ""):
             col.label(text=f"Client: {scene.blendermcp_client_id[:24]}")
@@ -77,17 +80,17 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             col.label(text="python -m pip install fastmcp")
             col.separator()
 
-        # --- Asset integrations ---
+        # --- Asset integrations (all read/write via AddonPreferences) ---
         col.label(text="Asset Integrations:", icon='ASSET_MANAGER')
-        col.prop(scene, "blendermcp_use_polyhaven", text="Poly Haven Assets")
-        col.prop(scene, "blendermcp_use_hyper3d", text="Hyper3D Rodin Generation")
-        if scene.blendermcp_use_hyper3d:
+        col.prop(prefs, "use_polyhaven", text="Poly Haven Assets")
+        col.prop(prefs, "use_hyper3d", text="Hyper3D Rodin Generation")
+        if prefs.use_hyper3d:
             sub = col.column(align=True)
-            sub.prop(scene, "blendermcp_hyper3d_mode", text="Mode")
-            sub.prop(scene, "blendermcp_hyper3d_api_key", text="API Key")
+            sub.prop(prefs, "hyper3d_mode", text="Mode")
+            sub.prop(prefs, "hyper3d_api_key", text="API Key")
             sub.operator("blendermcp.set_hyper3d_free_trial_api_key", text="Free Trial Key")
 
-        col.prop(scene, "blendermcp_use_sketchfab", text="Sketchfab Models")
-        if scene.blendermcp_use_sketchfab:
+        col.prop(prefs, "use_sketchfab", text="Sketchfab Models")
+        if prefs.use_sketchfab:
             sub = col.column(align=True)
-            sub.prop(scene, "blendermcp_sketchfab_api_key", text="API Key")
+            sub.prop(prefs, "sketchfab_api_key", text="API Key")

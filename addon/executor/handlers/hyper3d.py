@@ -19,13 +19,14 @@ import json
 import os
 import tempfile
 
-import bpy
 import requests
 
 from ...constants import RODIN_FREE_TRIAL_KEY
+from ...preferences import get_prefs
 from ..registry import command
 
-_hyper3d_enabled = lambda scene: scene.blendermcp_use_hyper3d  # noqa: E731
+# Phase 8: gate signature changed from (scene) to (prefs).
+_hyper3d_enabled = lambda prefs: prefs.use_hyper3d  # noqa: E731
 
 
 class Hyper3dHandlersMixin:
@@ -35,9 +36,9 @@ class Hyper3dHandlersMixin:
     @command("get_hyper3d_status")
     def get_hyper3d_status(self):
         """Get the current status of Hyper3D Rodin integration"""
-        enabled = bpy.context.scene.blendermcp_use_hyper3d
+        enabled = get_prefs().use_hyper3d
         if enabled:
-            if not bpy.context.scene.blendermcp_hyper3d_api_key:
+            if not get_prefs().hyper3d_api_key:
                 return {
                     "enabled": False,
                     "message": """Hyper3D Rodin integration is currently enabled, but API key is not given. To enable it:
@@ -46,9 +47,9 @@ class Hyper3dHandlersMixin:
                                 3. Choose the right plaform and fill in the API Key
                                 4. Restart the connection to Claude"""
                 }
-            mode = bpy.context.scene.blendermcp_hyper3d_mode
+            mode = get_prefs().hyper3d_mode
             message = f"Hyper3D Rodin integration is enabled and ready to use. Mode: {mode}. " + \
-                f"Key type: {'private' if bpy.context.scene.blendermcp_hyper3d_api_key != RODIN_FREE_TRIAL_KEY else 'free_trial'}"
+                f"Key type: {'private' if get_prefs().hyper3d_api_key != RODIN_FREE_TRIAL_KEY else 'free_trial'}"
             return {
                 "enabled": True,
                 "message": message
@@ -64,7 +65,7 @@ class Hyper3dHandlersMixin:
 
     @command("create_rodin_job", gate=_hyper3d_enabled)
     def create_rodin_job(self, *args, **kwargs):
-        match bpy.context.scene.blendermcp_hyper3d_mode:
+        match get_prefs().hyper3d_mode:
             case "MAIN_SITE":
                 return self.create_rodin_job_main_site(*args, **kwargs)
             case "FAL_AI":
@@ -94,7 +95,7 @@ class Hyper3dHandlersMixin:
             response = requests.post(
                 "https://hyperhuman.deemos.com/api/v2/rodin",
                 headers={
-                    "Authorization": f"Bearer {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                    "Authorization": f"Bearer {get_prefs().hyper3d_api_key}",
                 },
                 files=files
             )
@@ -122,7 +123,7 @@ class Hyper3dHandlersMixin:
             response = requests.post(
                 "https://queue.fal.run/fal-ai/hyper3d/rodin",
                 headers={
-                    "Authorization": f"Key {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                    "Authorization": f"Key {get_prefs().hyper3d_api_key}",
                     "Content-Type": "application/json",
                 },
                 json=req_data
@@ -134,7 +135,7 @@ class Hyper3dHandlersMixin:
 
     @command("poll_rodin_job_status", gate=_hyper3d_enabled)
     def poll_rodin_job_status(self, *args, **kwargs):
-        match bpy.context.scene.blendermcp_hyper3d_mode:
+        match get_prefs().hyper3d_mode:
             case "MAIN_SITE":
                 return self.poll_rodin_job_status_main_site(*args, **kwargs)
             case "FAL_AI":
@@ -147,7 +148,7 @@ class Hyper3dHandlersMixin:
         response = requests.post(
             "https://hyperhuman.deemos.com/api/v2/status",
             headers={
-                "Authorization": f"Bearer {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                "Authorization": f"Bearer {get_prefs().hyper3d_api_key}",
             },
             json={
                 "subscription_key": subscription_key,
@@ -163,7 +164,7 @@ class Hyper3dHandlersMixin:
         response = requests.get(
             f"https://queue.fal.run/fal-ai/hyper3d/requests/{request_id}/status",
             headers={
-                "Authorization": f"KEY {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                "Authorization": f"KEY {get_prefs().hyper3d_api_key}",
             },
         )
         data = response.json()
@@ -171,7 +172,7 @@ class Hyper3dHandlersMixin:
 
     @command("import_generated_asset", gate=_hyper3d_enabled)
     def import_generated_asset(self, *args, **kwargs):
-        match bpy.context.scene.blendermcp_hyper3d_mode:
+        match get_prefs().hyper3d_mode:
             case "MAIN_SITE":
                 return self.import_generated_asset_main_site(*args, **kwargs)
             case "FAL_AI":
@@ -184,7 +185,7 @@ class Hyper3dHandlersMixin:
         response = requests.post(
             "https://hyperhuman.deemos.com/api/v2/download",
             headers={
-                "Authorization": f"Bearer {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                "Authorization": f"Bearer {get_prefs().hyper3d_api_key}",
             },
             json={
                 'task_uuid': task_uuid
@@ -250,7 +251,7 @@ class Hyper3dHandlersMixin:
         response = requests.get(
             f"https://queue.fal.run/fal-ai/hyper3d/requests/{request_id}",
             headers={
-                "Authorization": f"Key {bpy.context.scene.blendermcp_hyper3d_api_key}",
+                "Authorization": f"Key {get_prefs().hyper3d_api_key}",
             }
         )
         data_ = response.json()

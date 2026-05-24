@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import traceback
 
-import bpy
-
+from ..preferences import get_prefs
 from ._shared import SharedHelpersMixin
 from .handlers.code_exec import CodeExecHandlersMixin
 from .handlers.console import ConsoleHandlersMixin
@@ -66,9 +65,10 @@ class BlenderCommandExecutor(
         # Unknown command, OR known but gated off — both produce the same
         # response shape as the pre-Phase-5 dispatch dict (where a gated
         # command simply wasn't in the dict, so lookup fell through to
-        # "Unknown command type").
+        # "Unknown command type"). Gates receive AddonPreferences (Phase 8);
+        # before that they received bpy.context.scene.
         if spec is None or (
-            spec.gate is not None and not spec.gate(bpy.context.scene)
+            spec.gate is not None and not spec.gate(get_prefs())
         ):
             return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
 

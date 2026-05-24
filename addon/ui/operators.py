@@ -19,6 +19,7 @@ from ..client.bus_client import FASTMCP_AVAILABLE
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
+from ..preferences import get_prefs
 
 
 class BLENDERMCP_OT_Login(bpy.types.Operator):
@@ -37,8 +38,11 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        server_url = scene.blendermcp_server_url
-        username = getattr(scene, "blendermcp_username", "")
+        prefs = get_prefs(context)
+        server_url = prefs.server_url
+        username = prefs.username
+        # Password is the only credential field still on Scene — transient,
+        # never persisted, never shipped in .blend files.
         password = getattr(scene, "blendermcp_password_tmp", "")
 
         if not username or not password:
@@ -59,7 +63,7 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
             traceback.print_exc()
             return {'CANCELLED'}
 
-        scene.blendermcp_jwt_token = payload.get("access_token", "")
+        prefs.jwt_token = payload.get("access_token", "")
         # Clear the password field so it's not lingering in the UI.
         scene.blendermcp_password_tmp = ""
 
@@ -74,8 +78,9 @@ class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
     bl_label = "Set Free Trial API Key"
 
     def execute(self, context):
-        context.scene.blendermcp_hyper3d_api_key = RODIN_FREE_TRIAL_KEY
-        context.scene.blendermcp_hyper3d_mode = 'MAIN_SITE'
+        prefs = get_prefs(context)
+        prefs.hyper3d_api_key = RODIN_FREE_TRIAL_KEY
+        prefs.hyper3d_mode = 'MAIN_SITE'
         self.report({'INFO'}, "API Key set successfully!")
         return {'FINISHED'}
 
@@ -89,6 +94,7 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
+        prefs = get_prefs(context)
 
         if not FASTMCP_AVAILABLE:
             self.report(
@@ -97,8 +103,8 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
             )
             return {'CANCELLED'}
 
-        if not scene.blendermcp_jwt_token:
-            self.report({'ERROR'}, "JWT token required (paste from OAuth login)")
+        if not prefs.jwt_token:
+            self.report({'ERROR'}, "Not logged in. Click Login first to obtain a JWT.")
             return {'CANCELLED'}
 
         try:
@@ -108,8 +114,8 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
             if state._client is None:
                 uuid_mgr = StickyUUIDManager()
                 state._client = BlenderMCPClient(
-                    server_url=scene.blendermcp_server_url,
-                    jwt_token=scene.blendermcp_jwt_token,
+                    server_url=prefs.server_url,
+                    jwt_token=prefs.jwt_token,
                     client_uuid=uuid_mgr.get_client_id(),
                     executor=state._executor,  # injected so drainer exposes to scripts
                 )

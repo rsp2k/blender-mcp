@@ -21,11 +21,13 @@ import bpy
 import requests
 
 from ...constants import REQ_HEADERS
+from ...preferences import get_prefs
 from ..registry import command
 
 # Gate predicate shared by the gated polyhaven handlers; defined once
-# so all four decorators reference the same callable.
-_polyhaven_enabled = lambda scene: scene.blendermcp_use_polyhaven  # noqa: E731
+# so all four decorators reference the same callable. Phase 8 changed
+# the gate signature from (scene) to (prefs).
+_polyhaven_enabled = lambda prefs: prefs.use_polyhaven  # noqa: E731
 
 
 class PolyhavenHandlersMixin:
@@ -712,7 +714,7 @@ class PolyhavenHandlersMixin:
     @command("get_polyhaven_status")
     def get_polyhaven_status(self):
         """Get the current status of PolyHaven integration"""
-        enabled = bpy.context.scene.blendermcp_use_polyhaven
+        enabled = get_prefs().use_polyhaven
         if enabled:
             return {"enabled": True, "message": "PolyHaven integration is enabled and ready to use."}
         else:

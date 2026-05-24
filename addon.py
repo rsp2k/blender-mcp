@@ -110,76 +110,67 @@ from addon.executor import BlenderCommandExecutor  # noqa: F401  re-exported
 # them via the shared module reference (not via `from ... import _x`,
 # which would shadow on rebinding).
 from addon import state
+from addon.preferences import BlenderMCPPreferences, migrate_from_scene
 from addon.ui import CLASSES as _CLASSES
+
+# Transient per-session Scene properties — these never persist to disk
+# and stay on Scene (vs migrating to AddonPreferences) because they're
+# runtime state, not user config:
+#   blendermcp_server_running — is the bus client connected right now?
+#   blendermcp_client_id      — display the sticky UUID in the panel
+#   blendermcp_password_tmp   — the in-flight password before Login runs;
+#                              cleared by the operator on success
+_TRANSIENT_SCENE_PROPS = (
+    "blendermcp_server_running",
+    "blendermcp_client_id",
+    "blendermcp_password_tmp",
+)
 
 
 def register():
-    # Connection settings
-    bpy.types.Scene.blendermcp_server_url = bpy.props.StringProperty(
-        name="Server URL",
-        description="BlenderMCP server's Streamable HTTP endpoint",
-        default="http://localhost:8000/mcp",
-    )
-    bpy.types.Scene.blendermcp_jwt_token = bpy.props.StringProperty(
-        name="JWT Token",
-        description="Bearer token obtained via OAuth login. Populated by the Login operator; cleared via the panel's clear button.",
-        subtype="PASSWORD",
-        default="",
-    )
-    # Phase 7: real OAuth login. `_username` is persisted (handy for repeated
-    # logins) while `_password_tmp` is cleared after a successful login —
-    # name suffix is a hint that it shouldn't end up in the .blend file.
-    bpy.types.Scene.blendermcp_username = bpy.props.StringProperty(
-        name="Username",
-        description="Account username for /auth/login",
-        default="",
-    )
-    bpy.types.Scene.blendermcp_password_tmp = bpy.props.StringProperty(
-        name="Password",
-        description="Password (cleared after a successful login)",
-        subtype="PASSWORD",
-        default="",
-    )
+    # AddonPreferences is the home for all user config since Phase 8.
+    bpy.utils.register_class(BlenderMCPPreferences)
+
+    # Transient Scene props (per-session state that never leaves Blender).
     bpy.types.Scene.blendermcp_server_running = bpy.props.BoolProperty(
         name="Connected", default=False,
     )
     bpy.types.Scene.blendermcp_client_id = bpy.props.StringProperty(
         name="Client ID", default="",
     )
-
-    # Asset integrations
-    bpy.types.Scene.blendermcp_use_polyhaven = bpy.props.BoolProperty(
-        name="Use Poly Haven",
-        description="Enable Poly Haven asset integration", default=False,
-    )
-    bpy.types.Scene.blendermcp_use_hyper3d = bpy.props.BoolProperty(
-        name="Use Hyper3D Rodin",
-        description="Enable Hyper3D Rodin generation integration", default=False,
-    )
-    bpy.types.Scene.blendermcp_hyper3d_mode = bpy.props.EnumProperty(
-        name="Rodin Mode",
-        description="Choose the platform used to call Rodin APIs",
-        items=[
-            ("MAIN_SITE", "hyper3d.ai", "hyper3d.ai"),
-            ("FAL_AI", "fal.ai", "fal.ai"),
-        ],
-        default="MAIN_SITE",
-    )
-    bpy.types.Scene.blendermcp_hyper3d_api_key = bpy.props.StringProperty(
-        name="Hyper3D API Key", subtype="PASSWORD",
-        description="API Key provided by Hyper3D", default="",
-    )
-    bpy.types.Scene.blendermcp_use_sketchfab = bpy.props.BoolProperty(
-        name="Use Sketchfab",
-        description="Enable Sketchfab asset integration", default=False,
-    )
-    bpy.types.Scene.blendermcp_sketchfab_api_key = bpy.props.StringProperty(
-        name="Sketchfab API Key", subtype="PASSWORD",
-        description="API Key provided by Sketchfab", default="",
+    bpy.types.Scene.blendermcp_password_tmp = bpy.props.StringProperty(
+        name="Password",
+        description="In-flight password; cleared on successful login. Never persisted.",
+        subtype="PASSWORD",
+        default="",
     )
 
+    # Register the UI classes (panel + operators).
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+
+    # One-shot migration from legacy Scene properties (pre-Phase-8 installs).
+    # Runs against bpy.context.scene if available; safe to no-op otherwise.
+    try:
+        scene = getattr(bpy.context, "scene", None)
+        if scene is not None:
+            migrated = migrate_from_scene(scene)
+            if migrated:
+                print(f"[BlenderMCP] Migrated {len(migrated)} setting(s) from Scene to AddonPreferences: "
+                      f"{', '.join(migrated)}")
+            # Whether or not values were migrated, remove the legacy props
+            # so they don't ride along in .blend files saved after this run.
+            for prop in (
+                "blendermcp_server_url", "blendermcp_jwt_token",
+                "blendermcp_username",
+                "blendermcp_use_polyhaven", "blendermcp_use_hyper3d",
+                "blendermcp_hyper3d_mode", "blendermcp_hyper3d_api_key",
+                "blendermcp_use_sketchfab", "blendermcp_sketchfab_api_key",
+            ):
+                if hasattr(bpy.types.Scene, prop):
+                    delattr(bpy.types.Scene, prop)
+    except Exception as e:
+        print(f"[BlenderMCP] Migration warning (non-fatal): {e}")
 
     print("[BlenderMCP] Addon registered")
     if not FASTMCP_AVAILABLE:
@@ -203,16 +194,16 @@ def unregister():
         except Exception:
             pass
 
-    for prop in (
-        "blendermcp_server_url", "blendermcp_jwt_token",
-        "blendermcp_username", "blendermcp_password_tmp",
-        "blendermcp_server_running", "blendermcp_client_id",
-        "blendermcp_use_polyhaven", "blendermcp_use_hyper3d",
-        "blendermcp_hyper3d_mode", "blendermcp_hyper3d_api_key",
-        "blendermcp_use_sketchfab", "blendermcp_sketchfab_api_key",
-    ):
+    # Remove transient Scene props.
+    for prop in _TRANSIENT_SCENE_PROPS:
         if hasattr(bpy.types.Scene, prop):
             delattr(bpy.types.Scene, prop)
+
+    # Unregister AddonPreferences last (panel/operators reference it).
+    try:
+        bpy.utils.unregister_class(BlenderMCPPreferences)
+    except Exception:
+        pass
 
     print("[BlenderMCP] Addon unregistered")
 

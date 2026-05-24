@@ -18,9 +18,11 @@ from contextlib import suppress
 import bpy
 import requests
 
+from ...preferences import get_prefs
 from ..registry import command
 
-_sketchfab_enabled = lambda scene: scene.blendermcp_use_sketchfab  # noqa: E731
+# Phase 8: gate signature changed from (scene) to (prefs).
+_sketchfab_enabled = lambda prefs: prefs.use_sketchfab  # noqa: E731
 
 
 class SketchfabHandlersMixin:
@@ -30,8 +32,8 @@ class SketchfabHandlersMixin:
     @command("get_sketchfab_status")
     def get_sketchfab_status(self):
         """Get the current status of Sketchfab integration"""
-        enabled = bpy.context.scene.blendermcp_use_sketchfab
-        api_key = bpy.context.scene.blendermcp_sketchfab_api_key
+        enabled = get_prefs().use_sketchfab
+        api_key = get_prefs().sketchfab_api_key
 
         # Test the API key if present
         if api_key:
@@ -94,7 +96,7 @@ class SketchfabHandlersMixin:
     def search_sketchfab_models(self, query, categories=None, count=20, downloadable=True):
         """Search for models on Sketchfab based on query and optional filters"""
         try:
-            api_key = bpy.context.scene.blendermcp_sketchfab_api_key
+            api_key = get_prefs().sketchfab_api_key
             if not api_key:
                 return {"error": "Sketchfab API key is not configured"}
 
@@ -154,7 +156,7 @@ class SketchfabHandlersMixin:
     def download_sketchfab_model(self, uid):
         """Download a model from Sketchfab by its UID"""
         try:
-            api_key = bpy.context.scene.blendermcp_sketchfab_api_key
+            api_key = get_prefs().sketchfab_api_key
             if not api_key:
                 return {"error": "Sketchfab API key is not configured"}
 
