@@ -13,6 +13,7 @@ with bpy.utils.register_class.
 from __future__ import annotations
 
 from .operators import (
+    BLENDERMCP_OT_Login,
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
@@ -22,6 +23,7 @@ from .panel import BLENDERMCP_PT_Panel
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
     BLENDERMCP_PT_Panel,
+    BLENDERMCP_OT_Login,
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
@@ -30,6 +32,7 @@ CLASSES = (
 __all__ = [
     "CLASSES",
     "BLENDERMCP_PT_Panel",
+    "BLENDERMCP_OT_Login",
     "BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey",
     "BLENDERMCP_OT_StartServer",
     "BLENDERMCP_OT_StopServer",

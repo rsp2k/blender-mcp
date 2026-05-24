@@ -28,17 +28,32 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         col = layout.column(align=True)
         col.label(text="MCP Server Connection:", icon='NETWORK_DRIVE')
 
-        # Server URL + JWT input
         col.prop(scene, "blendermcp_server_url", text="URL")
-        col.prop(scene, "blendermcp_jwt_token", text="JWT")
+
+        # --- Login section ---
+        has_jwt = bool(scene.blendermcp_jwt_token)
+        if not has_jwt:
+            col.separator()
+            col.label(text="Login:", icon='UNLOCKED')
+            col.prop(scene, "blendermcp_username", text="Username")
+            col.prop(scene, "blendermcp_password_tmp", text="Password")
+            col.operator("blendermcp.login", text="Login", icon='KEYINGSET')
+        else:
+            row = col.row(align=True)
+            row.label(text="JWT: stored", icon='LOCKED')
+            # Clear-JWT path: just clear the property; user can re-login.
+            row.prop(scene, "blendermcp_jwt_token", text="", icon='X')
 
         if getattr(scene, "blendermcp_client_id", ""):
             col.label(text=f"Client: {scene.blendermcp_client_id[:24]}")
 
-        # Buttons
+        # Connect/Disconnect button (gated on having a JWT)
+        col.separator()
         row = col.row(align=True)
         if not scene.blendermcp_server_running:
-            row.operator("blendermcp.start_server", text="Connect", icon='PLAY')
+            sub = row.row()
+            sub.enabled = has_jwt
+            sub.operator("blendermcp.start_server", text="Connect", icon='PLAY')
         else:
             row.operator("blendermcp.stop_server", text="Disconnect", icon='PAUSE')
 

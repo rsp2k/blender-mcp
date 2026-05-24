@@ -122,7 +122,21 @@ def register():
     )
     bpy.types.Scene.blendermcp_jwt_token = bpy.props.StringProperty(
         name="JWT Token",
-        description="Bearer token obtained via OAuth login",
+        description="Bearer token obtained via OAuth login. Populated by the Login operator; cleared via the panel's clear button.",
+        subtype="PASSWORD",
+        default="",
+    )
+    # Phase 7: real OAuth login. `_username` is persisted (handy for repeated
+    # logins) while `_password_tmp` is cleared after a successful login —
+    # name suffix is a hint that it shouldn't end up in the .blend file.
+    bpy.types.Scene.blendermcp_username = bpy.props.StringProperty(
+        name="Username",
+        description="Account username for /auth/login",
+        default="",
+    )
+    bpy.types.Scene.blendermcp_password_tmp = bpy.props.StringProperty(
+        name="Password",
+        description="Password (cleared after a successful login)",
         subtype="PASSWORD",
         default="",
     )
@@ -191,6 +205,7 @@ def unregister():
 
     for prop in (
         "blendermcp_server_url", "blendermcp_jwt_token",
+        "blendermcp_username", "blendermcp_password_tmp",
         "blendermcp_server_running", "blendermcp_client_id",
         "blendermcp_use_polyhaven", "blendermcp_use_hyper3d",
         "blendermcp_hyper3d_mode", "blendermcp_hyper3d_api_key",
