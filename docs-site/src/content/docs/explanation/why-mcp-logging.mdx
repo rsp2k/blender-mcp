@@ -1,0 +1,94 @@
+---
+title: "Why MCP logging as a bus"
+description: "Three alternatives considered for the cross-instance transport — custom socket, WebSocket, MCP sampling. Why logging won. Honest tradeoffs."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+BlenderMCP needs a way to push messages from the server to subscribed clients. We picked the MCP `notifications/message` log channel. This page is the why — and what we gave up.
+
+## What we needed
+
+- Server-initiated pushes to specific clients (not just request/response)
+- Per-client addressing
+- Priority ordering
+- Subscribers in two flavors: persistent (Blender peers) and ephemeral (LLM sessions)
+- Authentication that maps each pushed message to "this user's bus"
+
+Plus a soft requirement: no extra moving parts. The whole point of MCP is one well-defined protocol surface — adding a parallel channel for "the real traffic" felt like a smell.
+
+## Option 1 — Custom TCP socket (the original design)
+
+The pre-bus implementation used a custom JSON-over-TCP socket on `localhost:9876`. A Blender addon spun up a socket server; the MCP server connected as a client.
+
+**Worked**: simple, low-latency, easy to reason about.
+
+**Didn't work**:
+- Single Blender per server. No multiplexing.
+- The Blender side had to bind a port, which clashed when multiple Blender installs were running.
+- No authentication. Anyone on the host could connect.
+- Required a separate protocol spec; clients written in other languages needed a fresh client library.
+- The Blender process was the server, which meant LLM clients reached out to "Blender's MCP socket" rather than "the bus" — inverted from where identity actually sits.
+
+We could have layered multiplexing/auth on top, but at that point we'd be reinventing what MCP already provides.
+
+## Option 2 — WebSocket
+
+A WebSocket alongside the MCP HTTP endpoint, with our own framing for bus messages.
+
+**Worked on paper**: persistent connection, server-initiated pushes, standard browser support.
+
+**Didn't work**:
+- A second wire format to spec, document, and version.
+- A second authentication path (the JWT validation lives in FastAPI middleware for HTTP requests; we'd need to re-implement it for WebSocket upgrades).
+- Forwarding handler complexity doubles — we'd need a registry of WebSocket connections alongside MCP sessions.
+- Library users wanting to write a client need to learn MCP **and** our WebSocket framing.
+
+The killer was the "second auth path." We'd already done the work to make `/mcp` JWT-gated. Doubling it for WebSockets meant two places to keep in sync.
+
+## Option 3 — MCP sampling
+
+MCP has a `sampling/createMessage` request the server can send to clients. We considered using it as a generic "server pushes work to client" mechanism.
+
+**Worked on paper**: the request/response semantics fit "dispatch a job and get a result."
+
+**Didn't work**:
+- `sampling/createMessage` is specifically a request for the client to run an LLM completion. Repurposing it for arbitrary work is a protocol abuse — clients implementing the spec correctly will reject anything that isn't an LLM-shaped request.
+- Only one outstanding sampling request per session — no concurrent jobs.
+- No native fan-out (one server → many clients).
+- The server-to-client direction in MCP is bidirectional only because of sampling; once you're not using it for sampling, you're outside the spec.
+
+## Option 4 — MCP logging (what we picked)
+
+Every MCP client can subscribe to log notifications via `logging/setLevel`. The server emits `notifications/message` records the client receives. The spec says these are for *logs*, but the structure (a `level`, a `logger`, a free-form `data` field) is general enough to carry anything.
+
+**The transport works**:
+- One notification per addressed client. The server's `BusForwardingHandler` looks up the per-target `session` and pushes there.
+- Eight built-in priority levels (RFC 5424). We map them 1:1 to job priorities.
+- A dedicated logger name (`_message_bus`) lets clients filter bus traffic from any other log noise on the same channel.
+- Authentication happens once, at the HTTP transport layer. The JWT middleware sets a `ContextVar`; every bus tool reads it.
+
+**Tradeoffs we accepted**:
+
+- **Subscribers receive every notification at or above their set level**. A client at the default `warning` level misses `info`/`notice`/`debug` traffic. The addon explicitly calls `set_logging_level("debug")` to subscribe to everything; LLM clients have to do the same. This is the single most common silent-failure mode for new clients.
+- **The "logs" framing is misleading at first**. A new developer looking at the protocol sees "this is a log channel" and isn't sure what to do with the `data` field. We document the convention (`logger == "_message_bus"`, `data` is the routing record) but it's not enforced by the spec.
+- **No per-message ACK from the receiver**. Notifications are fire-and-forget. We do our own ACK via the `blender_job_update` reply path — but the reply is itself a separate routed message, not a transport-level response.
+- **No backpressure**. If a client subscribes and then stops draining, the underlying MCP transport queues notifications. We rely on clients doing the right thing.
+
+## Why it wins anyway
+
+The framing-as-logs concern is real but small. The "every recipient gets every notification" concern is solved by the per-target log records — each one is stamped with its `target_uuid`, and clients drop anything that isn't for them. (The server fans out one record per target, not one record broadcast to all.)
+
+The authentication story is what closed the deal. JWT on the HTTP transport, `ContextVar` after middleware, every tool reads it the same way. No second auth path. No protocol invention.
+
+And the practical proof: a vanilla `fastmcp.Client` with a `message_handler` that filters `logger == "_message_bus"` is a working bus subscriber in about 30 lines of code. That's the "no extra moving parts" property paying off.
+
+<Aside type="note">
+If MCP standardizes a generic server-to-client event channel later, we'd switch. The bus's wire shape is decoupled from the transport — the routing record is what matters, not which notification type carries it.
+</Aside>
+
+## Related
+
+- [Architecture](/explanation/architecture/) — the full round-trip
+- [Priority levels](/reference/priorities/) — the `set_logging_level` gotcha
+- [Bus tools](/reference/bus-tools/) — the five tools that pump the bus

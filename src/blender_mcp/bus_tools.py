@@ -10,7 +10,9 @@ from contextvars import ContextVar
 from typing import Any, Optional
 
 from fastmcp import Context
-from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool
+from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prompt
+from fastmcp.prompts.prompt import PromptMessage
+from mcp.types import TextContent
 
 from .message_bus import bus_manager, ClientInfo
 from .message_router import Priority, parse_priority
@@ -200,3 +202,81 @@ class BlenderBusComponent(MCPMixin):
             "persistent": [c.to_dict() for c in bus.persistent_clients.values()],
             "ephemeral": [c.to_dict() for c in bus.ephemeral_clients.values()],
         })
+
+    @mcp_resource(uri="blender://bus/clients")
+    async def clients_resource(self, ctx: Context = None) -> str:
+        """JSON snapshot of the caller's bus: persistent + ephemeral clients."""
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        bus = bus_manager.get_bus(user_id)
+        return json.dumps({
+            "user_id": user_id,
+            "persistent": [c.to_dict() for c in bus.persistent_clients.values()],
+            "ephemeral": [c.to_dict() for c in bus.ephemeral_clients.values()],
+        })
+
+    @mcp_resource(uri="blender://bus/stats")
+    async def stats_resource(self, ctx: Context = None) -> str:
+        """JSON counts for the caller's bus."""
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        bus = bus_manager.get_bus(user_id)
+        pending = sum(1 for owner, _ in _pending_jobs.values() if owner == user_id)
+        return json.dumps({
+            "user_id": user_id,
+            "persistent_count": len(bus.persistent_clients),
+            "ephemeral_count": len(bus.ephemeral_clients),
+            "pending_jobs_for_user": pending,
+        })
+
+    @mcp_prompt()
+    def dispatch_script(
+        self,
+        target: str,
+        script: str,
+        priority: str = "info",
+        description: Optional[str] = None,
+    ) -> list[PromptMessage]:
+        """Render a blender_send_message call template for a Blender job_dispatch."""
+        target_uuid_line = "<omit>"
+        group_id_line = "<omit>"
+        client_type_line = "<omit>"
+
+        if target.startswith("uuid:"):
+            target_uuid_line = target[len("uuid:"):]
+        elif target.startswith("group:"):
+            group_id_line = target[len("group:"):]
+        elif target.startswith("type:"):
+            client_type_line = target[len("type:"):]
+        elif target == "broadcast":
+            pass
+        else:
+            # Unknown prefix — surface it as a hint to the LLM.
+            target_uuid_line = f"<invalid target spec: {target!r}; use uuid:/group:/type:/broadcast>"
+
+        desc_line = description if description else "<optional human description>"
+
+        payload_block = (
+            "{\n"
+            '  "message_type": "job_dispatch",\n'
+            '  "job_id": "<generate a uuid>",\n'
+            f'  "script": {json.dumps(script)},\n'
+            f'  "description": {json.dumps(desc_line)}\n'
+            "}"
+        )
+
+        text = (
+            "To execute this script in Blender, call blender_send_message with:\n\n"
+            f"target_uuid:  {target_uuid_line}\n"
+            f"group_id:     {group_id_line}\n"
+            f"client_type:  {client_type_line}\n"
+            f"priority:     {priority}\n"
+            f"payload:      {payload_block}\n\n"
+            "Routing precedence is target_uuid > group_id > client_type > broadcast.\n"
+            "Set exactly one of target_uuid / group_id / client_type (or none for broadcast).\n"
+            "The job_id inside payload MUST be a fresh UUID; the addon echoes it on completion."
+        )
+
+        return [PromptMessage(role="user", content=TextContent(type="text", text=text))]

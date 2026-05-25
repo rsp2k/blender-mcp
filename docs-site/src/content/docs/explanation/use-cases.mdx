@@ -1,0 +1,163 @@
+---
+title: "Use cases"
+description: "Six concrete patterns: multi-LLM specialization, render farm, long-running jobs, state mirroring, approval workflows, event broadcast."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Six things you can build that you couldn't with a single-LLM, single-Blender setup. Each pattern includes who does what, the payload shape, and the routing mode used.
+
+## 1. Multi-LLM specialization
+
+Different LLM clients with different specialties on the same Blender scene. A modeling-focused LLM builds geometry; a shading-focused LLM writes node graphs; a lighting LLM places HDRIs.
+
+**Who:**
+- `llm-modeler` (LLM session, capabilities `["modeling", "geometry"]`)
+- `llm-shader` (LLM session, capabilities `["shading", "materials"]`)
+- `llm-lighter` (LLM session, capabilities `["lighting", "hdri"]`)
+- `blender-main` (Blender peer, capabilities `["python_execution", "modeling", "rendering"]`)
+
+**Flow:**
+- Each LLM dispatches `job_dispatch` payloads `direct` to `blender-main`.
+- The Blender peer serializes execution through its priority queue — no contention for the main thread.
+
+**Payload:**
+```json
+{"message_type":"job_dispatch","job_id":"job-mod-001","script":"import bpy\nbpy.ops.mesh.primitive_cube_add()"}
+```
+
+**Routing:** `direct` (`target_uuid="blender-main"`)
+
+**Why MCP bus**: previously this meant three separate Claude sessions each holding a full Blender context. With the bus they all see the same scene and don't need to coordinate.
+
+## 2. Render farm
+
+Many Blender peers in one logical group, dispatched in parallel for a batch render.
+
+**Who:**
+- `llm-coordinator` (LLM session)
+- `blender-farm-01`, `blender-farm-02`, ..., `blender-farm-N` (Blender peers, all `group_id="render-cluster"`, capabilities include `"rendering"` and `"gpu"`)
+
+**Flow:**
+- Coordinator calls `list_available_clients`, filters to `group_id=="render-cluster"` peers with `gpu` capability.
+- For each peer, dispatches a `job_dispatch` payload with a distinct `frame_start/frame_end` range in the script.
+- Collects results via the per-job JobWaiter.
+
+**Payload:**
+```json
+{"message_type":"job_dispatch","job_id":"job-render-frame-0042",
+ "script":"import bpy\nbpy.context.scene.frame_set(42)\nbpy.ops.render.render(write_still=True)"}
+```
+
+**Routing:** `direct` per target (one send per frame).
+
+<Aside type="note">
+You could send `group_id="render-cluster"` to fan out in one call, but then all peers would run the **same** script. For distinct frame ranges per peer, the coordinator does the fan-out client-side.
+</Aside>
+
+## 3. Long-running jobs with progress
+
+A simulation bake takes minutes. The dispatching client wants progress updates, not a single completion event.
+
+**Who:**
+- `llm-supervisor` (LLM session)
+- `blender-sim` (Blender peer)
+
+**Flow:**
+- Supervisor dispatches `job_dispatch` with a script that bakes and periodically sends progress.
+- The script calls `executor.send_progress(job_id, percent)` — a helper that wraps `blender_send_message` with priority `notice` and the same `job_id`.
+- Supervisor's `on_message` handles both `job_update` (terminal) and progress notifications (intermediate).
+
+**Payload (dispatch):**
+```json
+{"message_type":"job_dispatch","job_id":"job-bake-001",
+ "script":"# bake with periodic executor.send_progress(...) calls"}
+```
+
+**Payload (progress, addon-side):**
+```json
+{"kind":"progress","job_id":"job-bake-001","percent":47,"frame":120}
+```
+
+**Routing:** `direct` for both, addressed to the originator.
+
+**Why MCP bus**: the bus carries arbitrary payloads, not just `job_dispatch` and `job_update`. Anything you put in `payload` round-trips intact. Progress events ride alongside the completion event with no protocol changes.
+
+## 4. Cross-instance state mirroring
+
+Two Blender peers are supposed to stay in sync — a sculpting workstation and a preview render station. Changes on one propagate to the other.
+
+**Who:**
+- `blender-sculpt` (Blender peer, `group_id="studio-1"`)
+- `blender-preview` (Blender peer, `group_id="studio-1"`)
+- An external `llm-mirror` (or a third Blender peer) acting as the change-detection driver.
+
+**Flow:**
+- Mirror periodically dispatches `get_scene_info` to `blender-sculpt`.
+- On detected delta, mirror builds a script that applies the same change to `blender-preview` and dispatches it.
+
+**Payload (mirror to preview):**
+```json
+{"message_type":"job_dispatch","job_id":"job-sync-001",
+ "script":"bpy.data.objects['Suzanne'].location = (1.2, 0, 0)"}
+```
+
+**Routing:** `direct` for both reads and writes.
+
+**Why MCP bus**: nothing in the bus is tied to single-Blender state. Two peers on the same user's bus is the same primitive as one peer.
+
+## 5. Approval workflows
+
+An LLM proposes a change; a human (or another LLM) approves before it lands.
+
+**Who:**
+- `llm-proposer` (LLM session)
+- `llm-approver` (LLM session — could be a UI sitting on a notebook)
+- `blender-target` (Blender peer)
+
+**Flow:**
+- Proposer sends a `proposal` payload directly to approver. Not a `job_dispatch` — just data.
+- Approver's UI surfaces the proposal. On approval, approver sends the `job_dispatch` to `blender-target`.
+- Proposer registers a JobWaiter on the approver's expected `job_id` so it sees the eventual outcome.
+
+**Payload (proposal):**
+```json
+{"kind":"proposal","proposal_id":"prop-001","script":"...","rationale":"..."}
+```
+
+**Payload (after approval):**
+```json
+{"message_type":"job_dispatch","job_id":"prop-001","script":"..."}
+```
+
+**Routing:** `direct` for both legs.
+
+**Why MCP bus**: an LLM-to-LLM message is the same primitive as an LLM-to-Blender message. The approver doesn't need a separate channel for "approval requests."
+
+## 6. Event broadcasting
+
+Server maintenance notice, scene-reset announcement, "anyone available?" pings.
+
+**Who:** any sender; every client on the user's bus.
+
+**Flow:**
+- Send with no targeting fields. Sender is automatically excluded.
+
+**Payload:**
+```json
+{"kind":"announcement","text":"Server restarting in 5 min","at":1706203789}
+```
+
+**Routing:** `broadcast`.
+
+**Use sparingly.** Broadcasts go to everyone — `blender-*` peers will probably ignore announcement payloads (no `message_type == "job_dispatch"`), but they still get the notification and queue it briefly before discarding.
+
+## Combining patterns
+
+These compose. A render farm (pattern 2) with progress events (pattern 3) and an approval gate (pattern 5) is just three layers of routing on the same bus. Nothing in the design treats them as different kinds of traffic.
+
+## Related
+
+- [Routing modes](/reference/routing-modes/) — direct vs group vs broadcast vs type_filter
+- [Use capabilities](/how-to/use-capabilities/) — how the render-farm and specialization patterns pick targets
+- [Write your own LLM client](/how-to/write-llm-client/) — the implementation pattern for the supervisor/coordinator/approver roles

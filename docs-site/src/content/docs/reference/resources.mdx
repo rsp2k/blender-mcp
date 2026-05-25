@@ -1,0 +1,79 @@
+---
+title: "Resources"
+description: "Read-only MCP resources exposed by the bus: client snapshots and bus stats."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The server exposes two MCP resources. Both return JSON scoped to the caller's user bus and require a valid JWT.
+
+## `blender://bus/clients`
+
+Snapshot of the caller's bus: persistent + ephemeral clients with their UUIDs, types, capabilities, and timestamps.
+
+**Returns:**
+
+```json
+{
+  "user_id": "demo",
+  "persistent": [
+    {
+      "uuid": "blender-a1b2c3d4e5f6",
+      "client_type": "blender",
+      "is_persistent": true,
+      "capabilities": ["python_execution", "modeling", "rendering"],
+      "group_id": null,
+      "connected_at": 1716000000.0,
+      "last_seen": 1716001000.0
+    }
+  ],
+  "ephemeral": [
+    {
+      "uuid": "llm-20260525-abc123",
+      "client_type": "llm",
+      "is_persistent": false,
+      "capabilities": ["text_generation", "reasoning"],
+      "group_id": null,
+      "connected_at": 1716000500.0,
+      "last_seen": 1716001200.0
+    }
+  ]
+}
+```
+
+This is the read-only equivalent of [`blender_list_available_clients`](/reference/bus-tools/) — useful when a client wants to observe bus state through a resource subscription rather than a polling tool call.
+
+## `blender://bus/stats`
+
+Counts for the caller's bus.
+
+**Returns:**
+
+```json
+{
+  "user_id": "demo",
+  "persistent_count": 1,
+  "ephemeral_count": 2,
+  "pending_jobs_for_user": 3
+}
+```
+
+`pending_jobs_for_user` is the number of dispatches awaiting a [`blender_job_update`](/reference/bus-tools/) reply on behalf of this user. The counter is per-user — other tenants on the host are invisible.
+
+## Authentication
+
+Both resources call the same `_resolve_user_id(ctx)` helper as the tools. An unauthenticated read returns:
+
+```json
+{"status": "error", "error": "unauthenticated"}
+```
+
+<Aside>
+The URI scheme `blender://` is declared explicitly in `@mcp_resource(uri=...)` and is **not** modified by the MCPMixin's `register_all(prefix="blender")`. Tools and prompts get the `blender_` prefix; resource URIs are taken as-is.
+</Aside>
+
+## Related
+
+- [Bus tools](/reference/bus-tools/) — the full tool surface, including the `blender_list_available_clients` equivalent
+- [ClientInfo](/reference/client-info/) — the dataclass each entry in `persistent`/`ephemeral` is serialized from
+- [OAuth and per-user buses](/explanation/oauth-buses/) — why the resource scope is per-user

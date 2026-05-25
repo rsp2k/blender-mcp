@@ -1,0 +1,124 @@
+---
+title: "Architecture"
+description: "Three tiers — LLM clients, MCP server with per-user bus, Blender addons. Full round-trip trace."
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+BlenderMCP is three pieces: any number of LLM clients on one side, any number of Blender addon clients on the other, and a single MCP server in the middle holding a per-user message bus.
+
+## The diagram
+
+```
+                      ┌────────────────────────┐
+LLM client A ─────────┤                        │
+LLM client B ─────────┤   MCP Server (HTTP)    ├─── Blender addon X
+LLM client C ─────────┤   JWT middleware +     ├─── Blender addon Y
+                      │   per-user buses       ├─── Blender addon Z
+                      └────────────────────────┘
+```
+
+Every connection is a standard MCP transport. The server doesn't speak any custom protocol. Every "send a job" / "reply to a job" is an MCP tool call or an MCP log notification.
+
+## Per-tier breakdown
+
+### LLM clients
+
+Any process that speaks MCP can be a client. The reference client (`examples/llm_client_example.py`) uses `fastmcp.Client` over `StreamableHttpTransport`. Login at `POST /auth/login` returns a JWT, which is set as the `Authorization` bearer header on the transport.
+
+LLM clients are typically **ephemeral** — `is_persistent=False`. They join the bus, dispatch some jobs, await replies, leave.
+
+### MCP server
+
+A FastAPI app that mounts:
+
+- `POST /auth/login` and `POST /auth/refresh` — the OAuth surface
+- `/mcp` — the Streamable HTTP MCP endpoint produced by `build_http_mcp()`
+
+A request-scoped middleware:
+
+1. Reads the bearer token from the `Authorization` header.
+2. Verifies the JWT.
+3. Sets `current_user_id` (a `ContextVar`) before dispatch.
+4. Tool calls read `current_user_id.get()` to resolve which `UserMessageBus` to operate on.
+
+The server holds:
+
+- `bus_manager: BusManager` — `dict[user_id, UserMessageBus]`
+- `_pending_jobs: dict[job_id, tuple[user_id, originator_uuid]]` — for routing replies
+- A `BusForwardingHandler` attached to the `_message_bus` logger — every routed message is one `log.info(..., extra={...})` call, the handler turns it into MCP `notifications/message` and pushes via the right `ServerSession`.
+
+### Blender addons
+
+Each addon installation is one FastMCP `Client` running on a worker thread inside Blender. The package layout:
+
+<FileTree>
+- addon/
+  - __init__.py            register() / unregister()
+  - _version.py
+  - constants.py
+  - identity.py            sticky UUID generation
+  - preferences.py         AddonPreferences (Phase 8)
+  - state.py               _client, _executor singletons
+  - auth/
+    - login.py             pure-requests /auth/login + /auth/refresh
+  - client/
+    - bus_client.py        FastMCP lifecycle + asyncio loop
+    - message_pump.py      _on_message notification filter
+    - drainer.py           main-thread timer, priority-queue drain
+    - job_reporter.py      blender_job_update reply
+  - executor/
+    - __init__.py          BlenderCommandExecutor (MRO-mixed)
+    - registry.py          @command + CommandSpec
+    - _shared.py           SharedHelpersMixin
+    - handlers/            8 per-domain mixins
+  - ui/
+    - panel.py             View3D sidebar panel
+    - operators.py         Login, Start/Stop operators
+</FileTree>
+
+The addon is **persistent** (`is_persistent=True`). It registers with a sticky UUID from `addon/identity.py` so reconnects keep the same bus identity.
+
+## Round-trip trace
+
+A typical LLM-dispatched job, end to end:
+
+1. **LLM client** calls `blender_send_message` with `target_uuid="blender-abc"`, `from_uuid="llm-mine"`, `priority="info"`, `payload={message_type:"job_dispatch", job_id:"job-1", script:"..."}`.
+
+2. **Middleware** verifies the JWT, sets `current_user_id = "demo"`.
+
+3. **Bus tool** (`BlenderBusComponent.send_message`) reads `current_user_id`, gets `bus = bus_manager.get_bus("demo")`, builds `routing={"type":"direct","target_uuid":"blender-abc"}`, calls `bus.route(...)`.
+
+4. **UserMessageBus.route** resolves targets (`blender-abc`), records `_pending_jobs["job-1"] = ("demo", "llm-mine")`, then emits one `_message_bus` log record per target with the full `data` dict in `extra`.
+
+5. **BusForwardingHandler** receives the log record, looks up the target's `ClientInfo.session`, and pushes an MCP `notifications/message` via that session at log level `info`.
+
+6. **Addon's BlenderMCPClient._on_message** receives the notification, hands it to `message_pump.handle_message`. The pump filters on `logger == "_message_bus"`, decodes `data`, pushes onto the addon's heap-based priority queue.
+
+7. **Addon's drainer** (Blender main-thread timer, ~100ms cadence) pops the highest-priority entry, sees `target_uuid` matches its own UUID, sees `payload.message_type == "job_dispatch"`, calls `execute_script(job_id, script)`.
+
+8. **Script runs** in the Blender main thread with `bpy`, `bmesh`, `mathutils`, `executor` in scope. Stdout is captured.
+
+9. **job_reporter.submit_job_update** marshals a `blender_job_update` call onto the worker's asyncio loop. The call sends `{job_id, status:"completed", result:<stdout>, error:""}` over the addon's MCP transport.
+
+10. **Server-side `job_update`** reads `current_user_id` (the addon's user), looks up `_pending_jobs["job-1"]`, finds `("demo", "llm-mine")`, confirms same-user, calls `bus.route` with `routing={"type":"direct","target_uuid":"llm-mine"}` at `priority=NOTICE`.
+
+11. **The forwarding handler** pushes the resulting `notifications/message` down the LLM client's session.
+
+12. **LLM client's `on_message`** filters on `_message_bus`, decodes, sees `payload.kind == "job_update"`, resolves the JobWaiter future for `job-1`. Caller's `await` returns.
+
+## Key properties
+
+- **No state on disk.** Bus contents are in-memory. Restarts drop every persistent client and every `_pending_jobs` entry. Persistent clients reconnect on their own; pending jobs are orphaned and broadcast their replies as a fallback.
+- **Per-user isolation.** User A and user B have separate `UserMessageBus` instances. There's no path from A's bus to B's, including for `job_update`.
+- **No special protocol.** Everything is standard MCP. A vanilla `fastmcp.Client` with a `message_handler` and a working JWT can participate as a client.
+
+<Aside type="caution">
+The server is intended to run as a **single instance**. Sharing buses across instances would require an external transport for the log records (Redis pub/sub, NATS, etc.) and is out of scope. Scale "vertically" by running more Blender peers against one server.
+</Aside>
+
+## Related
+
+- [Why MCP logging as a bus](/explanation/why-mcp-logging/) — the design rationale
+- [OAuth and per-user buses](/explanation/oauth-buses/) — JWT, ContextVar, isolation
+- [Addon package tour](/explanation/addon-package-tour/) — why the addon is split this way

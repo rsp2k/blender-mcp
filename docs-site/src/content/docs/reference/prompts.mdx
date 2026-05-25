@@ -1,0 +1,72 @@
+---
+title: "Prompts"
+description: "MCP prompts: parameterized templates for common bus operations."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The server exposes one MCP prompt that encodes the `blender_send_message` payload convention so LLM clients don't have to remember the shape from scratch.
+
+## `blender_dispatch_script`
+
+Build a properly-formed `blender_send_message` call for executing Python in Blender.
+
+**Signature:**
+
+```python
+blender_dispatch_script(
+    target: str,
+    script: str,
+    priority: str = "info",
+    description: str | None = None,
+) -> list[PromptMessage]
+```
+
+### Target syntax
+
+| Prefix | Routing | Example |
+|---|---|---|
+| `uuid:<client-uuid>` | direct | `uuid:blender-abc123` |
+| `group:<group-id>` | group | `group:render-cluster` |
+| `type:<client_type>` | type_filter | `type:blender` |
+| `broadcast` | broadcast | `broadcast` |
+
+Unknown prefixes render inline as `<invalid target spec: ...>` so the LLM can see the error rather than silently dropping the dispatch.
+
+### Returned template
+
+A single user-role text message templating the call. With `target="uuid:blender-abc123"`, `script="import bpy; print(len(bpy.data.objects))"`, `priority="info"`, `description="count objects"`:
+
+```
+To execute this script in Blender, call blender_send_message with:
+
+target_uuid:  blender-abc123
+group_id:     <omit>
+client_type:  <omit>
+priority:     info
+payload:      {
+  "message_type": "job_dispatch",
+  "job_id": "<generate a uuid>",
+  "script": "import bpy; print(len(bpy.data.objects))",
+  "description": "count objects"
+}
+
+Routing precedence is target_uuid > group_id > client_type > broadcast.
+Set exactly one of target_uuid / group_id / client_type (or none for broadcast).
+The job_id inside payload MUST be a fresh UUID; the addon echoes it on completion.
+```
+
+<Aside type="caution">
+The prompt **builds the template, it doesn't dispatch.** The LLM still calls [`blender_send_message`](/reference/bus-tools/) with the assembled arguments.
+</Aside>
+
+## Why this is a prompt, not a tool
+
+A tool would force the LLM through a wrapper, hiding the routing precedence and the `job_id` convention. A prompt surfaces the convention so the LLM can call `blender_send_message` directly with full visibility over routing, priority, and payload shape. Think of the prompt as documentation that the model can ask for inline, not as a remote procedure call.
+
+## Related
+
+- [Bus tools](/reference/bus-tools/) — `blender_send_message`, the call this prompt templates
+- [Routing modes](/reference/routing-modes/) — direct / group / type_filter / broadcast
+- [Priority levels](/reference/priorities/) — what to pass for `priority`
+- [Use cases](/explanation/use-cases/) — concrete dispatch patterns this prompt accelerates

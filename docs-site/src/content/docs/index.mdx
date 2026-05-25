@@ -1,0 +1,47 @@
+---
+title: "BlenderMCP"
+description: "A Model Context Protocol server that lets multiple LLM clients collaborate on shared Blender 3D instances over an OAuth-isolated message bus."
+template: splash
+hero:
+  tagline: Multi-LLM, multi-instance Blender, over plain MCP.
+  actions:
+    - text: Quickstart
+      link: /tutorials/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: Architecture
+      link: /explanation/architecture/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+BlenderMCP turns Blender into a shared workspace. A central MCP server runs an OAuth-gated, per-user message bus; Blender addons connect as persistent clients; LLM sessions connect as ephemeral clients. Anything can dispatch a job to anything else.
+
+The transport is the standard MCP `notifications/message` log channel — no custom socket, no WebSocket layer. Priorities ride on MCP's eight log levels.
+
+<CardGrid stagger>
+  <Card title="Get running in 5 minutes" icon="rocket">
+    Boot the server, attach a fake Blender peer, push a job from an LLM client.
+    <br />[Quickstart](/tutorials/quickstart/)
+  </Card>
+  <Card title="Use cases" icon="puzzle">
+    Six concrete patterns: render farms, approval workflows, multi-LLM specialization, event broadcast.
+    <br />[Use cases](/explanation/use-cases/)
+  </Card>
+  <Card title="Write a client" icon="seti:python">
+    OAuth login, message handler, JobWaiter, register, dispatch — five stages.
+    <br />[Write your own LLM client](/how-to/write-llm-client/)
+  </Card>
+  <Card title="Bus tools" icon="setting">
+    Five `blender_*` tools that move messages: register, send, update, list.
+    <br />[Bus tools reference](/reference/bus-tools/)
+  </Card>
+</CardGrid>
+
+## What's here
+
+- **Tutorials** — learn-by-doing paths starting from scratch
+- **How-to** — task-oriented recipes for deployment, client development, command authoring
+- **Reference** — every tool, every parameter, every priority level
+- **Explanation** — the design decisions: why MCP logging, how OAuth isolates buses, why the addon is now a package

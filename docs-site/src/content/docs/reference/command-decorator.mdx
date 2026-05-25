@@ -1,0 +1,119 @@
+---
+title: "@command decorator"
+description: "Register an addon command. Module: addon.executor.registry. Decorator, CommandSpec dataclass, filter_kwargs behavior."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`@command(name, gate=...)` is the only registration mechanism for addon commands. Decorating a handler method on any mixin enters it into `COMMAND_REGISTRY`. Dispatch is a single lookup.
+
+## Module
+
+`addon.executor.registry`
+
+## API
+
+```python
+def command(name: str, *, gate: Optional[Callable[[Any], bool]] = None) -> Callable
+```
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `name` | `str` | yes | The wire name. Must be unique across all mixins. |
+| `gate` | `Callable[[prefs], bool] | None` | no | If set, command is dispatchable only when `gate(prefs)` is truthy. |
+
+Returns the function unchanged. Normal method-style calls (`self.my_command()`) work alongside dispatch.
+
+```python
+from addon.executor.registry import command
+
+class MyHandlersMixin:
+    @command("get_thing")
+    def get_thing(self, name: str):
+        ...
+
+    @command("set_thing", gate=lambda prefs: prefs.use_my_feature)
+    def set_thing(self, name: str, value):
+        ...
+```
+
+## CommandSpec
+
+```python
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str
+    func: Callable                                  # unbound handler method
+    gate: Optional[Callable[[Any], bool]] = None    # gate predicate or None
+```
+
+Frozen. One instance per registered command. Lives in `COMMAND_REGISTRY: dict[str, CommandSpec]`.
+
+The `func` is the **unbound** method; dispatch calls it as `spec.func(self, **filtered_params)` where `self` is the `BlenderCommandExecutor` instance (which mixes in every handler class).
+
+## filter_kwargs
+
+```python
+def filter_kwargs(func: Callable, params: dict) -> dict
+```
+
+Returns only the keys of `params` that name a parameter of `func`. Stray keys are silently dropped.
+
+```python
+@command("my_cmd")
+def my_cmd(self, name: str): ...
+
+# wire sends {"name": "x", "stale_field": 42, "version": 3}
+accepted = filter_kwargs(my_cmd, params)
+# accepted == {"name": "x"}
+```
+
+This mirrors the pre-Phase-5 dispatch behavior where each handler explicitly pulled `p.get("name")` and ignored the rest. Without the filter, calling `func(self, **params)` with extra keys would raise `TypeError: got an unexpected keyword argument`.
+
+## Dispatch path
+
+`BlenderCommandExecutor._execute_command_internal` reduces to:
+
+```python
+spec = COMMAND_REGISTRY.get(cmd_type)
+if spec is None or (spec.gate is not None and not spec.gate(get_prefs())):
+    return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
+accepted = filter_kwargs(spec.func, params)
+result = spec.func(self, **accepted)
+return {"status": "success", "result": result}
+```
+
+A gated-off command is **indistinguishable** from an unknown command in the response. That's intentional — keeps the gate behavior identical to the previous "command wasn't in the dispatch dict" implementation.
+
+## Gate semantics
+
+The gate receives the `AddonPreferences` singleton (via `get_prefs()`). Phase 8 changed this from `bpy.context.scene` to prefs as part of moving secrets off Scene.
+
+A gate is evaluated at **dispatch time**, not at registration. Toggling `prefs.use_polyhaven` while the addon is running immediately enables/disables every `gate=lambda p: p.use_polyhaven` command.
+
+Multiple commands can share a gate reference:
+
+```python
+_polyhaven_enabled = lambda prefs: prefs.use_polyhaven
+
+class PolyhavenHandlersMixin:
+    @command("get_polyhaven_categories", gate=_polyhaven_enabled)
+    def get_polyhaven_categories(self, ...): ...
+
+    @command("search_polyhaven_assets", gate=_polyhaven_enabled)
+    def search_polyhaven_assets(self, ...): ...
+```
+
+## Adding a new command
+
+See [Add an addon command](/how-to/add-an-addon-command/) for a complete walkthrough. Summary:
+
+1. Pick a mixin (or create a new one and add it to `BlenderCommandExecutor`'s MRO).
+2. Decorate a method with `@command("name")`.
+3. Optionally add `gate=lambda prefs: prefs.<flag>`.
+
+No other file changes. The decorator runs at import time and `COMMAND_REGISTRY` picks it up.
+
+<Aside type="note">
+Commands names must be globally unique. The decorator silently overwrites a previous registration with the same name — useful for in-place patching during development, dangerous in production. There's currently no startup audit that warns on duplicates.
+</Aside>

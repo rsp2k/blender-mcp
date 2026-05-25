@@ -1,0 +1,94 @@
+---
+title: "Priority levels"
+description: "MCP log levels repurposed as job priorities. Eight tiers, lower-int = higher urgency."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Priorities ride on the standard MCP log-level field. The bus uses all eight RFC 5424 levels, mapped 1:1 to integer priorities (0 = highest urgency, 7 = lowest).
+
+## The table
+
+| MCP level (string) | Priority int | Python log level | Typical use |
+|---|---|---|---|
+| `emergency` | 0 | `CRITICAL` | Server-side abort, system unrecoverable |
+| `alert` | 1 | `CRITICAL` | Operator-attention-required failures |
+| `critical` | 2 | `CRITICAL` | Hard error in a long-running job |
+| `error` | 3 | `ERROR` | Standard error reporting |
+| `warning` | 4 | `WARNING` | Recoverable problem |
+| `notice` | 5 | `INFO` | Job-state transitions, lifecycle events |
+| `info` | 6 | `INFO` | **Default for dispatches** — normal-traffic jobs |
+| `debug` | 7 | `DEBUG` | Idle-time work, low-stakes diagnostics |
+
+`info` is the `blender_send_message` default. `notice` is what server-emitted `blender_job_update` replies use.
+
+## How to set it
+
+As a string in `blender_send_message`:
+
+```python
+await client.call_tool("blender_send_message", {
+    "target_uuid": "blender-demo01",
+    "priority": "warning",     # or "error", "info", "debug", ...
+    "from_uuid": "llm-mine",
+    "payload": {...},
+})
+```
+
+The string is parsed via `parse_priority()` (accepts the lowercase MCP name, the Priority enum name, or an int).
+
+## How the addon orders work
+
+The addon maintains a per-client **priority heap** keyed on `(priority_int, timestamp)`:
+
+```python
+# addon/client/message_pump.py
+heapq.heappush(client.job_queue, (priority, time.time(), log_data))
+```
+
+The drainer pops the smallest `(priority_int, timestamp)` tuple every ~100ms. So `emergency` (0) jumps ahead of any pending `info` (6), and within the same priority older messages drain first.
+
+## Subscribing to all priorities — the set_logging_level gotcha
+
+MCP clients only receive log notifications at or above their **subscribed level**. The default is `warning` — anything sent at `notice`/`info`/`debug` is dropped.
+
+The addon's bus client subscribes to `debug` on connect:
+
+```python
+await client.set_logging_level("debug")
+```
+
+If you're writing an LLM client and you don't call this, you will miss every `info` and `notice` message — including `blender_job_update` replies (server emits these at `notice`).
+
+<Aside type="caution">
+A common silent failure: write an LLM client, dispatch a job, see `job_id` in the send response, then wait forever for the update. Almost always the cause is forgetting `await client.set_logging_level("debug")` before the dispatch. Server-side everything works; the notification never reaches the client because the subscription level filters it out.
+</Aside>
+
+## When to pick each tier
+
+- **`info`** — default. Use unless you have a reason not to.
+- **`debug`** — background work that should yield to anything else. A periodic "list scene objects" poll, an idle-time texture pre-warm.
+- **`notice`** — state changes you want surfaced in dashboards but not loud. Job started, job progressing.
+- **`warning`** — a partial failure or degraded mode. Job finished but with skipped frames.
+- **`error`** — a job failed.
+- **`critical` / `alert` / `emergency`** — escalation tiers when you need to jump the queue. Use sparingly; everything at these levels preempts everything else.
+
+## Priorities vs routing
+
+Routing answers "who gets this." Priority answers "in what order does it leave the queue on each recipient." They're independent — a `broadcast` can be `emergency`, a `direct` job can be `debug`.
+
+## Wire shape
+
+Every emitted log record carries the integer priority:
+
+```json
+{"priority": 6, "timestamp": 1706203789.456, ...}
+```
+
+The MCP log-level string lives on the parent notification's `level` field. The addon's `message_pump` reads both, preferring the level string and falling back to the int.
+
+## Reference
+
+- [Routing modes](/reference/routing-modes/) — the orthogonal addressing axis
+- [Bus tools](/reference/bus-tools/) — `blender_send_message` accepts `priority` as a string
+- [Architecture](/explanation/architecture/) — where the priority queue sits in the round-trip

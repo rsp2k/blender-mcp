@@ -1,0 +1,35 @@
+# In-container Caddyfile for the prod stage.
+# The outer caddy-docker-proxy on the host handles TLS + DNS-01 ACME and
+# reverse-proxies into this container on :80, so this stays bare HTTP.
+
+:80 {
+	root * /srv
+	encode zstd gzip
+	file_server
+
+	# Astro's hashed asset paths — content-addressed, safe to cache forever.
+	@hashed_assets path /_astro/* /_/pagefind/*
+	header @hashed_assets Cache-Control "public, max-age=31536000, immutable"
+
+	# HTML pages — short TTL so docs edits propagate quickly.
+	@html path *.html /
+	header @html Cache-Control "public, max-age=300, must-revalidate"
+
+	# Health endpoint for Docker HEALTHCHECK + uptime probes.
+	respond /health 200 {
+		body "ok"
+		close
+	}
+
+	# Pretty 404 falls through to Starlight's generated 404.html if present.
+	handle_errors {
+		@404 expression {http.error.status_code} == 404
+		rewrite @404 /404.html
+		file_server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

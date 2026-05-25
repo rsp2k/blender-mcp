@@ -1,0 +1,117 @@
+---
+title: "Bus tools"
+description: "The five blender_* MCP tools that move messages through a user's bus: register, unregister, send, update, list."
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+Five tools, all prefixed `blender_`, all on the HTTP build only (the stdio build omits them — there's no transport-level identity over stdio). Every tool returns a JSON-encoded string. Authentication is implicit: the JWT middleware in `oauth_server.py` populates a `ContextVar` before dispatch, and each tool resolves the calling user from it.
+
+## blender_register_client
+
+Join the caller's user bus, or update an existing registration in place.
+
+| Parameter | Type | Default | Required |
+|---|---|---|---|
+| `client_uuid` | `str` | — | yes |
+| `client_type` | `str` | — | yes (`"blender"`, `"llm"`, or other) |
+| `is_persistent` | `bool` | `False` | no |
+| `capabilities` | `list[str]` | `[]` | no |
+| `group_id` | `str | null` | `null` | no |
+
+**Returns:** `{"status":"ok","client":{...ClientInfo.to_dict()...}}`
+
+```python
+await client.call_tool("blender_register_client", {
+    "client_uuid": "blender-abc",
+    "client_type": "blender",
+    "is_persistent": True,
+    "capabilities": ["python_execution", "rendering"],
+    "group_id": "render-cluster",
+})
+```
+
+Persistent clients land in `bus.persistent_clients`; non-persistent in `bus.ephemeral_clients`. Re-registering with the same UUID updates `client_type`, `capabilities`, `group_id`, and `last_seen` — the bucket assignment is sticky.
+
+## blender_unregister_client
+
+Leave the user bus. Idempotent — unknown UUIDs return `{"status":"not_found"}`.
+
+| Parameter | Type | Required |
+|---|---|---|
+| `client_uuid` | `str` | yes |
+
+**Returns:** `{"status":"ok"|"not_found","client_uuid":...}`
+
+## blender_send_message
+
+Route a message. Routing mode is picked by which targeting field is set. Precedence: `target_uuid > group_id > client_type > broadcast`. Broadcast excludes the sender.
+
+| Parameter | Type | Default | Required |
+|---|---|---|---|
+| `payload` | `dict` | — | yes |
+| `target_uuid` | `str | null` | `null` | no |
+| `group_id` | `str | null` | `null` | no |
+| `client_type` | `str | null` | `null` | no |
+| `priority` | `str` | `"info"` | no |
+| `from_uuid` | `str | null` | `null` | no |
+
+`priority` accepts MCP log-level names: `emergency`, `alert`, `critical`, `error`, `warning`, `notice`, `info`, `debug`. See [Priority levels](/reference/priorities/).
+
+`payload` is opaque to the bus — pass any dict. The convention for a runnable job is:
+
+```json
+{
+  "message_type": "job_dispatch",
+  "job_id": "job-abc123",
+  "script": "import bpy\n..."
+}
+```
+
+`from_uuid` matters for correlation. If you send one and the bus has it on file as an originator, the addon's `blender_job_update` reply gets routed back to you. Omit it and the message is tagged `server:<user_id>` and the reply broadcasts.
+
+**Returns:** `{"status":"ok","message_id":...,"job_id":...,"targets":[...],"routing":{...}}`
+
+The returned `job_id` is the client-provided value if `payload.job_id` was set, otherwise the server's generated `message_id` (same string in that case).
+
+## blender_job_update
+
+Client-to-server reply. Routed back to the originator via the bus.
+
+| Parameter | Type | Default | Required |
+|---|---|---|---|
+| `job_id` | `str` | — | yes |
+| `status` | `str` | — | yes (`completed`, `failed`, `cancelled`, `running`, ...) |
+| `result` | `str` | `""` | no |
+| `error` | `str` | `""` | no |
+
+**Returns:** `{"status":"ok","delivered":"direct"|"broadcast","targets":[...]}`
+
+When `status` is `completed`, `failed`, or `cancelled`, the server's `_pending_jobs` tracking entry is cleared.
+
+<Aside type="caution">
+A `blender_job_update` for a `job_id` owned by a different user returns `{"status":"error","error":"cross_user_job_update"}`. Buses are user-isolated end to end.
+</Aside>
+
+## blender_list_available_clients
+
+Snapshot of the caller's user bus.
+
+No parameters.
+
+**Returns:**
+
+```json
+{
+  "status": "ok",
+  "user_id": "demo",
+  "persistent": [ {...ClientInfo.to_dict()...}, ... ],
+  "ephemeral": [ {...ClientInfo.to_dict()...}, ... ]
+}
+```
+
+Each entry omits the `session` field (the live MCP `ServerSession` isn't serializable). See [ClientInfo](/reference/client-info/) for the full wire shape.
+
+## Tool naming
+
+All five tools are registered with prefix `blender` via FastMCP's `MCPMixin.register_all(..., prefix="blender")`, so the wire names are `blender_register_client`, `blender_unregister_client`, `blender_send_message`, `blender_job_update`, `blender_list_available_clients`.

@@ -1,0 +1,110 @@
+---
+title: "Quickstart"
+description: "Boot the BlenderMCP server, attach a fake Blender peer, dispatch a job from an LLM client, see the reply. Five minutes."
+---
+
+import { Steps, Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+End-to-end in five steps. No real Blender required — a stub peer stands in for the addon so you can see the round-trip before installing anything in Blender.
+
+## Prerequisites
+
+- Python 3.10+
+- `uv` installed
+- A clone of the repo
+
+## Steps
+
+<Steps>
+
+1. **Start the server.**
+
+   ```bash
+   cd blender-mcp
+   uv sync
+   uv run blender-mcp
+   ```
+
+   Expected output:
+
+   ```
+   INFO  oauth_server  /auth/login mounted
+   INFO  oauth_server  /mcp mounted (Streamable HTTP)
+   INFO  uvicorn       Uvicorn running on http://0.0.0.0:8000
+   ```
+
+2. **Get a JWT.**
+
+   ```bash
+   curl -s -X POST http://localhost:8000/auth/login \
+     -H 'content-type: application/json' \
+     -d '{"username":"demo","password":"demo"}' | jq -r .access_token
+   ```
+
+   Save the token as `TOKEN=...` for the next two terminals.
+
+3. **Run a fake Blender peer** in terminal 2. This subscribes to the bus, prints anything addressed to it, and replies to `job_dispatch` payloads.
+
+   ```bash
+   uv run python examples/fake_blender_peer.py \
+     --server http://localhost:8000/mcp \
+     --token "$TOKEN" \
+     --uuid blender-demo01
+   ```
+
+   Expected output:
+
+   ```
+   [peer] Connected as blender-demo01
+   [peer] set_logging_level=debug
+   [peer] register_client ok
+   [peer] waiting for jobs...
+   ```
+
+4. **Dispatch a job from an LLM client** in terminal 3.
+
+   ```bash
+   uv run python examples/llm_client_example.py \
+     --server http://localhost:8000/mcp \
+     --token "$TOKEN" \
+     --target blender-demo01 \
+     --script 'import bpy; print(len(bpy.data.objects))'
+   ```
+
+   Expected output:
+
+   ```
+   [llm] send_message -> job_id=job-9c2f...
+   [llm] received job_update status=completed
+   [llm] result: 3
+   ```
+
+5. **Inspect what's connected.** In a fourth terminal:
+
+   ```bash
+   curl -s -X POST http://localhost:8000/mcp \
+     -H "authorization: Bearer $TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+          "params":{"name":"blender_list_available_clients","arguments":{}}}'
+   ```
+
+   Returns the persistent + ephemeral client lists for the `demo` user's bus.
+
+</Steps>
+
+## What just happened
+
+Terminal 2 registered as a **persistent** client (`is_persistent=true`) of type `blender`. Terminal 3 connected, called `blender_send_message` with `target_uuid=blender-demo01` and a `job_dispatch` payload. The server emitted one log record on `_message_bus`; the FastAPI forwarding handler turned that into an MCP `notifications/message` and pushed it down terminal 2's subscription. Terminal 2 ran the script on its main thread (the stub fakes this) and called `blender_job_update` with the result. The server looked the `job_id` up in `_pending_jobs`, found terminal 3 as originator, routed the update back.
+
+The same flow works with a real Blender addon — only the script execution side changes.
+
+<Aside type="note">
+The `examples/fake_blender_peer.py` script ships in the repo. It's also the test fixture used by the integration suite — read it if you want a minimal, real `FastMCPClient` subscriber to crib from.
+</Aside>
+
+## Next
+
+- Install the real addon and run a job against actual Blender — see [Add an addon command](/how-to/add-an-addon-command/) for the registry walkthrough.
+- Build your own LLM client — see [Write your own LLM client](/how-to/write-llm-client/).
+- Understand what's happening under the hood — see [Architecture](/explanation/architecture/) and [Why MCP logging](/explanation/why-mcp-logging/).

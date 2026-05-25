@@ -1,0 +1,72 @@
+# BlenderMCP docs site — caddy-docker-proxy on the warehack.ing fabric.
+#
+# Two services share the `caddy` external network:
+#   docs      — default (prod), serves built static files via in-container Caddy
+#   docs-dev  — profile `dev`, runs Astro dev server with HMR survived by Caddy
+#
+# Both services declare `caddy.tls.import: rfc2136_local` so the host Caddy
+# issues DNS-01 certs via the rfc2136 provider against the local BIND. Without
+# this label, fresh ACME challenges fall back to 127.0.0.11 (Docker's DNS)
+# which doesn't know `warehack.ing` and the issuance silently 0-suffix-loops.
+
+services:
+  docs:
+    build:
+      context: .
+      target: prod
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp-docs}-prod
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-docs}-prod
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      caddy.tls.import: rfc2136_local
+      caddy.encode: zstd gzip
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Dev variant — `make dev` or `docker compose --profile dev up`
+  docs-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp-docs}-dev
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-docs}-dev
+    restart: unless-stopped
+    environment:
+      ASTRO_TELEMETRY_DISABLED: "1"
+      # Tell Vite to advertise the public hostname for HMR sockets
+      HMR_HOST: ${DOMAIN:?DOMAIN must be set in .env}
+      HMR_PROTOCOL: wss
+      HMR_CLIENT_PORT: "443"
+    volumes:
+      # Live source mount for hot reload — node_modules stays in the image
+      - .:/app
+      - /app/node_modules
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 4321}}"
+      caddy.tls.import: rfc2136_local
+      # HMR survival — Vite doesn't ping, so override Caddy's WS idle defaults.
+      # See ~/.claude/CLAUDE.md "HMR Behind Reverse Proxy" section.
+      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport: "http"
+      caddy.reverse_proxy.transport.read_timeout: "0"
+      caddy.reverse_proxy.transport.write_timeout: "0"
+      caddy.reverse_proxy.transport.keepalive: "5m"
+      caddy.reverse_proxy.transport.keepalive_idle_conns: "10"
+      caddy.reverse_proxy.stream_timeout: "24h"
+      caddy.reverse_proxy.stream_close_delay: "5s"
+
+networks:
+  caddy:
+    external: true

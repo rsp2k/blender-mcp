@@ -1,0 +1,134 @@
+---
+title: "Routing modes"
+description: "Four routing modes: direct, group, type_filter, broadcast. Precedence rules, sender exclusion, when to use which."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`blender_send_message` picks a routing mode from the targeting fields you set. Precedence is strict — first match wins.
+
+## Precedence
+
+```
+target_uuid > group_id > client_type > broadcast
+```
+
+Set exactly one targeting field. If you set multiple, the higher-precedence one wins; the rest are ignored.
+
+## The four modes
+
+| Mode | Targeting field | Recipients | Excludes sender? |
+|---|---|---|---|
+| `direct` | `target_uuid` | The one client whose UUID matches | n/a (the named client is named) |
+| `group` | `group_id` | All clients with that `group_id` | No |
+| `type_filter` | `client_type` | All clients matching `client_type` | No |
+| `broadcast` | _(none set)_ | All clients on the bus | **Yes** |
+
+## direct
+
+```python
+await client.call_tool("blender_send_message", {
+    "target_uuid": "blender-demo01",
+    "from_uuid": "llm-mine",
+    "priority": "info",
+    "payload": {"message_type": "job_dispatch", "job_id": "job-1", "script": "..."}
+})
+```
+
+The bus emits one log record stamped with `target_uuid: blender-demo01`. Subscribed clients all receive the notification (MCP doesn't address subscribers individually), but each client checks `target_uuid` against its own UUID and drops anything that isn't a match.
+
+**Use for**: dispatching a job to a specific Blender instance.
+
+## group
+
+```python
+await client.call_tool("blender_send_message", {
+    "group_id": "render-cluster",
+    "from_uuid": "llm-mine",
+    "priority": "info",
+    "payload": {...},
+})
+```
+
+Resolves to every client with `group_id == "render-cluster"`. Sender is not excluded — if the sender shares the group, it receives a copy.
+
+**Use for**: addressing a logical cluster (a render farm, a set of preview workstations).
+
+## type_filter
+
+```python
+await client.call_tool("blender_send_message", {
+    "client_type": "blender",
+    "from_uuid": "llm-mine",
+    "priority": "info",
+    "payload": {...},
+})
+```
+
+Resolves to every client whose `client_type` matches. Doesn't exclude the sender — but in practice an `llm` client sending `client_type="blender"` won't hit itself.
+
+**Use for**: "tell every Blender peer to refresh its scene", "broadcast a chat message to all LLM clients".
+
+## broadcast
+
+```python
+await client.call_tool("blender_send_message", {
+    "from_uuid": "llm-mine",
+    "priority": "info",
+    "payload": {"message_type": "announcement", "text": "Server restarting in 5 min"},
+})
+```
+
+No targeting fields set. Resolves to every client on the bus **except the sender**. This is the only mode that excludes the sender automatically.
+
+**Use for**: announcements, "anyone available?" pings, lifecycle events.
+
+## Wire shape
+
+Every dispatched log record carries the chosen routing in its `data.routing` field:
+
+```json
+{"routing": {"type": "direct", "target_uuid": "blender-demo01"}}
+{"routing": {"type": "group", "group_id": "render-cluster"}}
+{"routing": {"type": "type_filter", "client_type": "blender"}}
+{"routing": {"type": "broadcast"}}
+```
+
+Clients can use this for logging or for selective handling — e.g. an LLM client might want to surface `broadcast` messages in chat but silently drop `type_filter` traffic.
+
+## Job-update routing
+
+`blender_job_update` always routes `direct` to the originating client looked up from `_pending_jobs`. There's no way to override this. If the originator is unknown (e.g. the server restarted and lost the in-memory table), the update is **broadcast** as a fallback.
+
+<Aside type="note">
+The fan-out is server-side. Each targeted client gets its own log record with its own `target_uuid` and `target_session`, so the forwarding handler can address the right MCP session. The original `payload` dict is shared by reference across the records — don't mutate it after sending.
+</Aside>
+
+## Combining modes — the caller does it
+
+The bus only handles one targeting field at a time. To send "every renderer in the render-cluster group", do the targeting client-side:
+
+```python
+listing = json.loads((await client.call_tool("blender_list_available_clients", {})).content[0].text)
+
+targets = [
+    c["uuid"] for c in listing["persistent"]
+    if c["group_id"] == "render-cluster"
+    and c["client_type"] == "blender"
+    and "rendering" in c["capabilities"]
+]
+
+for uuid in targets:
+    await client.call_tool("blender_send_message", {
+        "target_uuid": uuid,
+        ...
+    })
+```
+
+See [Use capabilities](/how-to/use-capabilities/) for more.
+
+## Reference
+
+- [Bus tools](/reference/bus-tools/) — `blender_send_message` full signature
+- [ClientInfo](/reference/client-info/) — what `group_id` and `client_type` look like on the wire
+- [Priority levels](/reference/priorities/) — the orthogonal axis for message ordering

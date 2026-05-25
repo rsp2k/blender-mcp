@@ -1,0 +1,124 @@
+---
+title: "Addon commands"
+description: "Every command the BlenderMCP addon registers, grouped by domain. 23 commands across 8 handler mixins."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The addon registers commands via `@command(name, gate=...)` on per-domain mixins. The composed `BlenderCommandExecutor` exposes the union. `executor` is in scope inside every `job_dispatch` script, so anything below is callable as `executor.<name>(...)`.
+
+23 commands across 8 domains. Commands with a **Gate** column entry are only dispatchable when the matching `AddonPreferences` flag is true.
+
+## scene (`addon/executor/handlers/scene.py`)
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `get_scene_info` | — | `{name, object_count, objects[<=10], materials_count}` | — |
+| `get_object_info` | `name: str` | full object descriptor with mesh stats and material slots | — |
+| `browse_data` | `collection`, `item_name`, `page=1`, `page_size=50`, `detail_level="summary"` | paginated `bpy.data.<collection>` listing or single-item detail | — |
+
+`get_object_info` raises `ValueError` if the object name doesn't exist. `browse_data` with no `collection` returns the list of available collections.
+
+## viewport (`addon/executor/handlers/viewport.py`)
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `get_viewport_screenshot` | `max_size=800`, `filepath`, `format="png"` | `{success, width, height, filepath}` | — |
+
+`filepath` is required despite the default-looking signature — the handler returns `{"error":"No filepath provided"}` if it's empty.
+
+## code_exec (`addon/executor/handlers/code_exec.py`)
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `execute_code` | `code: str` | `{executed: true, result: <stdout>}` | — |
+
+<Aside type="caution">
+`execute_code` runs arbitrary Python in the Blender process. Anyone on the user's bus with `target_uuid` knowledge of a Blender peer can invoke it. Per-user bus isolation is the only access control.
+</Aside>
+
+## console (`addon/executor/handlers/console.py`)
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `console_operations` | `operation="get_info"`, `params=None` | varies by operation | — |
+| `get_console_output` | `level="all"`, `page=1`, `page_size=50` | paginated console scrollback with classified line types | — |
+
+`console_operations` supports: `create`, `execute`, `autocomplete`, `clear`, `clear_line`, `copy`, `copy_as_script`, `paste`, `history_cycle`, `history_append`, `insert`, `indent`, `unindent`, `select_all`, `select_word`, `scrollback_append`, `get_info`.
+
+`get_console_output` levels: `all`, `info`, `warning`, `error`, `output`, `input`.
+
+## msgbus (`addon/executor/handlers/msgbus.py`)
+
+Blender's `bpy.msgbus` RNA property change system, exposed as five commands.
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `msgbus_clear_by_owner` | `owner_id="default"` | `{success, message}` | — |
+| `msgbus_publish_rna` | `data_path=None`, `key=None` | `{success, message}` | — |
+| `msgbus_subscribe_rna` | `owner_id="default"`, `data_path`, `notify_type="UPDATE"`, `persistent=True` | `{success, subscription_id, key}` | — |
+| `msgbus_get_notifications` | `owner_id=None`, `clear=False` | `{success, notifications, count}` | — |
+| `msgbus_list_subscriptions` | `owner_id=None` | `{success, subscriptions, count, owners}` | — |
+
+Supported `data_path` values for subscribe/publish: `frame_current`, `active_object`, `selected_objects`, `active_material`, plus `scene.<prop>` and `object.<prop>` patterns.
+
+<Aside type="note">
+The Blender `bpy.msgbus` is **unrelated** to the BlenderMCP cross-instance message bus. The names collide because both are message buses, but `bpy.msgbus` is a single-Blender RNA-change observer; the BlenderMCP bus carries cross-process MCP traffic.
+</Aside>
+
+## polyhaven (`addon/executor/handlers/polyhaven.py`)
+
+Poly Haven assets — HDRIs, textures, models.
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `get_polyhaven_status` | — | `{enabled, message}` | — |
+| `get_polyhaven_categories` | `asset_type` (`hdris`/`textures`/`models`/`all`) | `{categories: {...}}` | `use_polyhaven` |
+| `search_polyhaven_assets` | `asset_type=None`, `categories=None` | first 20 assets + total count | `use_polyhaven` |
+| `download_polyhaven_asset` | `asset_id`, `asset_type`, `resolution="1k"`, `file_format=None` | `{success, message, ...}` | `use_polyhaven` |
+| `set_texture` | `object_name`, `texture_id` | full material info including AO/ARM mixing diagnostics | `use_polyhaven` |
+
+`download_polyhaven_asset` defaults: HDRI → `hdr`, texture → `jpg`, model → `gltf`. Textures construct a Principled BSDF node graph with normal, displacement, AO/ARM packing. Models stream a temp dir and import via `bpy.ops.import_scene.*`.
+
+## hyper3d (`addon/executor/handlers/hyper3d.py`)
+
+Text/image-to-3D model generation via Hyper3D Rodin. Two backends: `MAIN_SITE` (hyperhuman.deemos.com) and `FAL_AI` (fal.ai). Selected by `AddonPreferences.hyper3d_mode`.
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `get_hyper3d_status` | — | `{enabled, message}` | — |
+| `create_rodin_job` | `text_prompt`, `images`, `bbox_condition` | backend-specific job descriptor | `use_hyper3d` |
+| `poll_rodin_job_status` | `subscription_key` (MAIN_SITE) or `request_id` (FAL_AI) | `{status_list}` or backend-specific | `use_hyper3d` |
+| `import_generated_asset` | `task_uuid` or `request_id`, `name` | imported object descriptor with AABB | `use_hyper3d` |
+
+Each command dispatches internally to `*_main_site` or `*_fal_ai` based on `prefs.hyper3d_mode`. The free-trial API key works against `MAIN_SITE` by default.
+
+## sketchfab (`addon/executor/handlers/sketchfab.py`)
+
+Sketchfab model search + download.
+
+| Command | Parameters | Returns | Gate |
+|---|---|---|---|
+| `get_sketchfab_status` | — | `{enabled, message}` — pings `/v3/me` if a key is set | — |
+| `search_sketchfab_models` | `query`, `categories=None`, `count=20`, `downloadable=True` | raw Sketchfab v3 search response | `use_sketchfab` |
+| `download_sketchfab_model` | `uid` | `{success, imported_objects}` | `use_sketchfab` |
+
+`download_sketchfab_model` extracts the GLTF zip with zip-slip protection (rejects paths containing `..` or anything that escapes the temp dir) before calling `bpy.ops.import_scene.gltf`.
+
+## Calling conventions
+
+All 23 commands run in Blender's main thread via the drainer (`addon/client/drainer.py`). A dispatched `job_dispatch` script gets `executor` in its globals; calling any command above is direct:
+
+```python
+# inside a dispatched script
+info = executor.get_scene_info()
+print(info)
+```
+
+The drainer captures stdout, then calls `blender_job_update` with the captured text as `result`. So `print(info)` is the canonical way to surface a return value back to the originator.
+
+## Reference
+
+- [@command decorator](/reference/command-decorator/) — the registration mechanism
+- [Addon preferences](/reference/addon-preferences/) — the gate sources (`use_polyhaven`, `use_hyper3d`, `use_sketchfab`)
+- [Addon package tour](/explanation/addon-package-tour/) — why the handlers are split this way

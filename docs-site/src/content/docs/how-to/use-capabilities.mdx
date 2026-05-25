@@ -1,0 +1,132 @@
+---
+title: "Use capabilities"
+description: "The capabilities array on register_client, and how to gate dispatch by capability via list_available_clients."
+---
+
+import { Aside, Steps, Code } from '@astrojs/starlight/components';
+
+`capabilities` is a free-form list of strings attached to a client at registration. The server stores it on `ClientInfo` and returns it in `list_available_clients`. **Nothing about the bus enforces capabilities** — they're advisory metadata for the sending side to filter on.
+
+## When clients declare them
+
+A typical addon registration:
+
+```python
+await client.call_tool("blender_register_client", {
+    "client_uuid": "blender-abc",
+    "client_type": "blender",
+    "is_persistent": True,
+    "capabilities": [
+        "python_execution",
+        "modeling",
+        "rendering",
+        "scene_management",
+        "asset_processing",
+    ],
+})
+```
+
+An LLM client might declare narrower or different capabilities:
+
+```python
+await client.call_tool("blender_register_client", {
+    "client_uuid": "llm-claude-vision",
+    "client_type": "llm",
+    "is_persistent": False,
+    "capabilities": ["chat", "vision", "code_review"],
+})
+```
+
+## Suggested vocabulary
+
+These are conventions, not enforced names. Pick what your fleet agrees on.
+
+| Capability | What it means |
+|---|---|
+| `python_execution` | Will execute `job_dispatch` payloads with arbitrary Python |
+| `modeling` | Can build/edit geometry |
+| `rendering` | Has a render engine available (Cycles/EEVEE) |
+| `scene_management` | Will accept scene-level commands (object add/remove, etc.) |
+| `asset_processing` | Will handle GLB/FBX/HDRI import |
+| `gpu` | Has a GPU available for compute |
+| `headless` | Running without UI — viewport screenshots won't work |
+| `vision` | LLM-side: can interpret images |
+| `chat` | LLM-side: can hold a conversation |
+
+## Filter dispatches by capability
+
+The sender pulls the client list, filters in Python, and addresses by `target_uuid`.
+
+```python
+import json
+
+async def pick_renderer(client) -> str | None:
+    raw = await client.call_tool("blender_list_available_clients", {})
+    listing = json.loads(raw.content[0].text)
+    for c in listing.get("persistent", []):
+        if c["client_type"] == "blender" and "rendering" in c["capabilities"]:
+            return c["uuid"]
+    return None
+
+target = await pick_renderer(client)
+if target is None:
+    raise RuntimeError("no renderer-capable Blender peer available")
+
+await client.call_tool("blender_send_message", {
+    "target_uuid": target,
+    "from_uuid": "llm-mine",
+    "priority": "info",
+    "payload": {
+        "message_type": "job_dispatch",
+        "job_id": "job-render01",
+        "script": render_script,
+    },
+})
+```
+
+## Group + capability
+
+Combine `group_id` with a capability check to address "all GPU peers in the `render-cluster` group":
+
+```python
+listing = json.loads((await client.call_tool("blender_list_available_clients", {})).content[0].text)
+
+gpu_renderers = [
+    c["uuid"] for c in listing["persistent"]
+    if c["group_id"] == "render-cluster" and "gpu" in c["capabilities"]
+]
+
+# Fan out one job per target.
+for uuid in gpu_renderers:
+    await client.call_tool("blender_send_message", {
+        "target_uuid": uuid,
+        "from_uuid": "llm-mine",
+        "priority": "info",
+        "payload": {"message_type": "job_dispatch", "job_id": f"job-{uuid}", "script": script},
+    })
+```
+
+<Aside type="note">
+You can also send to the whole group in one call with `group_id="render-cluster"`. The server fans out internally and stamps each target. Use per-target sends only when you need distinct `job_id`s for separate completion tracking.
+</Aside>
+
+## Re-registration updates capabilities
+
+Calling `register_client` again with the same `client_uuid` updates the existing record in place. Useful when a client gains a capability mid-session (e.g., a Blender peer that just enabled the Cycles GPU device):
+
+```python
+await client.call_tool("blender_register_client", {
+    "client_uuid": my_uuid,        # same UUID
+    "client_type": "blender",
+    "is_persistent": True,
+    "capabilities": [..., "gpu"],  # new entry
+})
+```
+
+The bucket (persistent vs ephemeral) is set on first registration and stays put.
+
+## Reference
+
+- [ClientInfo](/reference/client-info/) — every field, including how `capabilities` is stored
+- [Routing modes](/reference/routing-modes/) — direct/group/type_filter/broadcast
+- [Bus tools](/reference/bus-tools/) — `register_client` and `list_available_clients` signatures

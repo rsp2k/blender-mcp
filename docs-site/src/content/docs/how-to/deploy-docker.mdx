@@ -1,0 +1,142 @@
+---
+title: "Deploy with Docker + Caddy"
+description: "Production deploy with docker compose, caddy-docker-proxy reverse proxy, and an rfc2136 TLS path."
+---
+
+import { Steps, Tabs, TabItem, Aside, FileTree, Code } from '@astrojs/starlight/components';
+
+A production deploy uses three pieces: the server image, a `.env` file, and caddy-docker-proxy labels on the external `caddy` network.
+
+## Files
+
+<FileTree>
+- docker-compose.yml
+- .env             (copy from .env.production)
+- Dockerfile
+- Makefile
+</FileTree>
+
+## .env
+
+Copy `.env.production` to `.env` and fill in the secrets.
+
+```bash
+# Required
+COMPOSE_PROJECT_NAME=blender-mcp
+JWT_SECRET=<run: openssl rand -hex 32>
+HOSTNAME=blender-mcp.example.com
+
+# Optional
+LOG_LEVEL=INFO
+BLENDER_MCP_USERS_FILE=/data/users.json
+```
+
+<Aside type="caution">
+`JWT_SECRET` rotation invalidates every issued token. Treat the value like a database password.
+</Aside>
+
+## docker-compose.yml
+
+```yaml
+services:
+  blender-mcp:
+    build: .
+    container_name: blender-mcp
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    networks:
+      - caddy
+      - internal
+    labels:
+      caddy: ${HOSTNAME}
+      caddy.reverse_proxy: "{{upstreams 8000}}"
+      caddy.tls.import: rfc2136_local
+
+networks:
+  caddy:
+    external: true
+  internal:
+    driver: bridge
+```
+
+The `caddy.tls.import: rfc2136_local` line pulls in a Caddy snippet that uses RFC 2136 dynamic DNS-01 challenges. Drop the line if you're using HTTP-01.
+
+<Aside type="note">
+The `internal` network exists so future sidecar services (Redis, a persistence layer, a metrics scraper) can talk to the server without joining the shared `caddy` namespace.
+</Aside>
+
+## Bring it up
+
+<Steps>
+
+1. **Build:**
+
+   ```bash
+   make build
+   # or: docker compose build
+   ```
+
+2. **Start:**
+
+   ```bash
+   make up
+   # or: docker compose up -d
+   ```
+
+3. **Check logs:**
+
+   ```bash
+   docker compose logs -f blender-mcp
+   ```
+
+   Expected first lines:
+
+   ```
+   blender-mcp  | BlenderMCP v2026.05.25 — HTTP mode
+   blender-mcp  | INFO uvicorn:Started server process [1]
+   blender-mcp  | INFO uvicorn:Uvicorn running on http://0.0.0.0:8000
+   ```
+
+4. **Verify TLS** from another host:
+
+   ```bash
+   curl -fsS https://${HOSTNAME}/health
+   ```
+
+</Steps>
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JWT_SECRET` | _(required)_ | HMAC signing key for issued tokens |
+| `JWT_ALGORITHM` | `HS256` | JWT algorithm |
+| `JWT_ACCESS_TTL_SECONDS` | `3600` | Access token lifetime |
+| `JWT_REFRESH_TTL_SECONDS` | `2592000` | Refresh token lifetime (30 d) |
+| `BLENDER_MCP_USERS_FILE` | `/data/users.json` | Path to the user store |
+| `LOG_LEVEL` | `INFO` | Server log verbosity |
+| `HOST` | `0.0.0.0` | Uvicorn bind address |
+| `PORT` | `8000` | Uvicorn port (inside container) |
+
+## Hot-reload in dev
+
+Swap to `docker-compose.dev.yml` to mount the source and run with `--reload`:
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+That image runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.0.0.0`.
+
+## Operational notes
+
+- The bus state is **in-memory only** — restarting the container disconnects every persistent client and drops `_pending_jobs`. Schedule restarts during quiet windows. See [Architecture](/explanation/architecture/) for the rationale.
+- caddy-docker-proxy auto-discovers new containers — no manual Caddyfile edits needed.
+- Pin the image with `image:` rather than `build:` once you start tagging releases. CalVer (`2026.05.25`) keeps "when was this built" obvious from the tag.
+
+## Next
+
+- [OAuth and per-user buses](/explanation/oauth-buses/) — what the JWT actually carries
+- [Write your own LLM client](/how-to/write-llm-client/) — point it at your new deploy

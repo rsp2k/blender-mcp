@@ -1,0 +1,56 @@
+/* BlenderMCP docs — teal accent palette.
+ * Hand-tuned, NO purple anywhere. Mobile-first refinements at the bottom. */
+
+:root {
+	/* Teal primary — picked to read well on both light and dark surfaces.
+	 * Derived from #2bb3a4 with HSL shifts for each Starlight tier. */
+	--sl-color-accent-low: #0b3b36;
+	--sl-color-accent: #2bb3a4;
+	--sl-color-accent-high: #9be5dd;
+
+	/* Tighten the neutral grays a hair toward cool — pairs well with the teal. */
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #eef2f3;
+	--sl-color-gray-2: #c4cdd1;
+	--sl-color-gray-3: #8a969d;
+	--sl-color-gray-4: #5b676d;
+	--sl-color-gray-5: #353f44;
+	--sl-color-gray-6: #232a2e;
+	--sl-color-black: #16191c;
+}
+
+/* Light theme overrides — accent stays teal, just shifted darker for contrast */
+:root[data-theme='light'] {
+	--sl-color-accent-low: #c8efe9;
+	--sl-color-accent: #0f7a6d;
+	--sl-color-accent-high: #064a42;
+}
+
+/* Card / surface tweaks — subtle teal-tinted shadow on hover */
+.card a:hover,
+a.card:hover {
+	border-color: var(--sl-color-accent);
+}
+
+/* Mobile-first refinement: a bit more breathing room around the hero on
+ * narrow screens, then snap back to Starlight defaults at md. */
+@media (max-width: 50rem) {
+	.hero {
+		padding-block: 2rem;
+	}
+	.hero h1 {
+		font-size: clamp(2rem, 8vw, 3rem);
+		line-height: 1.1;
+	}
+}
+
+/* Make code blocks feel a little more integrated with the teal accent */
+.expressive-code .frame {
+	border-radius: 0.5rem;
+}
+
+/* Sidebar — currently-active link gets the accent color */
+.sidebar-content a[aria-current='page'] {
+	color: var(--sl-color-accent);
+	font-weight: 600;
+}
