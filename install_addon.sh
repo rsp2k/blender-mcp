@@ -85,26 +85,31 @@ check_blender_version() {
 install_addon() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local addon_path="$script_dir/addon.py"
+    local addon_pkg="$script_dir/addon"
+    local addon_shim="$script_dir/addon.py"
     local install_script="$script_dir/install_addon.py"
-    
+
     print_status "BlenderMCP Addon Installation Script"
     echo "=================================================="
-    
-    # Check if addon.py exists
-    if [[ ! -f "$addon_path" ]]; then
-        print_error "addon.py not found at: $addon_path"
-        print_error "Please ensure you're running this script from the BlenderMCP directory"
+
+    # Need at least one of: addon/ package directory or addon.py shim.
+    # install_addon.py prefers the package when both are present.
+    if [[ ! -d "$addon_pkg/" && ! -f "$addon_shim" ]]; then
+        print_error "Neither addon/ nor addon.py found alongside $0"
+        print_error "Please run this script from the BlenderMCP project directory"
         exit 1
     fi
-    
-    # Check if install_addon.py exists
+
     if [[ ! -f "$install_script" ]]; then
         print_error "install_addon.py not found at: $install_script"
         exit 1
     fi
-    
-    print_success "Found addon.py at: $addon_path"
+
+    if [[ -d "$addon_pkg/" ]]; then
+        print_success "Found addon/ package at: $addon_pkg (preferred)"
+    else
+        print_success "Found addon.py shim at: $addon_shim"
+    fi
     
     # Find Blender
     print_status "Searching for Blender installation..."

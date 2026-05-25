@@ -264,6 +264,11 @@ test = [
     { name = "pytest-timeout" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "fake-bpy-module-latest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "bcrypt", specifier = ">=5.0.0" },
@@ -296,6 +301,9 @@ requires-dist = [
     { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["oauth", "ai", "production", "test", "dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "fake-bpy-module-latest", specifier = ">=20260501" }]
 
 [[package]]
 name = "cachetools"
@@ -819,6 +827,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0e/97c33bf5009bdbac74fd2beace167cab3f978feb69cc36f1ef79360d6c4e/exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598", size = 16740, upload-time = "2025-11-21T23:01:53.443Z" },
+]
+
+[[package]]
+name = "fake-bpy-module-latest"
+version = "20260501"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/8c/82524144ff1c33f087ed17da2fa9ed237cb681275aee18f0ed60df8a5200/fake_bpy_module_latest-20260501.tar.gz", hash = "sha256:e7cf1efc6286fdd266660e8e49d622e66694022b0ac2ec4d9d4eace5ea0ac851", size = 899868, upload-time = "2026-05-01T08:02:07.803Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/52/5d45e239b168d90b3950f833548e1aeb06172be5ae11f0d834c32f9bc438/fake_bpy_module_latest-20260501-py3-none-any.whl", hash = "sha256:6bfc5acb3f12a699ed6569b6be87f58d7a3d0dc45f8328eb834b867159eaa1a4", size = 1044675, upload-time = "2026-05-01T08:02:05.634Z" },
 ]
 
 [[package]]

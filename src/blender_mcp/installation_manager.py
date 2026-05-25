@@ -52,17 +52,29 @@ class BlenderInstallationManager:
         return paths
     
     def _find_addon_source(self) -> Optional[Path]:
-        """Find the addon.py source file"""
-        # Look in current directory, parent directories, etc.
-        search_paths = [
-            Path.cwd() / "addon.py",
-            Path.cwd().parent / "addon.py",
-            Path(__file__).parent.parent.parent / "addon.py"
-        ]
-        
-        for path in search_paths:
-            if path.exists():
-                return path
+        """Find the addon source — either the `addon/` package or `addon.py`.
+
+        After the modularization refactor the addon ships as a package
+        directory (addon/) alongside a thin addon.py shim for the
+        single-file install path. We prefer the package layout when both
+        exist; Blender's addon installer accepts a directory or a zip of
+        a directory and the package layout cleanly carries the version
+        manifest.
+        """
+        bases = (
+            Path.cwd(),
+            Path.cwd().parent,
+            Path(__file__).parent.parent.parent,
+        )
+        for base in bases:
+            pkg_dir = base / "addon"
+            if pkg_dir.is_dir() and (pkg_dir / "__init__.py").exists():
+                return pkg_dir
+        # Fall back to the single-file shim if no package directory found.
+        for base in bases:
+            single_file = base / "addon.py"
+            if single_file.is_file():
+                return single_file
         return None
     
     def find_blender_executable(self) -> Optional[str]:
