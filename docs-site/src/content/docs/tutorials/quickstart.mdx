@@ -17,11 +17,16 @@ End-to-end in five steps. No real Blender required — a stub peer stands in for
 
 <Steps>
 
-1. **Start the server.**
+1. **Start the server.** Pick one:
+
+   <Tabs>
+   <TabItem label="Local (uv)">
 
    ```bash
    cd blender-mcp
    uv sync
+   export ADMIN_PASSWORD=adminpw      # required; server refuses to start without it
+   export DEMO_PASSWORD=demopw        # optional; creates a `demo` user
    uv run blender-mcp
    ```
 
@@ -33,15 +38,31 @@ End-to-end in five steps. No real Blender required — a stub peer stands in for
    INFO  uvicorn       Uvicorn running on http://0.0.0.0:8000
    ```
 
+   For the next steps, set `MCP=http://localhost:8000`.
+
+   </TabItem>
+   <TabItem label="Public dev server">
+
+   Skip setup entirely — use the reference deploy:
+
+   ```bash
+   export MCP=https://mcp.l.warehack.ing
+   ```
+
+   Demo credentials are the same as below. Jump to step 2.
+
+   </TabItem>
+   </Tabs>
+
 2. **Get a JWT.**
 
    ```bash
-   curl -s -X POST http://localhost:8000/auth/login \
+   curl -s -X POST "$MCP/auth/login" \
      -H 'content-type: application/json' \
-     -d '{"username":"demo","password":"demo"}' | jq -r .access_token
+     -d '{"username":"demo","password":"demopw"}' | jq -r .access_token
    ```
 
-   Save the token as `TOKEN=...` for the next two terminals.
+   Save the token as `TOKEN=...` for the next two terminals. (Replace `demopw` with whatever you set `DEMO_PASSWORD` to.)
 
 3. **Run a fake Blender peer** in terminal 2. This registers as a persistent `blender` client and responds to both `command_dispatch` and `job_dispatch` payloads.
 

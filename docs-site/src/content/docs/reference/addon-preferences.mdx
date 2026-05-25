@@ -90,8 +90,31 @@ A `.blend` saved before the migration still contains the legacy properties. Open
 
 `BlenderMCPPreferences.draw()` renders a compact panel in Edit > Preferences > Add-ons > BlenderMCP:
 
-- **Connection**: server URL, username, JWT (revealed on click).
+- **Connection**: server URL, username, JWT (revealed on click). Next to the server URL field is a **Test Connection** button (URL icon) that probes the configured server before you bother with login.
 - **Asset Integrations**: a checkbox per integration; Hyper3D and Sketchfab reveal mode/key fields when enabled.
+
+## Test Connection button
+
+`BLENDERMCP_OT_TestConnection` (`blendermcp.test_connection` operator) does a quick smoke test against the configured `server_url` before the user clicks Login. Useful for catching wrong URLs, missing trailing slashes, expired certs, and unreachable hosts without producing a "wrong credentials?" red herring from the login flow.
+
+**What it does:**
+
+```python
+GET {server_url stripped of /mcp}/health   # 3s timeout
+```
+
+**What it reports** (via `self.report(...)` in Blender's operator log):
+
+| Outcome | Message |
+|---|---|
+| 200 + healthy JSON | `OK, server healthy, {buses} bus(es) active` (green INFO) |
+| HTTP 4xx/5xx | `FAILED: HTTP {code} from {url}` |
+| Timeout (>3s) | `Timeout (>3s) hitting {url}` |
+| TLS failure | `TLS error: {detail}` |
+| Connection refused / DNS failure | `Cannot reach {url}: {detail}` |
+| Empty URL | `Server URL is empty` |
+
+The 3-second timeout is deliberate — Blender's preferences panel freezes during operator execution, so a stuck network call would freeze the UI. Fast failure beats hung UI.
 
 ## Reference
 

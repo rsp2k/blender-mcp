@@ -113,6 +113,17 @@ The Login operator (`addon/ui/operators.py`) calls `addon.auth.login.login(...)`
 
 A periodic refresh via `addon.auth.login.refresh_token` keeps the access token valid for long-running sessions. The refresh token has a 30-day TTL; after that, the user has to log in again.
 
+## Production defaults — hardened
+
+The server refuses to start without an `ADMIN_PASSWORD`. There's no built-in default — the previous `"SecureAdmin123!"` placeholder was removed because it shipped in this public repo. Two layers enforce it:
+
+1. **Module load** in `oauth_server.py` — raises `RuntimeError` on import if `os.getenv("ADMIN_PASSWORD")` is empty. Catches `uv run blender-mcp` invocations that bypass compose.
+2. **Compose** — `${ADMIN_PASSWORD:?}` in `docker-compose.yml` fails the stack at `up` time if the env var is missing.
+
+The `demo` user is **opt-in**: only created when `DEMO_PASSWORD` is explicitly set. Production deployments leave it unset so no demo account exists. Local dev sets it in `.env` (or via `make dev`) when running the quickstart.
+
+`OAUTH_SECRET_KEY` (the JWT signing key) is generated via `make secret-gen` — idempotent, only writes if blank, never overwrites an existing key. Rotating it invalidates every issued token.
+
 ## What's NOT enforced
 
 - **No per-user quotas.** A user with valid credentials can register unlimited clients on their bus.
