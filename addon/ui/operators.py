@@ -13,7 +13,7 @@ import bpy
 import requests  # for catching requests.exceptions.RequestException
 
 from .. import state
-from ..auth import LoginError, login
+from ..auth import LoginError, login, logout
 from ..auth.login import _auth_base
 from ..client import BlenderMCPClient
 from ..client.bus_client import FASTMCP_AVAILABLE
@@ -127,6 +127,54 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
         user = payload.get("user", {})
         who = user.get("username", username)
         self.report({'INFO'}, f"Logged in as {who}")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_Logout(bpy.types.Operator):
+    """Disconnect, notify the server, clear the stored JWT.
+
+    Order matters: disconnect FIRST (so the bus's SSE stream closes
+    cleanly before the server invalidates its session-bound state),
+    then notify the server via /auth/logout (best-effort — server
+    failure does not block client cleanup), then clear local prefs.
+    Always succeeds from the user's perspective: even on network
+    failure, the local credentials are gone.
+    """
+
+    bl_idname = "blendermcp.logout"
+    bl_label = "Logout"
+    bl_description = "Disconnect, invalidate server-side refresh tokens, clear local JWT"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        scene = context.scene
+
+        # 1. Disconnect first if connected — closes the bus client thread
+        #    so the worker isn't holding an authenticated stream when we
+        #    pull the JWT out from under it.
+        if state._client is not None:
+            try:
+                state._client.stop()
+            except Exception:
+                pass  # best-effort — proceed with logout regardless
+            state._client = None
+        scene.blendermcp_server_running = False
+
+        # 2. Tell the server (best-effort).
+        token = prefs.jwt_token
+        if token:
+            try:
+                logout(prefs.server_url, token)
+            except Exception:
+                pass  # logout helper already swallows; belt-and-suspenders
+
+        # 3. Clear local credentials. Username stays — it's not a secret,
+        #    and forcing the user to retype it on next login is annoying.
+        prefs.jwt_token = ""
+        prefs.jwt_expires_at = ""
+        scene.blendermcp_password_tmp = ""
+
+        self.report({'INFO'}, "Logged out")
         return {'FINISHED'}
 
 

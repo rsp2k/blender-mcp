@@ -44,8 +44,8 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         else:
             row = col.row(align=True)
             row.label(text=f"Logged in as {prefs.username or '?'}", icon='LOCKED')
-            # Clear-JWT path: clearing the prop forces a re-login.
-            row.prop(prefs, "jwt_token", text="", icon='X')
+            # Logout: disconnects + notifies server + clears local JWT.
+            row.operator("blendermcp.logout", text="", icon='UNLOCKED')
 
         if getattr(scene, "blendermcp_client_id", ""):
             col.label(text=f"Client: {scene.blendermcp_client_id[:24]}")

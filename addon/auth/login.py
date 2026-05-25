@@ -96,6 +96,32 @@ def refresh_token(
     return resp.json()
 
 
+def logout(
+    server_url: str,
+    access_token: str,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """Best-effort POST to /auth/logout to invalidate the server's refresh tokens.
+
+    Failures are intentionally swallowed — the caller will always also clear
+    local credentials, so a server-unreachable scenario shouldn't leave the
+    user logged in client-side. The server's /auth/logout is idempotent and
+    treats invalid/expired tokens as already-logged-out (200, not 401).
+    """
+    url = f"{_auth_base(server_url)}/auth/logout"
+    try:
+        requests.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException:
+        # Local cleanup proceeds regardless; the access token expires on its
+        # own anyway (lifetime is bounded by ACCESS_TOKEN_EXPIRE_MINUTES).
+        pass
+
+
 def _detail(resp: requests.Response) -> str:
     """Best-effort extraction of a human-readable error message."""
     try:
