@@ -154,7 +154,10 @@ async def _call_tool(token: str, tool_name: str, arguments: dict, *,
     )
     async with Client(transport) as client:
         if wait_for_peer_uuid:
-            deadline = asyncio.get_event_loop().time() + 5.0
+            # 10s is generous but the peer subprocess can take 2-4s cold-start
+            # when uv is doing lockfile work in parallel for multiple
+            # subprocesses (server + script + peer all running ``uv run``).
+            deadline = asyncio.get_event_loop().time() + 10.0
             while asyncio.get_event_loop().time() < deadline:
                 r = await client.call_tool(
                     "blender_list_available_clients", {}
@@ -249,8 +252,14 @@ async def run_gates(token: str) -> int:
         print("[case 5] ambiguous_target — two peers up")
         peer2 = _start_peer(token, "blender-gh-002")
         try:
-            # wait for peer2 to register
-            await asyncio.sleep(1.5)
+            # Wait for peer2 to register — drive a list_available_clients
+            # poll instead of a fixed sleep because uv cold-start times
+            # vary (1-4s). Sleep-based wait was racy and caused intermittent
+            # auto-pick of blender-gh-001 before peer2 showed up.
+            res = await _call_tool(
+                token, "blender_list_available_clients", {},
+                wait_for_peer_uuid="blender-gh-002",
+            )
             res = await _call_tool(token, "blender_get_scene_info", {})
             check(
                 "status == ambiguous_target",

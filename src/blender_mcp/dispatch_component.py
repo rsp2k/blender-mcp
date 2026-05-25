@@ -26,8 +26,14 @@ Timeouts, no-client, ambiguous-target, and addon-side failures all
 surface as structured JSON; nothing raises. MCP clients (Claude
 Desktop, etc.) render JSON way better than tool exceptions.
 
-Phase A ships Tier-1 (7 core commands). Phase B adds Tier-2 status
-checks + Tier-3 integration-gated commands.
+Surface tiers:
+
+- **Tier 1** (7) — always-on core: scene/object inspection, code exec,
+  viewport screenshot, console scrape.
+- **Tier 2** (3) — always-on integration status probes.
+- **Tier 3** (14) — gated by addon prefs (polyhaven / hyper3d /
+  sketchfab / msgbus). When the gate is off, the addon returns an
+  "Unknown command type" error which the dispatcher faithfully relays.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid as _uuid_mod
-from typing import Optional
+from typing import Any, Optional
 
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool
@@ -46,11 +52,14 @@ from .message_bus import bus_manager
 from .message_router import Priority
 
 
-# Per-tool default timeout (seconds) — kept short enough that a stuck
-# Blender doesn't hang the MCP client forever, long enough that real
-# work fits. Override per call via the underscore-prefixed ``_timeout``
-# kwarg so the name doesn't collide with handler params.
-DEFAULT_TIMEOUT_S = 30.0
+# Per-tool timeouts (seconds). Kept short enough that a stuck Blender
+# doesn't hang the MCP client forever, long enough that real work fits.
+# Override per call via the underscore-prefixed ``_timeout`` kwarg so
+# the name doesn't collide with any handler params.
+TIMEOUT_FAST = 15.0        # status checks, msgbus reads
+DEFAULT_TIMEOUT_S = 30.0   # most read-only commands
+TIMEOUT_MEDIUM = 60.0      # execute_code, rodin job creation
+TIMEOUT_LONG = 180.0       # polyhaven/sketchfab downloads, asset imports
 
 
 def _new_job_id() -> str:
@@ -171,19 +180,33 @@ async def _dispatch(
 
 
 class BlenderDispatchComponent(MCPMixin):
-    """Tier-1 dispatch tools — 7 always-on core commands.
+    """24 flat dispatch tools, one per ``@command`` in the addon registry.
 
-    All tools share the same signature shape:
+    Each tool body is a one-liner that delegates to :meth:`_call`, which
+    in turn does the auth check + structured-error return + ``_dispatch``
+    round-trip. Keeps the file under 500 lines despite covering 24 tools.
+
+    Common signature shape:
 
         - <handler-specific kwargs>
         - target_uuid: Optional[str]  — explicit override
-        - _timeout: float              — override default
-        - ctx: Context = None          — MCP plumbing
-
-    Each tool body is a one-liner that delegates to :func:`_dispatch`.
-    Phase B adds the Tier-2 + Tier-3 surfaces; this file stays small
-    until then.
+        - _timeout: float             — override per-tool default
+        - ctx: Context = None         — MCP plumbing
     """
+
+    async def _call(
+        self,
+        ctx: Optional[Context],
+        command: str,
+        params: dict,
+        target_uuid: Optional[str],
+        timeout: float = DEFAULT_TIMEOUT_S,
+    ) -> str:
+        """Auth-check + dispatch. Returns a JSON-string wire body."""
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        return await _dispatch(user_id, command, params, target_uuid, timeout)
 
     # ---- Tier 1: always-on core (7 commands) -----------------------
 
@@ -195,10 +218,7 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Snapshot of the active Blender scene: name, object count, first N objects."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(user_id, "get_scene_info", {}, target_uuid, _timeout)
+        return await self._call(ctx, "get_scene_info", {}, target_uuid, _timeout)
 
     @mcp_tool()
     async def get_object_info(
@@ -209,11 +229,8 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Detailed info for a specific Blender object by name."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id, "get_object_info", {"name": name}, target_uuid, _timeout
+        return await self._call(
+            ctx, "get_object_info", {"name": name}, target_uuid, _timeout
         )
 
     @mcp_tool()
@@ -229,11 +246,8 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Browse ``bpy.data.*`` collections with pagination + detail levels."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id,
+        return await self._call(
+            ctx,
             "browse_data",
             {
                 "collection": collection,
@@ -251,15 +265,12 @@ class BlenderDispatchComponent(MCPMixin):
         self,
         code: str,
         target_uuid: Optional[str] = None,
-        _timeout: float = 60.0,  # code can take longer than default
+        _timeout: float = TIMEOUT_MEDIUM,
         ctx: Context = None,
     ) -> str:
         """Execute arbitrary Python in the Blender main thread. Returns stdout."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id, "execute_code", {"code": code}, target_uuid, _timeout
+        return await self._call(
+            ctx, "execute_code", {"code": code}, target_uuid, _timeout
         )
 
     @mcp_tool()
@@ -273,11 +284,8 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Save a 3D viewport screenshot to ``filepath`` (resized to ``max_size``)."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id,
+        return await self._call(
+            ctx,
             "get_viewport_screenshot",
             {"filepath": filepath, "max_size": max_size, "format": format},
             target_uuid,
@@ -295,11 +303,8 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Paginated Blender console scrape; ``level`` in {all, info, warning, error, output}."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id,
+        return await self._call(
+            ctx,
             "get_console_output",
             {"level": level, "page": page, "page_size": page_size},
             target_uuid,
@@ -316,13 +321,359 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """Invoke a ``bpy.ops.console.*`` operator. See addon's console_operations handler."""
-        user_id = _resolve_user_id(ctx)
-        if not user_id:
-            return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(
-            user_id,
+        return await self._call(
+            ctx,
             "console_operations",
             {"operation": operation, "params": params or {}},
+            target_uuid,
+            _timeout,
+        )
+
+    # ---- Tier 2: always-on integration status (3 commands) ---------
+
+    @mcp_tool()
+    async def get_polyhaven_status(
+        self,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Report whether PolyHaven integration is enabled in the addon prefs."""
+        return await self._call(
+            ctx, "get_polyhaven_status", {}, target_uuid, _timeout
+        )
+
+    @mcp_tool()
+    async def get_hyper3d_status(
+        self,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Report Hyper3D Rodin integration status (enabled flag, mode, key type)."""
+        return await self._call(
+            ctx, "get_hyper3d_status", {}, target_uuid, _timeout
+        )
+
+    @mcp_tool()
+    async def get_sketchfab_status(
+        self,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,  # talks to api.sketchfab.com
+        ctx: Context = None,
+    ) -> str:
+        """Report Sketchfab integration status; also verifies the API key against /v3/me."""
+        return await self._call(
+            ctx, "get_sketchfab_status", {}, target_uuid, _timeout
+        )
+
+    # ---- Tier 3: gated by addon prefs ------------------------------
+    # When the matching ``use_*`` pref is off the addon returns an
+    # "Unknown command type" error rather than running the handler.
+
+    # ---- Tier 3a: msgbus (5 commands, no addon-side gate) ----------
+
+    @mcp_tool()
+    async def msgbus_clear_by_owner(
+        self,
+        owner_id: str = "default",
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Drop all ``bpy.msgbus`` subscriptions owned by ``owner_id``."""
+        return await self._call(
+            ctx,
+            "msgbus_clear_by_owner",
+            {"owner_id": owner_id},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def msgbus_publish_rna(
+        self,
+        data_path: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Publish an RNA-property change on the bus.
+
+        ``data_path`` is one of: ``frame_current``, ``active_object``,
+        ``selected_objects``. Pass nothing to flush all pending messages.
+        Tuple-form ``key`` argument from the addon handler is intentionally
+        not exposed (tuples aren't JSON-friendly).
+        """
+        return await self._call(
+            ctx,
+            "msgbus_publish_rna",
+            {"data_path": data_path},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def msgbus_subscribe_rna(
+        self,
+        data_path: str,
+        owner_id: str = "default",
+        notify_type: str = "UPDATE",
+        persistent: bool = True,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Subscribe to RNA-property changes; notifications queue in the addon."""
+        return await self._call(
+            ctx,
+            "msgbus_subscribe_rna",
+            {
+                "owner_id": owner_id,
+                "data_path": data_path,
+                "notify_type": notify_type,
+                "persistent": persistent,
+            },
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def msgbus_get_notifications(
+        self,
+        owner_id: Optional[str] = None,
+        clear: bool = False,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Drain the addon's RNA-change notification queue (optionally clearing)."""
+        return await self._call(
+            ctx,
+            "msgbus_get_notifications",
+            {"owner_id": owner_id, "clear": clear},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def msgbus_list_subscriptions(
+        self,
+        owner_id: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """List active RNA subscriptions (filtered by owner if given)."""
+        return await self._call(
+            ctx,
+            "msgbus_list_subscriptions",
+            {"owner_id": owner_id},
+            target_uuid,
+            _timeout,
+        )
+
+    # ---- Tier 3b: PolyHaven (4 commands, gate: use_polyhaven) ------
+
+    @mcp_tool()
+    async def get_polyhaven_categories(
+        self,
+        asset_type: str,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        ctx: Context = None,
+    ) -> str:
+        """List PolyHaven categories for ``asset_type`` in {hdris, textures, models, all}."""
+        return await self._call(
+            ctx,
+            "get_polyhaven_categories",
+            {"asset_type": asset_type},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def search_polyhaven_assets(
+        self,
+        asset_type: Optional[str] = None,
+        categories: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        ctx: Context = None,
+    ) -> str:
+        """Search PolyHaven for assets (response capped at 20 entries by the addon)."""
+        return await self._call(
+            ctx,
+            "search_polyhaven_assets",
+            {"asset_type": asset_type, "categories": categories},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def download_polyhaven_asset(
+        self,
+        asset_id: str,
+        asset_type: str,
+        resolution: str = "1k",
+        file_format: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_LONG,
+        ctx: Context = None,
+    ) -> str:
+        """Download + import a PolyHaven asset.
+
+        ``asset_type`` in {hdris, textures, models}. Models prefer glTF;
+        HDRIs default to .hdr; textures default to .jpg. HDRIs replace
+        the active world; textures create a new material; models are
+        appended to the active scene.
+        """
+        return await self._call(
+            ctx,
+            "download_polyhaven_asset",
+            {
+                "asset_id": asset_id,
+                "asset_type": asset_type,
+                "resolution": resolution,
+                "file_format": file_format,
+            },
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def set_texture(
+        self,
+        object_name: str,
+        texture_id: str,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        ctx: Context = None,
+    ) -> str:
+        """Apply a previously downloaded PolyHaven texture to ``object_name``.
+
+        Builds a fresh Principled-BSDF material; handles ARM packing and
+        AO multiplication into base color.
+        """
+        return await self._call(
+            ctx,
+            "set_texture",
+            {"object_name": object_name, "texture_id": texture_id},
+            target_uuid,
+            _timeout,
+        )
+
+    # ---- Tier 3c: Hyper3D Rodin (3 commands, gate: use_hyper3d) ----
+
+    @mcp_tool()
+    async def create_rodin_job(
+        self,
+        text_prompt: Optional[str] = None,
+        images: Optional[list] = None,
+        bbox_condition: Optional[Any] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_MEDIUM,
+        ctx: Context = None,
+    ) -> str:
+        """Start a Rodin 3D-from-text/image job. Backend is mode-dependent (MAIN_SITE / FAL_AI).
+
+        ``images`` shape varies by backend: MAIN_SITE wants
+        ``[[suffix, base64_data], ...]``; FAL_AI wants ``[url, ...]``.
+        Returns the provider's raw response (subscription_key / request_id).
+        """
+        return await self._call(
+            ctx,
+            "create_rodin_job",
+            {
+                "text_prompt": text_prompt,
+                "images": images,
+                "bbox_condition": bbox_condition,
+            },
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def poll_rodin_job_status(
+        self,
+        subscription_key: Optional[str] = None,
+        request_id: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        ctx: Context = None,
+    ) -> str:
+        """Poll a Rodin job. Pass ``subscription_key`` for MAIN_SITE, ``request_id`` for FAL_AI."""
+        return await self._call(
+            ctx,
+            "poll_rodin_job_status",
+            {"subscription_key": subscription_key, "request_id": request_id},
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def import_generated_asset(
+        self,
+        name: str,
+        task_uuid: Optional[str] = None,
+        request_id: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_LONG,
+        ctx: Context = None,
+    ) -> str:
+        """Import a completed Rodin GLB into Blender as ``name``.
+
+        Pass ``task_uuid`` for MAIN_SITE, ``request_id`` for FAL_AI.
+        Returns the imported object's name + transform + bounding box.
+        """
+        return await self._call(
+            ctx,
+            "import_generated_asset",
+            {"task_uuid": task_uuid, "request_id": request_id, "name": name},
+            target_uuid,
+            _timeout,
+        )
+
+    # ---- Tier 3d: Sketchfab (2 commands, gate: use_sketchfab) ------
+
+    @mcp_tool()
+    async def search_sketchfab_models(
+        self,
+        query: str,
+        categories: Optional[str] = None,
+        count: int = 20,
+        downloadable: bool = True,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        ctx: Context = None,
+    ) -> str:
+        """Search Sketchfab models. Returns the raw Sketchfab v3 search response."""
+        return await self._call(
+            ctx,
+            "search_sketchfab_models",
+            {
+                "query": query,
+                "categories": categories,
+                "count": count,
+                "downloadable": downloadable,
+            },
+            target_uuid,
+            _timeout,
+        )
+
+    @mcp_tool()
+    async def download_sketchfab_model(
+        self,
+        uid: str,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_LONG,
+        ctx: Context = None,
+    ) -> str:
+        """Download + import a Sketchfab model by its UID (zip-slip protected)."""
+        return await self._call(
+            ctx,
+            "download_sketchfab_model",
+            {"uid": uid},
             target_uuid,
             _timeout,
         )
