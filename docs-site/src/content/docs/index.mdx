@@ -18,24 +18,32 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 BlenderMCP turns Blender into a shared workspace. A central MCP server runs an OAuth-gated, per-user message bus; Blender addons connect as persistent clients; LLM sessions connect as ephemeral clients. Anything can dispatch a job to anything else.
 
-The transport is the standard MCP `notifications/message` log channel — no custom socket, no WebSocket layer. Priorities ride on MCP's eight log levels.
+The HTTP build exposes **34 MCP tools** — 5 bus tools, 5 diagnostics tools, and 24 dispatch tools that wrap Blender's command surface as flat MCP calls. Plus **6 resources** for bus state, scene snapshots, and paginated console scrape, and **9 prompts** covering dispatch recipes and Blender scripting workflows. The transport is the standard MCP `notifications/message` log channel — no custom socket, no WebSocket layer.
 
 <CardGrid stagger>
   <Card title="Get running in 5 minutes" icon="rocket">
-    Boot the server, attach a fake Blender peer, push a job from an LLM client.
+    Boot the server, attach a fake Blender peer, call a dispatch tool.
     <br />[Quickstart](/tutorials/quickstart/)
   </Card>
   <Card title="Use cases" icon="puzzle">
-    Six concrete patterns: render farms, approval workflows, multi-LLM specialization, event broadcast.
+    Seven concrete patterns: render farms, approval workflows, multi-LLM specialization, status-probe-before-dispatch.
     <br />[Use cases](/explanation/use-cases/)
   </Card>
   <Card title="Write a client" icon="seti:python">
-    OAuth login, message handler, JobWaiter, register, dispatch — five stages.
+    Two styles: direct dispatch tool calls vs custom `_message_bus` subscription.
     <br />[Write your own LLM client](/how-to/write-llm-client/)
   </Card>
-  <Card title="Bus tools" icon="setting">
-    Five `blender_*` tools that move messages: register, send, update, list.
+  <Card title="Dispatch tools" icon="setting">
+    24 `blender_*` tools wrapping the addon command registry — scene reads, code exec, asset downloads, msgbus.
+    <br />[Dispatch tools reference](/reference/dispatch-tools/)
+  </Card>
+  <Card title="Bus tools" icon="information">
+    Five low-level tools that move messages: register, send, update, list.
     <br />[Bus tools reference](/reference/bus-tools/)
+  </Card>
+  <Card title="Dispatch vs script" icon="open-book">
+    Typed command tools vs free-form Python — when to use each path.
+    <br />[Command dispatch vs script dispatch](/explanation/dispatch-vs-script/)
   </Card>
 </CardGrid>
 
@@ -44,4 +52,4 @@ The transport is the standard MCP `notifications/message` log channel — no cus
 - **Tutorials** — learn-by-doing paths starting from scratch
 - **How-to** — task-oriented recipes for deployment, client development, command authoring
 - **Reference** — every tool, every parameter, every priority level
-- **Explanation** — the design decisions: why MCP logging, how OAuth isolates buses, why the addon is now a package
+- **Explanation** — the design decisions: why MCP logging, how OAuth isolates buses, how dispatch tools hide the bus

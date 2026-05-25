@@ -1,17 +1,19 @@
 ---
 title: "Prompts"
-description: "MCP prompts: parameterized templates for common bus operations."
+description: "Nine MCP prompts: dispatch helpers, workflow assistants, troubleshooting, and asset pipeline guidance."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The server exposes one MCP prompt that encodes the `blender_send_message` payload convention so LLM clients don't have to remember the shape from scratch.
+Nine prompts. Two are dispatch helpers (encode the message conventions so LLMs don't have to remember them); seven are skeletal workflow guides (return reusable template text — entry points, not full bpy reference). All `blender_`-prefixed via MCPMixin.
 
-## `blender_dispatch_script`
+Prompts are pure templates. None of them call the bus or dispatch anything — the LLM consumes the returned text and decides what to do.
 
-Build a properly-formed `blender_send_message` call for executing Python in Blender.
+## Dispatch helpers
 
-**Signature:**
+### `blender_dispatch_script`
+
+Build a properly-formed `blender_send_message` call for executing Python in Blender via a [`job_dispatch`](/explanation/dispatch-vs-script/) payload.
 
 ```python
 blender_dispatch_script(
@@ -22,7 +24,7 @@ blender_dispatch_script(
 ) -> list[PromptMessage]
 ```
 
-### Target syntax
+**Target syntax:**
 
 | Prefix | Routing | Example |
 |---|---|---|
@@ -33,40 +35,94 @@ blender_dispatch_script(
 
 Unknown prefixes render inline as `<invalid target spec: ...>` so the LLM can see the error rather than silently dropping the dispatch.
 
-### Returned template
+**Returns** a single user-role text message templating the `blender_send_message` call (target fields, priority, full `payload` shape with `message_type: job_dispatch`, `job_id`, `script`, optional `description`).
 
-A single user-role text message templating the call. With `target="uuid:blender-abc123"`, `script="import bpy; print(len(bpy.data.objects))"`, `priority="info"`, `description="count objects"`:
+### `blender_dispatch_recipe`
 
+Emit the canonical MCP call shape for any of the 24 [dispatch tools](/reference/dispatch-tools/).
+
+```python
+blender_dispatch_recipe(command: str) -> list[PromptMessage]
 ```
-To execute this script in Blender, call blender_send_message with:
 
-target_uuid:  blender-abc123
-group_id:     <omit>
-client_type:  <omit>
-priority:     info
-payload:      {
-  "message_type": "job_dispatch",
-  "job_id": "<generate a uuid>",
-  "script": "import bpy; print(len(bpy.data.objects))",
-  "description": "count objects"
-}
-
-Routing precedence is target_uuid > group_id > client_type > broadcast.
-Set exactly one of target_uuid / group_id / client_type (or none for broadcast).
-The job_id inside payload MUST be a fresh UUID; the addon echoes it on completion.
-```
+Inlines a per-command kwargs template + the standard return-shape doc so the LLM can call any dispatch tool without first running `list_tools` and parsing schema. Pass any of the 24 command names (e.g. `"get_scene_info"`, `"download_polyhaven_asset"`).
 
 <Aside type="caution">
-The prompt **builds the template, it doesn't dispatch.** The LLM still calls [`blender_send_message`](/reference/bus-tools/) with the assembled arguments.
+Both dispatch helpers **build templates**, they don't dispatch. The LLM still calls [`blender_send_message`](/reference/bus-tools/) or the relevant [dispatch tool](/reference/dispatch-tools/) with the assembled arguments.
 </Aside>
 
-## Why this is a prompt, not a tool
+## Workflow assistants (skeletal)
 
-A tool would force the LLM through a wrapper, hiding the routing precedence and the `job_id` convention. A prompt surfaces the convention so the LLM can call `blender_send_message` directly with full visibility over routing, priority, and payload shape. Think of the prompt as documentation that the model can ask for inline, not as a remote procedure call.
+These return short reusable templates — patterns and decision trees, not exhaustive bpy reference. Use them as entry points for the LLM to plan an approach before committing to specific tool calls.
+
+### `blender_script_writing_assistant`
+
+```python
+blender_script_writing_assistant(goal: str) -> list[PromptMessage]
+```
+
+bpy patterns relevant to `goal`: imports, context safety, the `bpy.ops` vs `bpy.data` vs `bmesh` decision tree, common operator vs data-API tradeoffs.
+
+### `blender_modeling_workflow`
+
+```python
+blender_modeling_workflow(object_type: str) -> list[PromptMessage]
+```
+
+Operator vs modifier vs `bmesh` vs Geometry Nodes decision tree for the named object type.
+
+### `blender_rendering_setup`
+
+```python
+blender_rendering_setup(engine: str = "cycles") -> list[PromptMessage]
+```
+
+Setup checklist for the named render engine (`cycles` or `eevee`): engine selection, sampling, resolution, camera, world setup.
+
+### `blender_material_creation`
+
+```python
+blender_material_creation(material_kind: str) -> list[PromptMessage]
+```
+
+Principled-BSDF skeleton with inline customization points keyed to `material_kind` (metal, plastic, glass, fabric, etc.).
+
+### `blender_animation_basics`
+
+```python
+blender_animation_basics(animation_type: str) -> list[PromptMessage]
+```
+
+Keyframes vs drivers vs constraints guide for the requested animation type.
+
+## Troubleshooting
+
+### `blender_debug_assistant`
+
+```python
+blender_debug_assistant(error_text: str) -> list[PromptMessage]
+```
+
+Diagnose a Blender traceback. Covers common patterns: context errors, `KeyError`, `AttributeError`, pickle/segfault, blank result, mode-switch failures.
+
+## Asset pipeline
+
+### `blender_asset_creation_strategy`
+
+```python
+blender_asset_creation_strategy(asset_kind: str) -> list[PromptMessage]
+```
+
+Pipeline picker: Hyper3D vs PolyHaven vs Sketchfab vs manual modeling — when each is appropriate based on the asset kind requested.
+
+## Why prompts, not tools
+
+Tools force the LLM through a wrapper that hides the underlying convention. Prompts surface the convention so the LLM can call the next tool (`blender_send_message`, `blender_execute_code`, `blender_download_polyhaven_asset`) directly with full visibility over routing, priority, and payload shape. Think of prompts as documentation the model can ask for inline.
 
 ## Related
 
-- [Bus tools](/reference/bus-tools/) — `blender_send_message`, the call this prompt templates
+- [Bus tools](/reference/bus-tools/) — `blender_send_message`, the call `dispatch_script` templates
+- [Dispatch tools](/reference/dispatch-tools/) — the 24 named tools `dispatch_recipe` emits recipes for
 - [Routing modes](/reference/routing-modes/) — direct / group / type_filter / broadcast
 - [Priority levels](/reference/priorities/) — what to pass for `priority`
-- [Use cases](/explanation/use-cases/) — concrete dispatch patterns this prompt accelerates
+- [Use cases](/explanation/use-cases/) — concrete dispatch patterns these prompts accelerate

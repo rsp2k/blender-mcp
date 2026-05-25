@@ -46,7 +46,15 @@ The server holds:
 
 - `bus_manager: BusManager` — `dict[user_id, UserMessageBus]`
 - `_pending_jobs: dict[job_id, tuple[user_id, originator_uuid]]` — for routing replies
+- `job_waiter: JobWaiter` — `dict[(user_id, job_id), asyncio.Future]` for dispatch-tool round-trips
 - A `BusForwardingHandler` attached to the `_message_bus` logger — every routed message is one `log.info(..., extra={...})` call, the handler turns it into MCP `notifications/message` and pushes via the right `ServerSession`.
+
+The MCP tool surface registered by `build_http_mcp()`:
+
+- `BlenderDiagnosticsComponent` — Blender install probes (5 tools)
+- `BlenderBusComponent` — `register_client`, `send_message`, `job_update`, etc. (5 tools, 2 resources, 1 prompt)
+- `BlenderDispatchComponent` — flat round-trip tools for the 24 addon commands (24 tools, 4 resources)
+- `BlenderPromptsComponent` — skeletal scripting + workflow prompts (8 prompts)
 
 ### Blender addons
 
@@ -65,7 +73,7 @@ Each addon installation is one FastMCP `Client` running on a worker thread insid
   - client/
     - bus_client.py        FastMCP lifecycle + asyncio loop
     - message_pump.py      _on_message notification filter
-    - drainer.py           main-thread timer, priority-queue drain
+    - drainer.py           main-thread timer, priority-queue drain (job_dispatch + command_dispatch)
     - job_reporter.py      blender_job_update reply
   - executor/
     - __init__.py          BlenderCommandExecutor (MRO-mixed)
@@ -79,33 +87,64 @@ Each addon installation is one FastMCP `Client` running on a worker thread insid
 
 The addon is **persistent** (`is_persistent=True`). It registers with a sticky UUID from `addon/identity.py` so reconnects keep the same bus identity.
 
-## Round-trip trace
+## Two dispatch paths
 
-A typical LLM-dispatched job, end to end:
+Both end at the same place — a Blender main-thread execution that reports back via `blender_job_update`. They diverge in what the LLM sends and how the reply reaches it.
+
+### Path A — dispatch tool (`command_dispatch`)
+
+The recommended LLM UX. The MCP client calls a flat tool; the server hides the bus.
+
+1. **LLM client** calls `blender_get_object_info(name="Cube")` — a normal MCP tool invocation.
+
+2. **Middleware** verifies the JWT, sets `current_user_id = "demo"`.
+
+3. **`BlenderDispatchComponent._dispatch`** picks a target Blender client (errors with `no_client` / `ambiguous_target` if zero/many), generates `job_id = "j-7a3f2c1e9b04"`, calls `job_waiter.register(("demo", "j-..."))` which returns an `asyncio.Future`.
+
+4. **The dispatch helper** routes a `command_dispatch` payload (`{message_type, job_id, command:"get_object_info", params:{name:"Cube"}}`) on the user's bus, addressed `direct` to the chosen target. `_pending_jobs[job_id] = ("demo", "server-dispatch:demo")` is recorded so `job_update` can find the originator later.
+
+5. **The bus emits one `_message_bus` log record**; the `BusForwardingHandler` pushes an MCP `notifications/message` down the target's `ServerSession`.
+
+6. **Addon's `message_pump`** decodes, pushes onto the priority queue.
+
+7. **Addon's `drainer`** pops the entry, matches `payload.message_type == "command_dispatch"`, calls `execute_command(job_id, "get_object_info", {"name":"Cube"})`. The executor's `@command`-registered handler runs on Blender's main thread, returns a dict.
+
+8. **`job_reporter.submit_job_update`** calls `blender_job_update("j-...", "completed", result=<json>, error="")` over the addon's MCP transport.
+
+9. **Server-side `job_update`** routes the reply on the bus **and** calls `job_waiter.deliver("demo", "j-...", "completed", result, error)`.
+
+10. **The Future resolves.** The dispatch tool's `await asyncio.wait_for(future, timeout=30)` returns, the tool serializes its wire body, the MCP client gets back JSON.
+
+The LLM sees one tool call → one JSON result. The bus round-trip is invisible.
+
+### Path B — script dispatch (`job_dispatch`)
+
+For custom orchestration: arbitrary scripts, multi-step flows, or LLM clients that want to observe the bus directly.
 
 1. **LLM client** calls `blender_send_message` with `target_uuid="blender-abc"`, `from_uuid="llm-mine"`, `priority="info"`, `payload={message_type:"job_dispatch", job_id:"job-1", script:"..."}`.
 
 2. **Middleware** verifies the JWT, sets `current_user_id = "demo"`.
 
-3. **Bus tool** (`BlenderBusComponent.send_message`) reads `current_user_id`, gets `bus = bus_manager.get_bus("demo")`, builds `routing={"type":"direct","target_uuid":"blender-abc"}`, calls `bus.route(...)`.
+3. **`BlenderBusComponent.send_message`** records `_pending_jobs["job-1"] = ("demo", "llm-mine")`, calls `bus.route(...)`.
 
-4. **UserMessageBus.route** resolves targets (`blender-abc`), records `_pending_jobs["job-1"] = ("demo", "llm-mine")`, then emits one `_message_bus` log record per target with the full `data` dict in `extra`.
+4. **Bus + forwarding handler** deliver an MCP `notifications/message` to the addon's session (steps 4–6 of Path A, identical).
 
-5. **BusForwardingHandler** receives the log record, looks up the target's `ClientInfo.session`, and pushes an MCP `notifications/message` via that session at log level `info`.
+5. **Addon's drainer** matches `payload.message_type == "job_dispatch"`, calls `execute_script(job_id, script)`. The script `exec`s in the main thread with `bpy`, `bmesh`, `mathutils`, `executor` in scope; stdout is captured.
 
-6. **Addon's BlenderMCPClient._on_message** receives the notification, hands it to `message_pump.handle_message`. The pump filters on `logger == "_message_bus"`, decodes `data`, pushes onto the addon's heap-based priority queue.
+6. **`job_reporter.submit_job_update`** calls `blender_job_update("job-1", "completed", result=<stdout>, error="")`.
 
-7. **Addon's drainer** (Blender main-thread timer, ~100ms cadence) pops the highest-priority entry, sees `target_uuid` matches its own UUID, sees `payload.message_type == "job_dispatch"`, calls `execute_script(job_id, script)`.
+7. **Server-side `job_update`** looks up `_pending_jobs["job-1"]`, routes the reply `direct` to `llm-mine`. The same call also fires `job_waiter.deliver(...)` — a no-op here because `llm-mine` never registered a server-side Future.
 
-8. **Script runs** in the Blender main thread with `bpy`, `bmesh`, `mathutils`, `executor` in scope. Stdout is captured.
+8. **LLM client's `on_message`** filters on `_message_bus`, decodes, sees `payload.kind == "job_update"`, resolves its **own** client-side JobWaiter for `job-1`. The caller's `await` returns.
 
-9. **job_reporter.submit_job_update** marshals a `blender_job_update` call onto the worker's asyncio loop. The call sends `{job_id, status:"completed", result:<stdout>, error:""}` over the addon's MCP transport.
+### The shared reply machinery
 
-10. **Server-side `job_update`** reads `current_user_id` (the addon's user), looks up `_pending_jobs["job-1"]`, finds `("demo", "llm-mine")`, confirms same-user, calls `bus.route` with `routing={"type":"direct","target_uuid":"llm-mine"}` at `priority=NOTICE`.
+Steps 6–9 in Path A and steps 5–7 in Path B are the same code. `blender_job_update` doesn't know which path the dispatch came from. The two paths diverge only in:
 
-11. **The forwarding handler** pushes the resulting `notifications/message` down the LLM client's session.
+- **What the addon's drainer dispatches** — `execute_script` vs `execute_command` (one `if/elif` branch in `drainer.py`).
+- **Who holds the reply Future** — `JobWaiter` on the server for Path A, the LLM client's own waiter for Path B.
 
-12. **LLM client's `on_message`** filters on `_message_bus`, decodes, sees `payload.kind == "job_update"`, resolves the JobWaiter future for `job-1`. Caller's `await` returns.
+`job_waiter.deliver()` is intentionally a no-op when no Future is registered for the `(user_id, job_id)` key. That makes the JobWaiter purely additive: legacy `send_message` + listen-for-notification clients keep working unchanged, and the dispatch tools just happen to register a Future before sending.
 
 ## Key properties
 
@@ -119,6 +158,8 @@ The server is intended to run as a **single instance**. Sharing buses across ins
 
 ## Related
 
+- [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/) — when to use each path
+- [Dispatch tools reference](/reference/dispatch-tools/) — all 24 tool signatures
 - [Why MCP logging as a bus](/explanation/why-mcp-logging/) — the design rationale
 - [OAuth and per-user buses](/explanation/oauth-buses/) — JWT, ContextVar, isolation
 - [Addon package tour](/explanation/addon-package-tour/) — why the addon is split this way

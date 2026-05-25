@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Boot the BlenderMCP server, attach a fake Blender peer, dispatch a job from an LLM client, see the reply. Five minutes."
+description: "Boot the BlenderMCP server, attach a fake Blender peer, call a dispatch tool, see the reply. Five minutes."
 ---
 
 import { Steps, Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
@@ -43,7 +43,7 @@ End-to-end in five steps. No real Blender required — a stub peer stands in for
 
    Save the token as `TOKEN=...` for the next two terminals.
 
-3. **Run a fake Blender peer** in terminal 2. This subscribes to the bus, prints anything addressed to it, and replies to `job_dispatch` payloads.
+3. **Run a fake Blender peer** in terminal 2. This registers as a persistent `blender` client and responds to both `command_dispatch` and `job_dispatch` payloads.
 
    ```bash
    uv run python examples/fake_blender_peer.py \
@@ -61,23 +61,25 @@ End-to-end in five steps. No real Blender required — a stub peer stands in for
    [peer] waiting for jobs...
    ```
 
-4. **Dispatch a job from an LLM client** in terminal 3.
+4. **Call a dispatch tool** in terminal 3 — the simplest happy path. No `job_id`, no subscription, no notification filtering. The server hides the bus round-trip.
 
    ```bash
-   uv run python examples/llm_client_example.py \
-     --server http://localhost:8000/mcp \
-     --token "$TOKEN" \
-     --target blender-demo01 \
-     --script 'import bpy; print(len(bpy.data.objects))'
+   curl -s -X POST http://localhost:8000/mcp \
+     -H "authorization: Bearer $TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+          "params":{"name":"blender_get_scene_info","arguments":{}}}'
    ```
 
-   Expected output:
+   Expected output (single MCP tool result, JSON-encoded):
 
+   ```json
+   {"status":"completed","command":"get_scene_info",
+    "target_uuid":"blender-demo01","job_id":"j-7a3f2c1e9b04",
+    "result":"{\"name\":\"Scene\",\"object_count\":3,...}","error":""}
    ```
-   [llm] send_message -> job_id=job-9c2f...
-   [llm] received job_update status=completed
-   [llm] result: 3
-   ```
+
+   The server auto-picked `blender-demo01` because it's the only Blender peer on the user's bus. Pass `target_uuid` in `arguments` to override.
 
 5. **Inspect what's connected.** In a fourth terminal:
 
@@ -95,16 +97,47 @@ End-to-end in five steps. No real Blender required — a stub peer stands in for
 
 ## What just happened
 
-Terminal 2 registered as a **persistent** client (`is_persistent=true`) of type `blender`. Terminal 3 connected, called `blender_send_message` with `target_uuid=blender-demo01` and a `job_dispatch` payload. The server emitted one log record on `_message_bus`; the FastAPI forwarding handler turned that into an MCP `notifications/message` and pushed it down terminal 2's subscription. Terminal 2 ran the script on its main thread (the stub fakes this) and called `blender_job_update` with the result. The server looked the `job_id` up in `_pending_jobs`, found terminal 3 as originator, routed the update back.
+Terminal 2 registered as a **persistent** client (`is_persistent=true`) of type `blender`. Terminal 3 called `blender_get_scene_info` — a flat MCP tool. The server's dispatch component:
 
-The same flow works with a real Blender addon — only the script execution side changes.
+1. Auto-picked the lone `blender` client (`blender-demo01`) as the target.
+2. Registered a Future via `JobWaiter` keyed on `(demo, j-...)`.
+3. Routed a `command_dispatch` payload through the bus.
+4. The forwarding handler pushed an MCP notification to terminal 2's session.
+5. Terminal 2's drainer dispatched `get_scene_info` to its executor (the stub returns a canned scene snapshot), then called `blender_job_update`.
+6. The server's `job_update` handler called `job_waiter.deliver(...)`. The Future resolved.
+7. The dispatch tool's `await asyncio.wait_for(future)` returned, the JSON wire body went back to terminal 3.
+
+The same flow works against a real Blender addon — the stub just shortcuts the actual `bpy` call.
 
 <Aside type="note">
-The `examples/fake_blender_peer.py` script ships in the repo. It's also the test fixture used by the integration suite — read it if you want a minimal, real `FastMCPClient` subscriber to crib from.
+The `examples/fake_blender_peer.py` script ships in the repo and is the test fixture used by the integration suite. Read it if you want a minimal, real `FastMCPClient` subscriber to crib from.
 </Aside>
+
+## Advanced — dispatch a free-form script
+
+For multi-step Python or anything outside the dispatch tool surface, send a `job_dispatch` payload via `blender_send_message`. This is the original path; it still works.
+
+```bash
+uv run python examples/llm_client_example.py \
+  --server http://localhost:8000/mcp \
+  --token "$TOKEN" \
+  --target blender-demo01 \
+  --script 'import bpy; print(len(bpy.data.objects))'
+```
+
+Expected output:
+
+```
+[llm] send_message -> job_id=job-9c2f...
+[llm] received job_update status=completed
+[llm] result: 3
+```
+
+The example client maintains its own `_message_bus` subscription, a JobWaiter, and a notification filter. See [Write your own LLM client](/how-to/write-llm-client/) for both styles in detail.
 
 ## Next
 
 - Install the real addon and run a job against actual Blender — see [Add an addon command](/how-to/add-an-addon-command/) for the registry walkthrough.
+- Learn when to reach for script-dispatch — see [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/).
 - Build your own LLM client — see [Write your own LLM client](/how-to/write-llm-client/).
 - Understand what's happening under the hood — see [Architecture](/explanation/architecture/) and [Why MCP logging](/explanation/why-mcp-logging/).

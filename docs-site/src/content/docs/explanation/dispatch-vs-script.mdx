@@ -1,0 +1,183 @@
+---
+title: "Command dispatch vs script dispatch"
+description: "Two paths into Blender — typed command tools vs free-form script execution. When each is the right answer."
+---
+
+import { Aside, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
+
+Two payloads can land on a Blender addon: `command_dispatch` (a named handler with typed kwargs) and `job_dispatch` (an arbitrary Python script). Both round-trip through the same bus, both resolve through the same reply machinery. They differ in what the LLM sends and what runs on the addon side.
+
+## The default answer
+
+For almost every LLM call, use a dispatch tool directly:
+
+```
+blender_get_scene_info()
+blender_get_object_info(name="Cube")
+blender_download_polyhaven_asset(asset_id="kloofendal_43d_clear_puresky", asset_type="hdris")
+blender_execute_code(code="import bpy; print(len(bpy.data.objects))")
+```
+
+Each is a flat MCP tool. The LLM calls it like any other tool, gets a JSON result back, moves on. No `job_id` to invent, no `_message_bus` subscription to maintain, no notification filter to write.
+
+The bus is still there — the server runs the round-trip under the hood — but the LLM doesn't see it.
+
+## When to reach for `job_dispatch`
+
+`blender_send_message` with a `job_dispatch` payload is the escape hatch. Use it when:
+
+- **Multi-step Python in one round-trip.** A script that allocates a mesh, runs bmesh operations, materializes the object, links it to the collection, and reports back is one bus hop. The equivalent as separate command calls is N hops with N timeouts.
+- **`bmesh` and other low-level APIs** that aren't wrapped as `@command` handlers. The dispatch surface covers what the addon's registry exposes; everything else needs `execute_code` or `job_dispatch`.
+- **Stateful patterns** — script-local variables that survive across statements in one execution context. Multiple `execute_code` calls each get a fresh `exec_globals`.
+- **Tools you're prototyping.** Faster to send a script than to add a `@command` handler, rebuild the addon, and reinstall it.
+
+`blender_execute_code` is the middle ground — it's a dispatch tool, so it gets the synchronous-feel, but the body is a free-form Python string. Reach for raw `job_dispatch` only when you want to bypass the per-tool timeout cap or layer additional metadata on the payload.
+
+## Decision tree
+
+<CardGrid>
+  <Card title="Need scene/object data?" icon="information">
+    `blender_get_scene_info`, `blender_get_object_info`, `blender_browse_data`, or the `blender://scene/*` resources.
+  </Card>
+  <Card title="Need to run Python?" icon="seti:python">
+    `blender_execute_code(code=...)`. Returns stdout. 60s default timeout.
+  </Card>
+  <Card title="Need a screenshot?" icon="seti:image">
+    `blender_get_viewport_screenshot(filepath=...)`. Returns `{filepath, width, height}`.
+  </Card>
+  <Card title="Need PolyHaven/Sketchfab/Rodin?" icon="external">
+    Status probe first (`blender_get_polyhaven_status`), then the matching `_search` / `_download` tool.
+  </Card>
+  <Card title="Need orchestration across steps?" icon="puzzle">
+    One `blender_execute_code` with the whole flow, or `blender_send_message` + `job_dispatch` for full control.
+  </Card>
+  <Card title="Need to observe other dispatches?" icon="open-book">
+    Subscribe to `_message_bus` notifications directly. See [Write your own LLM client](/how-to/write-llm-client/).
+  </Card>
+</CardGrid>
+
+## Tradeoffs
+
+| Axis | `command_dispatch` (via tool) | `job_dispatch` (script) |
+|------|-------------------------------|-------------------------|
+| **Latency** | One bus round-trip per tool call | One round-trip for N statements |
+| **Safety** | Typed kwargs, no `exec` of LLM-generated strings | `exec(compile(script, ...))` — full surface |
+| **Payload size** | Small (kwargs dict) | Whole script string |
+| **Debuggability** | `job_id` in reply; addon handler name in tracebacks | `<job_id>` shows as the source filename in tracebacks |
+| **Expressiveness** | Whatever the handler exposes | Anything bpy/bmesh/mathutils can do |
+| **Versioning** | Tool surface stable across addon updates | Script may break if `bpy` API shifts |
+| **MCP discoverability** | Appears in `list_tools`, schema introspection works | Single tool (`blender_send_message`) with opaque payload |
+
+The dispatch tools were built so the default LLM interaction doesn't need to know about the bus. Script-dispatch stays available because no fixed command surface covers everything Blender can do.
+
+## The JobWaiter mechanic
+
+Both paths resolve through the same `(user_id, job_id)` correlation. A dispatch tool's body:
+
+1. Picks a target Blender client (or returns `no_client` / `ambiguous_target`).
+2. Registers an `asyncio.Future` via the server's `JobWaiter` keyed on `(user_id, job_id)`.
+3. Routes a `command_dispatch` payload through the user's bus to the chosen client.
+4. `await asyncio.wait_for(future, timeout=<per-tool default>)`.
+5. The addon's drainer executes the handler, calls `blender_job_update(job_id, status, result, error)`.
+6. The server's `job_update` tool routes the reply on the bus **and** calls `job_waiter.deliver(user_id, job_id, ...)`.
+7. The Future resolves. The dispatch tool returns its JSON wire body.
+
+A script-dispatch from a custom LLM client does the same thing, except step 2 is implemented client-side (the LLM holds its own JobWaiter and subscribes to `_message_bus`). The reply at step 5 is identical — `blender_job_update` doesn't know or care which path the dispatch came from.
+
+<Aside type="note">
+Even script-dispatches that originate from a dispatch tool (`blender_execute_code`) converge on the same `blender_job_update` → `JobWaiter` resolution. The two payload shapes diverge in the addon's drainer (`execute_script` vs `execute_command`) but the reply machinery is one path.
+</Aside>
+
+## Wire shapes
+
+<Tabs>
+<TabItem label="command_dispatch">
+
+What a dispatch tool sends:
+
+```json
+{
+  "message_type": "command_dispatch",
+  "job_id": "j-7a3f2c1e9b04",
+  "command": "get_object_info",
+  "params": {"name": "Cube"}
+}
+```
+
+What the addon does:
+
+```python
+# addon/client/drainer.py — execute_command
+result = client.executor.execute_command(
+    {"type": command, "params": params}
+)
+```
+
+What comes back:
+
+```json
+{
+  "status": "completed",
+  "command": "get_object_info",
+  "target_uuid": "blender-abc",
+  "job_id": "j-7a3f2c1e9b04",
+  "result": "<addon handler's return value, JSON-encoded>",
+  "error": ""
+}
+```
+
+</TabItem>
+<TabItem label="job_dispatch">
+
+What `blender_send_message` carries with a `job_dispatch` payload:
+
+```json
+{
+  "message_type": "job_dispatch",
+  "job_id": "job-42",
+  "script": "import bpy\nfor o in bpy.data.objects:\n    print(o.name)"
+}
+```
+
+What the addon does:
+
+```python
+# addon/client/drainer.py — execute_script
+with redirect_stdout(output):
+    exec(compile(script, f"<job_{job_id}>", "exec"), exec_globals)
+```
+
+What comes back (via `blender_job_update`):
+
+```json
+{
+  "kind": "job_update",
+  "job_id": "job-42",
+  "status": "completed",
+  "result": "<captured stdout>",
+  "error": ""
+}
+```
+
+</TabItem>
+</Tabs>
+
+## Failure modes
+
+`command_dispatch` adds structured failure statuses the script path doesn't have:
+
+- `no_client` — no Blender peer registered on the user's bus.
+- `ambiguous_target` — multiple Blender peers; pass `target_uuid` to disambiguate.
+- `unknown_target` — `target_uuid` doesn't match any registered client.
+- `timeout` — addon didn't reply within the per-tool deadline; the Future is cancelled.
+- `failed` — handler raised, or the command is gated off in addon preferences.
+- `completed` — handler returned; `result` is the JSON-encoded return value.
+
+`job_dispatch` doesn't have a server-side disambiguation step because `blender_send_message` takes `target_uuid` directly. The same `completed`/`failed` outcome applies, surfaced via the `kind: "job_update"` payload on the bus.
+
+## Related
+
+- [Architecture](/explanation/architecture/) — the full round-trip trace, both paths
+- [Dispatch tools reference](/reference/dispatch-tools/) — all 24 tools with signatures
+- [Write your own LLM client](/how-to/write-llm-client/) — Style A (direct calls) vs Style B (custom subscription)
+- [Use cases](/explanation/use-cases/) — six patterns showing both paths in practice

@@ -1,0 +1,373 @@
+---
+title: "Dispatch tools"
+description: "24 MCP tools that wrap addon @command handlers. Call them directly; the server handles the bus round-trip."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+24 first-class MCP tools, all `blender_`-prefixed, that wrap the addon's `@command` handlers. The LLM calls them like any MCP tool; the server registers a Future via JobWaiter, routes a `command_dispatch` payload through the bus to a Blender peer, awaits the addon's `blender_job_update` reply, and returns the result synchronously. The bus round-trip is invisible from the caller's perspective.
+
+Choose dispatch tools over [`blender_send_message`](/reference/bus-tools/) + script-dispatch unless you need arbitrary Python. See [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/) for the decision tree.
+
+## Common parameters
+
+Every dispatch tool accepts the same two infrastructure parameters in addition to its own:
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `target_uuid` | `None` | Specific Blender client UUID. If omitted and the user's bus has exactly one Blender peer, that one is used. Otherwise returns `ambiguous_target` or `no_client`. |
+| `_timeout` | varies | Seconds to wait for the addon's reply. Underscore-prefixed so it doesn't leak into the addon-side `params` dict. |
+
+Tools also receive a `ctx: Context` injected by FastMCP for auth.
+
+## Return envelope
+
+Every dispatch tool returns a JSON string with this shape:
+
+```json
+{
+  "status": "completed" | "failed" | "timeout" | "no_client" | "ambiguous_target" | "unknown_target",
+  "command": "<command name>",
+  "target_uuid": "<chosen client>",
+  "job_id": "j-<12 hex>",
+  "result": <inner JSON>,
+  "error": "<message or empty>"
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `completed` | Addon handler returned successfully; `result` holds its output |
+| `failed` | Addon handler raised; `error` holds the message |
+| `timeout` | `_timeout` elapsed without an addon reply |
+| `no_client` | No Blender peer on the user's bus could be targeted |
+| `ambiguous_target` | Multiple Blender peers, no `target_uuid` to disambiguate |
+| `unknown_target` | `target_uuid` was set but no matching client is registered |
+
+---
+
+## Tier 1: always-on core (7)
+
+Foundational tools. No gating; always available when at least one Blender peer is connected.
+
+### `blender_get_scene_info`
+
+```python
+blender_get_scene_info(target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Snapshot of the active scene: name, object count, first ~10 objects, materials count.
+
+### `blender_get_object_info`
+
+```python
+blender_get_object_info(name: str, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Detailed descriptor for a specific object by name: transform, mesh stats, material slots. Returns `failed` if `name` doesn't exist.
+
+### `blender_browse_data`
+
+```python
+blender_browse_data(
+    collection: str | None = None,
+    item_name: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    detail_level: str = "summary",
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Paginated `bpy.data.*` browser. Pass `collection="objects"`, `"materials"`, `"meshes"`, etc. Omit `collection` to list available collections. Pass `item_name` to drill into a single item. `detail_level` is `summary` or `full`.
+
+### `blender_execute_code`
+
+```python
+blender_execute_code(code: str, target_uuid: str | None = None, _timeout: float = 60) -> str
+```
+
+Execute arbitrary Python in the Blender main thread. Captures stdout and returns it as `result`. The script's globals include `bpy`, `bmesh`, `mathutils`. Use this when no dedicated dispatch tool exists for the operation; for multi-step orchestration in a single round-trip, see [`blender_send_message`](/reference/bus-tools/) with a `job_dispatch` payload.
+
+### `blender_get_viewport_screenshot`
+
+```python
+blender_get_viewport_screenshot(
+    filepath: str,
+    max_size: int = 800,
+    format: str = "png",
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Save a 3D viewport screenshot to `filepath`. The image is resized so its longest edge is `max_size`. `format` is `png` or `jpg`.
+
+### `blender_get_console_output`
+
+```python
+blender_get_console_output(
+    level: str = "all",
+    page: int = 1,
+    page_size: int = 50,
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Paginated scrape of the Blender console. `level` filters lines by kind: `all`, `info`, `warning`, `error`, `output`. Also exposed as a resource — see [`blender://console/{level}`](/reference/resources/).
+
+### `blender_console_operations`
+
+```python
+blender_console_operations(
+    operation: str = "get_info",
+    params: dict | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Invoke a `bpy.ops.console.*` operator (e.g. `execute`, `autocomplete`, `clear`). See the addon's `console_operations` handler for the operation catalog.
+
+---
+
+## Tier 2: integration status probes (3)
+
+Always-on. Call these before a Tier-3 tool to check whether the corresponding integration is enabled in the addon's preferences.
+
+### `blender_get_polyhaven_status`
+
+```python
+blender_get_polyhaven_status(target_uuid: str | None = None, _timeout: float = 10) -> str
+```
+
+Returns whether `prefs.use_polyhaven` is enabled.
+
+### `blender_get_hyper3d_status`
+
+```python
+blender_get_hyper3d_status(target_uuid: str | None = None, _timeout: float = 10) -> str
+```
+
+Returns Hyper3D Rodin integration state: enabled flag, mode (`MAIN_SITE` or `FAL_AI`), key type (trial vs configured).
+
+### `blender_get_sketchfab_status`
+
+```python
+blender_get_sketchfab_status(target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Returns Sketchfab integration state. Validates the configured API key against `/v3/me` (hence the longer timeout).
+
+---
+
+## Tier 3a: msgbus (5, ungated)
+
+Bridge to Blender's RNA `bpy.msgbus` for change notifications.
+
+### `blender_msgbus_clear_by_owner`
+
+```python
+blender_msgbus_clear_by_owner(owner_id: str = "default", target_uuid: str | None = None, _timeout: float = 10) -> str
+```
+
+Drop all `bpy.msgbus` subscriptions owned by `owner_id`.
+
+### `blender_msgbus_publish_rna`
+
+```python
+blender_msgbus_publish_rna(data_path: str | None = None, target_uuid: str | None = None, _timeout: float = 10) -> str
+```
+
+Publish an RNA-property change. `data_path` in `frame_current`, `active_object`, `selected_objects`. Pass nothing to flush all pending messages.
+
+### `blender_msgbus_subscribe_rna`
+
+```python
+blender_msgbus_subscribe_rna(
+    data_path: str,
+    owner_id: str = "default",
+    notify_type: str = "UPDATE",
+    persistent: bool = True,
+    target_uuid: str | None = None,
+    _timeout: float = 10,
+) -> str
+```
+
+Subscribe to RNA-property changes. Notifications queue in the addon for later drainage.
+
+### `blender_msgbus_get_notifications`
+
+```python
+blender_msgbus_get_notifications(
+    owner_id: str | None = None,
+    clear: bool = False,
+    target_uuid: str | None = None,
+    _timeout: float = 10,
+) -> str
+```
+
+Drain the addon's RNA-change notification queue. Set `clear=True` to also drop the queued entries.
+
+### `blender_msgbus_list_subscriptions`
+
+```python
+blender_msgbus_list_subscriptions(owner_id: str | None = None, target_uuid: str | None = None, _timeout: float = 10) -> str
+```
+
+List active RNA subscriptions, optionally filtered by `owner_id`.
+
+---
+
+## Tier 3b: PolyHaven (4, gate: `use_polyhaven`)
+
+CC0 asset library. Probe with `blender_get_polyhaven_status` before calling.
+
+### `blender_get_polyhaven_categories`
+
+```python
+blender_get_polyhaven_categories(asset_type: str, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+`asset_type` in `hdris`, `textures`, `models`, `all`.
+
+### `blender_search_polyhaven_assets`
+
+```python
+blender_search_polyhaven_assets(
+    asset_type: str | None = None,
+    categories: str | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Search. Addon caps the response at 20 entries.
+
+### `blender_download_polyhaven_asset`
+
+```python
+blender_download_polyhaven_asset(
+    asset_id: str,
+    asset_type: str,
+    resolution: str = "1k",
+    file_format: str | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 120,
+) -> str
+```
+
+Download + import. Models prefer glTF; HDRIs default to `.hdr`; textures default to `.jpg`. HDRIs replace the active world, textures create a new material, models append to the active scene.
+
+### `blender_set_texture`
+
+```python
+blender_set_texture(object_name: str, texture_id: str, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Apply a previously-downloaded texture to `object_name`. Builds a fresh Principled-BSDF material; handles ARM packing and AO multiplication into base color.
+
+---
+
+## Tier 3c: Hyper3D Rodin (3, gate: `use_hyper3d`)
+
+3D-model generation. Two backends (`MAIN_SITE` / `FAL_AI`) selected by addon prefs. Probe with `blender_get_hyper3d_status`.
+
+### `blender_create_rodin_job`
+
+```python
+blender_create_rodin_job(
+    text_prompt: str | None = None,
+    images: list | None = None,
+    bbox_condition: Any | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 60,
+) -> str
+```
+
+Start a text-to-3D or image-to-3D job. `images` shape varies by backend: `MAIN_SITE` wants `[[suffix, base64_data], ...]`; `FAL_AI` wants `[url, ...]`. Returns the provider's raw response (`subscription_key` or `request_id`).
+
+### `blender_poll_rodin_job_status`
+
+```python
+blender_poll_rodin_job_status(
+    subscription_key: str | None = None,
+    request_id: str | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 10,
+) -> str
+```
+
+Pass `subscription_key` for `MAIN_SITE`, `request_id` for `FAL_AI`.
+
+### `blender_import_generated_asset`
+
+```python
+blender_import_generated_asset(
+    name: str,
+    task_uuid: str | None = None,
+    request_id: str | None = None,
+    target_uuid: str | None = None,
+    _timeout: float = 120,
+) -> str
+```
+
+Import a completed Rodin GLB. Pass `task_uuid` for `MAIN_SITE`, `request_id` for `FAL_AI`. Returns the imported object's name, transform, and bounding box.
+
+---
+
+## Tier 3d: Sketchfab (2, gate: `use_sketchfab`)
+
+Marketplace asset import. Probe with `blender_get_sketchfab_status`.
+
+### `blender_search_sketchfab_models`
+
+```python
+blender_search_sketchfab_models(
+    query: str,
+    categories: str | None = None,
+    count: int = 20,
+    downloadable: bool = True,
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Returns the raw Sketchfab v3 search response.
+
+### `blender_download_sketchfab_model`
+
+```python
+blender_download_sketchfab_model(uid: str, target_uuid: str | None = None, _timeout: float = 120) -> str
+```
+
+Download + import by UID. Zip-slip protected.
+
+---
+
+## Gates: how Tier-3 disablement works
+
+<Aside type="caution">
+Tier-3 gates are evaluated **addon-side**, not in the MCP tool. If a gated integration is off in the addon's preferences, the dispatch tool still runs to completion — the addon just returns `{"status": "failed", "error": "Unknown command type: <name>"}`. There's no client-side pre-filter.
+</Aside>
+
+The recommended pattern: probe with a Tier-2 status tool first, branch on the result. Example:
+
+```python
+status = json.loads(await client.call_tool("blender_get_polyhaven_status", {}))
+if json.loads(status["result"]).get("enabled"):
+    assets = await client.call_tool(
+        "blender_search_polyhaven_assets", {"asset_type": "textures"}
+    )
+else:
+    raise RuntimeError("PolyHaven disabled — enable in addon prefs")
+```
+
+## Related
+
+- [Bus tools](/reference/bus-tools/) — the control plane (`blender_send_message`, `blender_register_client`, etc.)
+- [Addon commands](/reference/addon-commands/) — the underlying `@command` handler registry these tools wrap
+- [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/) — when to use these tools vs `blender_send_message` with a script
+- [Resources](/reference/resources/) — `blender://scene/*` and `blender://console/*` share the same dispatch round-trip
