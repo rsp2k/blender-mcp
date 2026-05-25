@@ -17,12 +17,14 @@ from .operators import (
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
+    BLENDERMCP_OT_TestConnection,
 )
 from .panel import BLENDERMCP_PT_Panel
 
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
     BLENDERMCP_PT_Panel,
+    BLENDERMCP_OT_TestConnection,
     BLENDERMCP_OT_Login,
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
@@ -36,4 +38,5 @@ __all__ = [
     "BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey",
     "BLENDERMCP_OT_StartServer",
     "BLENDERMCP_OT_StopServer",
+    "BLENDERMCP_OT_TestConnection",
 ]

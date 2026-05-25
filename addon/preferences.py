@@ -114,7 +114,11 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         layout = self.layout
         col = layout.column(align=True)
         col.label(text="Connection", icon='NETWORK_DRIVE')
-        col.prop(self, "server_url")
+        # Server URL + Test Connection on one row — quick reachability check
+        # without round-tripping a full login.
+        row = col.row(align=True)
+        row.prop(self, "server_url")
+        row.operator("blendermcp.test_connection", text="", icon='URL')
         col.prop(self, "username")
         # JWT is shown but read-only-ish: clicking the field reveals it,
         # but the Login operator is the normal way to populate it.

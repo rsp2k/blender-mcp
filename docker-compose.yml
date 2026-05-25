@@ -50,7 +50,13 @@ services:
       caddy.tls.import: rfc2136_local
       caddy.encode: zstd gzip
       # Streaming MCP survival — see file header for rationale.
+      # The bare ``transport: http`` label is required: caddy-docker-proxy
+      # renders ``caddy.reverse_proxy.transport.*`` as a ``transport { ... }``
+      # block, but Caddy needs an explicit transport TYPE before the block
+      # (``transport http { ... }``). Without it, Caddyfile parsing rejects
+      # the whole reverse_proxy directive at load time.
       caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport: "http"
       caddy.reverse_proxy.transport.read_timeout: "0"
       caddy.reverse_proxy.transport.write_timeout: "0"
       caddy.reverse_proxy.transport.keepalive: "5m"

@@ -14,12 +14,69 @@ import requests  # for catching requests.exceptions.RequestException
 
 from .. import state
 from ..auth import LoginError, login
+from ..auth.login import _auth_base
 from ..client import BlenderMCPClient
 from ..client.bus_client import FASTMCP_AVAILABLE
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
 from ..preferences import get_prefs
+
+
+class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
+    """Probe the configured server's /health endpoint and report status.
+
+    Quick smoke test the user can run BEFORE clicking Login — confirms
+    the server URL is reachable, the certificate validates, and the
+    health check returns 200 with a sensible body. Saves a round of
+    "wrong URL?" / "is the server up?" diagnostic guessing.
+
+    Uses a 3-second timeout so a missing host fails fast in the UI
+    rather than freezing Blender's prefs panel.
+    """
+
+    bl_idname = "blendermcp.test_connection"
+    bl_label = "Test Connection"
+    bl_description = "GET {server_url}/health with a 3s timeout; report status to the operator log"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        server_url = prefs.server_url
+        if not server_url:
+            self.report({'ERROR'}, "Server URL is empty")
+            return {'CANCELLED'}
+
+        health_url = f"{_auth_base(server_url)}/health"
+        try:
+            resp = requests.get(health_url, timeout=3.0)
+        except requests.exceptions.Timeout:
+            self.report({'ERROR'}, f"Timeout (>3s) hitting {health_url}")
+            return {'CANCELLED'}
+        except requests.exceptions.SSLError as e:
+            self.report({'ERROR'}, f"TLS error: {e}")
+            return {'CANCELLED'}
+        except requests.exceptions.ConnectionError as e:
+            self.report({'ERROR'}, f"Cannot reach {health_url}: {e}")
+            return {'CANCELLED'}
+        except requests.exceptions.RequestException as e:
+            self.report({'ERROR'}, f"Network error: {e}")
+            return {'CANCELLED'}
+
+        if resp.status_code != 200:
+            self.report({'ERROR'}, f"FAILED: HTTP {resp.status_code} from {health_url}")
+            return {'CANCELLED'}
+
+        # Compact body summary — /health returns
+        #   {"status": "healthy", "buses": N, "clients_per_bus": {...}}
+        try:
+            body = resp.json()
+            buses = body.get("buses", "?")
+            status = body.get("status", "?")
+            self.report({'INFO'}, f"OK — server {status}, {buses} bus(es) active")
+        except ValueError:
+            # /health didn't return JSON — odd but not fatal; still 200.
+            self.report({'INFO'}, f"OK — HTTP 200 (non-JSON body, {len(resp.content)} bytes)")
+        return {'FINISHED'}
 
 
 class BLENDERMCP_OT_Login(bpy.types.Operator):
