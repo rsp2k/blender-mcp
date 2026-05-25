@@ -14,6 +14,7 @@ from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prom
 from fastmcp.prompts.prompt import PromptMessage
 from mcp.types import TextContent
 
+from .job_waiter import job_waiter
 from .message_bus import bus_manager, ClientInfo
 from .message_router import Priority, parse_priority
 
@@ -184,6 +185,10 @@ class BlenderBusComponent(MCPMixin):
             priority=Priority.NOTICE,
             job_id=job_id,
         )
+        # Wake any awaiter registered through the dispatch_component layer.
+        # No-op if the job came from old-style send_message + listen-pattern
+        # callers (no Future was ever registered for it).
+        job_waiter.deliver(user_id, job_id, status, result, error)
         # Terminal states clean up the tracking entry.
         if status in {"completed", "failed", "cancelled"}:
             _pending_jobs.pop(job_id, None)

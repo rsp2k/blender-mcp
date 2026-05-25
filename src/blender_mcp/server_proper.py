@@ -19,6 +19,7 @@ from fastmcp import FastMCP
 
 from .bus_tools import BlenderBusComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
+from .dispatch_component import BlenderDispatchComponent
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +41,20 @@ def build_stdio_mcp() -> FastMCP:
 def build_http_mcp() -> FastMCP:
     """Build the HTTP MCP server.
 
-    Diagnostics + bus tools. The bus tools resolve user identity from a
-    ContextVar set by the FastAPI middleware in `oauth_server.py` after
-    JWT verification.
+    Diagnostics + bus tools + dispatch tools. The bus tools and dispatch
+    tools both resolve user identity from a ContextVar set by the FastAPI
+    middleware in `oauth_server.py` after JWT verification.
+
+    - Diagnostics: open-access helpers (Blender install probes)
+    - Bus tools: low-level register/send/list (used by addon + advanced clients)
+    - Dispatch tools: flat round-trip tools for the 24 addon commands;
+      shield MCP clients from job_id correlation and notification-listening
     """
     server = FastMCP("BlenderMCP")
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
     BlenderBusComponent().register_all(mcp_server=server, prefix="blender")
-    logger.info("FastMCP server built (HTTP): diagnostics + bus")
+    BlenderDispatchComponent().register_all(mcp_server=server, prefix="blender")
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch")
     return server
 
 

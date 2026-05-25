@@ -60,24 +60,54 @@ def make_handler(holder: dict, peer_uuid: str):
             if payload.get("kind") == "job_update":
                 return  # don't loop on our own reply
 
-            if payload.get("message_type") != "job_dispatch":
-                return
-
+            msg_type = payload.get("message_type")
             job_id = payload.get("job_id")
-            script = payload.get("script", "")
-            print(f"[peer] job_dispatch job_id={job_id} script_len={len(script)}")
+            if not job_id:
+                return
 
             client = holder.get("client")
             if client is None:
                 return
 
-            await client.call_tool("blender_job_update", {
-                "job_id": job_id,
-                "status": "completed",
-                "result": f"(fake-peer) executed:\n{script}",
-                "error": "",
-            })
-            print(f"[peer] job_update sent for {job_id}")
+            # Reply shape varies by message_type so the round-trip can be
+            # asserted against the same fake-peer for both legacy
+            # ``job_dispatch`` and the new ``command_dispatch`` path.
+            if msg_type == "job_dispatch":
+                script = payload.get("script", "")
+                print(f"[peer] job_dispatch job_id={job_id} script_len={len(script)}", file=sys.stderr)
+                result_str = f"(fake-peer) executed:\n{script}"
+            elif msg_type == "command_dispatch":
+                command = payload.get("command", "")
+                params = payload.get("params", {})
+                print(
+                    f"[peer] command_dispatch job_id={job_id} command={command} "
+                    f"params={json.dumps(params)[:80]}",
+                    file=sys.stderr,
+                )
+                result_str = json.dumps({
+                    "echoed_command": command,
+                    "echoed_params": params,
+                })
+            else:
+                return  # unknown message type — ignore
+
+            # Reply must NOT be awaited from inside the handler — doing so
+            # holds the message-dispatch slot and blocks subsequent
+            # notifications from being delivered to this handler. Fire it as
+            # a background task and let the handler return immediately.
+            async def _reply():
+                try:
+                    await client.call_tool("blender_job_update", {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "result": result_str,
+                        "error": "",
+                    })
+                    print(f"[peer] job_update sent for {job_id}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[peer] reply task error for {job_id}: {e}", file=sys.stderr)
+
+            asyncio.create_task(_reply())
         except Exception as e:
             print(f"[peer] handler error: {e}", file=sys.stderr)
     return handler
