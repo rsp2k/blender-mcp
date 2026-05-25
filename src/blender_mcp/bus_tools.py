@@ -11,8 +11,7 @@ from typing import Any, Optional
 
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prompt
-from fastmcp.prompts.prompt import PromptMessage
-from mcp.types import TextContent
+from fastmcp.prompts.base import Message
 
 from .job_waiter import job_waiter
 from .message_bus import bus_manager, ClientInfo
@@ -243,7 +242,7 @@ class BlenderBusComponent(MCPMixin):
         script: str,
         priority: str = "info",
         description: Optional[str] = None,
-    ) -> list[PromptMessage]:
+    ) -> list[Message]:
         """Render a blender_send_message call template for a Blender job_dispatch."""
         target_uuid_line = "<omit>"
         group_id_line = "<omit>"
@@ -284,4 +283,4 @@ class BlenderBusComponent(MCPMixin):
             "The job_id inside payload MUST be a fresh UUID; the addon echoes it on completion."
         )
 
-        return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+        return [Message(text, role="user")]

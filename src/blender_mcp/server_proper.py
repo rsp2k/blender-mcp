@@ -20,6 +20,7 @@ from fastmcp import FastMCP
 from .bus_tools import BlenderBusComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
+from .prompts_component import BlenderPromptsComponent
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,10 @@ def build_stdio_mcp() -> FastMCP:
     """
     server = FastMCP("BlenderMCP")
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
-    logger.info("FastMCP server built (stdio): diagnostics only")
+    # Prompts are pure templates — no bus, no user_id, no Blender peer needed.
+    # Safe + useful in stdio (prototyping scripts before connecting Blender).
+    BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+    logger.info("FastMCP server built (stdio): diagnostics + prompts")
     return server
 
 
@@ -76,7 +80,11 @@ def build_http_mcp() -> FastMCP:
     # comment in dispatch_component.py above ``console_resource``.
     dispatch.register_templated_resources(mcp_server=server)
 
-    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch")
+    # Skeletal prompts — same registration as stdio (templates only,
+    # no per-request state).
+    BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + prompts")
     return server
 
 
