@@ -121,6 +121,16 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
             return {'CANCELLED'}
 
         prefs.jwt_token = payload.get("access_token", "")
+        # Store refresh token + computed expiry so the bus client can
+        # pre-emptively rotate the JWT before it expires (avoiding the
+        # mid-session 401 wedge). expires_in is a relative duration in
+        # seconds; convert to absolute epoch so a Blender restart doesn't
+        # confuse the math.
+        prefs.refresh_token = payload.get("refresh_token", "")
+        expires_in = int(payload.get("expires_in", 0))
+        if expires_in:
+            import time
+            prefs.jwt_expires_at = str(int(time.time()) + expires_in)
         # Clear the password field so it's not lingering in the UI.
         scene.blendermcp_password_tmp = ""
 
@@ -171,6 +181,7 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         # 3. Clear local credentials. Username stays — it's not a secret,
         #    and forcing the user to retype it on next login is annoying.
         prefs.jwt_token = ""
+        prefs.refresh_token = ""
         prefs.jwt_expires_at = ""
         scene.blendermcp_password_tmp = ""
 
@@ -218,11 +229,23 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
 
             if state._client is None:
                 uuid_mgr = StickyUUIDManager()
+                # Pass refresh creds so the worker can pre-emptively rotate
+                # the JWT before it expires. Falls back gracefully (no refresh)
+                # if refresh_token isn't set — e.g. for prefs migrated from
+                # before the refresh-flow landed.
+                expires_at = 0
+                if prefs.jwt_expires_at:
+                    try:
+                        expires_at = int(prefs.jwt_expires_at)
+                    except ValueError:
+                        pass
                 state._client = BlenderMCPClient(
                     server_url=prefs.server_url,
                     jwt_token=prefs.jwt_token,
                     client_uuid=uuid_mgr.get_client_id(),
                     executor=state._executor,  # injected so drainer exposes to scripts
+                    refresh_token=prefs.refresh_token,
+                    jwt_expires_at=expires_at,
                 )
                 scene.blendermcp_client_id = state._client.client_uuid
 

@@ -65,9 +65,22 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         subtype="PASSWORD",
         default="",
     )
+    refresh_token: StringProperty(
+        name="Refresh Token",
+        description=(
+            "Long-lived refresh token from /auth/login. Used by the bus client "
+            "to mint new access tokens before the current JWT expires, so the "
+            "session doesn't wedge mid-edit."
+        ),
+        subtype="PASSWORD",
+        default="",
+    )
     jwt_expires_at: StringProperty(
         name="JWT Expires At",
-        description="ISO 8601 timestamp of when the access token expires",
+        description=(
+            "Unix epoch (seconds) when the current access token expires. "
+            "The bus client watches this and refreshes ~60s before."
+        ),
         default="",
     )
 

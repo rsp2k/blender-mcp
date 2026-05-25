@@ -44,6 +44,8 @@ class BlenderMCPClient:
         client_uuid: str,
         *,
         executor: Optional[Any] = None,
+        refresh_token: str = "",
+        jwt_expires_at: int = 0,
     ) -> None:
         # Canonicalize: FastAPI mounts the FastMCP ASGI app at /mcp, which
         # 307-redirects /mcp -> /mcp/. httpx (under fastmcp.Client) strips
@@ -60,6 +62,12 @@ class BlenderMCPClient:
         # scripts can call into the polyhaven/hyper3d/etc. helpers as
         # `executor.search_polyhaven_assets(...)`.
         self.executor = executor
+        # Refresh-flow state: refresh_token + epoch-seconds expiry. When
+        # populated, the worker pre-emptively rotates the JWT ~60s before
+        # expiry to avoid mid-session 401 wedges. Empty refresh_token =>
+        # rotation disabled (best-effort backward compat for older prefs).
+        self.refresh_token = refresh_token
+        self.jwt_expires_at = jwt_expires_at  # 0 = unknown, treat as no-rotate
 
         self.client: Optional[Any] = None   # fastmcp.Client (inside worker loop)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -67,6 +75,10 @@ class BlenderMCPClient:
         self.running = False
         self.connected = False
         self.last_error: Optional[str] = None
+        # Set by _refresh_watcher to signal that _run should tear down the
+        # current FastMCP Client and reopen with the rotated JWT. Cleared
+        # after reconnect completes.
+        self._rotate_requested = False
 
         # Priority queue: heap of (priority_int, timestamp, job_payload).
         self.job_queue: list = []
@@ -124,6 +136,88 @@ class BlenderMCPClient:
         from .message_pump import handle_message
         await handle_message(self, message)
 
+    # --- JWT auto-rotation -------------------------------------------------
+
+    async def _refresh_watcher(self) -> None:
+        """Wake ~60s before JWT expiry, swap in a fresh access token.
+
+        Self-cancels via ``self.running``. On refresh success: updates
+        ``self.jwt_token`` + ``self.jwt_expires_at`` + writes through to
+        AddonPreferences (so subsequent Blender restarts don't re-issue
+        a Login prompt before the refresh token itself dies), then sets
+        ``_rotate_requested`` to bounce the FastMCP Client onto the new
+        bearer. On refresh failure: logs, sets last_error, and gives up
+        (user will need to re-Login).
+        """
+        import time
+        from ..auth import LoginError, refresh_token as do_refresh
+
+        while self.running:
+            if not self.jwt_expires_at:
+                # Unknown expiry — best-effort sleep for an hour and recheck.
+                # Avoids busy-looping when started with stale/missing prefs.
+                await asyncio.sleep(3600)
+                continue
+
+            # Refresh 60s before the server would reject; tolerate slow clocks.
+            now = int(time.time())
+            seconds_until_refresh = max(1, self.jwt_expires_at - now - 60)
+            await asyncio.sleep(seconds_until_refresh)
+            if not self.running:
+                return
+
+            try:
+                # /auth/refresh is a synchronous requests.post in the helper;
+                # run it in a thread so the asyncio loop isn't blocked.
+                payload = await asyncio.to_thread(
+                    do_refresh, self.server_url, self.refresh_token,
+                )
+            except LoginError as e:
+                self.last_error = f"JWT refresh failed: {e}"
+                print(f"[BlenderMCP] {self.last_error} — re-Login required")
+                self.running = False
+                return
+            except Exception as e:
+                self.last_error = f"JWT refresh crashed: {e}"
+                print(f"[BlenderMCP] {self.last_error}")
+                # Don't kill the session — try again on the next cycle (server
+                # might just be briefly unreachable).
+                await asyncio.sleep(30)
+                continue
+
+            new_jwt = payload.get("access_token", "")
+            new_expires_in = int(payload.get("expires_in", 0))
+            if not new_jwt or not new_expires_in:
+                print("[BlenderMCP] Refresh returned no token/expiry — abandoning")
+                self.last_error = "Refresh response malformed"
+                self.running = False
+                return
+
+            self.jwt_token = new_jwt
+            self.jwt_expires_at = int(time.time()) + new_expires_in
+            self._persist_rotated_jwt_to_prefs()
+            self._rotate_requested = True
+            print(
+                f"[BlenderMCP] JWT rotated; new exp in {new_expires_in}s — "
+                "reconnect on next loop iteration"
+            )
+
+    def _persist_rotated_jwt_to_prefs(self) -> None:
+        """Best-effort save of the rotated JWT/expiry to AddonPreferences.
+
+        Called from the worker thread; bpy is documented as not thread-safe
+        for many ops, but AddonPreferences writes through a property descriptor
+        that's fine to set from any thread (no mesh/scene mutation involved).
+        Wrapped in a try anyway so a write failure can't kill the worker.
+        """
+        try:
+            from ..preferences import get_prefs
+            prefs = get_prefs()
+            prefs.jwt_token = self.jwt_token
+            prefs.jwt_expires_at = str(self.jwt_expires_at)
+        except Exception as e:
+            print(f"[BlenderMCP] Could not persist rotated JWT to prefs: {e}")
+
     def _drain_queue(self) -> Optional[float]:
         from .drainer import drain_queue
         return drain_queue(self)
@@ -147,55 +241,81 @@ class BlenderMCPClient:
                 pass
 
     async def _run(self) -> None:
-        """Connect, register, subscribe to log notifications, await stop."""
-        transport = StreamableHttpTransport(
-            url=self.server_url,
-            headers={"Authorization": f"Bearer {self.jwt_token}"},
-        )
+        """Connect, register, subscribe to log notifications, await stop.
 
+        Outer loop reconnects on JWT rotation: ``_refresh_watcher`` sets
+        ``_rotate_requested`` after refreshing the access token, causing
+        the inner ``async with`` to exit cleanly and re-enter with the new
+        bearer. Each reconnect re-registers the same client UUID, which the
+        bus treats as an idempotent overwrite.
+        """
+        refresh_task: Optional[asyncio.Task] = None
         try:
-            async with FastMCPClient(transport, message_handler=self._on_message) as client:
-                self.client = client
+            while self.running:
+                self._rotate_requested = False
+                transport = StreamableHttpTransport(
+                    url=self.server_url,
+                    headers={"Authorization": f"Bearer {self.jwt_token}"},
+                )
 
-                # Subscribe to all priority levels.
                 try:
-                    await client.set_logging_level("debug")
-                except Exception as e:
-                    print(f"[BlenderMCP] set_logging_level failed: {e}")
+                    async with FastMCPClient(
+                        transport, message_handler=self._on_message,
+                    ) as client:
+                        self.client = client
 
-                # Register with server.
-                try:
-                    await client.call_tool("blender_register_client", {
-                        "client_uuid": self.client_uuid,
-                        "client_type": "blender",
-                        "is_persistent": True,
-                        "capabilities": [
-                            "python_execution", "modeling", "rendering",
-                            "scene_management", "asset_processing",
-                        ],
-                    })
-                    self.connected = True
-                    print(f"[BlenderMCP] Registered as {self.client_uuid}")
+                        try:
+                            await client.set_logging_level("debug")
+                        except Exception as e:
+                            print(f"[BlenderMCP] set_logging_level failed: {e}")
+
+                        try:
+                            await client.call_tool("blender_register_client", {
+                                "client_uuid": self.client_uuid,
+                                "client_type": "blender",
+                                "is_persistent": True,
+                                "capabilities": [
+                                    "python_execution", "modeling", "rendering",
+                                    "scene_management", "asset_processing",
+                                ],
+                            })
+                            self.connected = True
+                            print(f"[BlenderMCP] Registered as {self.client_uuid}")
+                        except Exception as e:
+                            self.last_error = f"register_client failed: {e}"
+                            print(f"[BlenderMCP] {self.last_error}")
+                            return
+
+                        # Start the refresh watcher (only one — it runs across
+                        # the lifetime of the BlenderMCPClient, not per-reconnect).
+                        if refresh_task is None and self.refresh_token:
+                            refresh_task = asyncio.create_task(self._refresh_watcher())
+
+                        # Wait until stop() flips `running` OR rotation is requested.
+                        while self.running and not self._rotate_requested:
+                            await asyncio.sleep(0.2)
+
+                        # If we're rotating, don't unregister (we'll re-register
+                        # under the new JWT in the next iteration). Only unregister
+                        # on full shutdown.
+                        if not self.running:
+                            try:
+                                await client.call_tool(
+                                    "blender_unregister_client",
+                                    {"client_uuid": self.client_uuid},
+                                )
+                            except Exception as e:
+                                print(f"[BlenderMCP] unregister_client failed: {e}")
                 except Exception as e:
-                    self.last_error = f"register_client failed: {e}"
+                    self.last_error = f"Connection failed: {e}"
                     print(f"[BlenderMCP] {self.last_error}")
                     return
+                finally:
+                    self.connected = False
+                    self.client = None
 
-                # Wait until stop() flips `running`.
-                while self.running:
-                    await asyncio.sleep(0.2)
-
-                # Graceful unregister.
-                try:
-                    await client.call_tool(
-                        "blender_unregister_client",
-                        {"client_uuid": self.client_uuid},
-                    )
-                except Exception as e:
-                    print(f"[BlenderMCP] unregister_client failed: {e}")
-        except Exception as e:
-            self.last_error = f"Connection failed: {e}"
-            print(f"[BlenderMCP] {self.last_error}")
+                if self._rotate_requested and self.running:
+                    print(f"[BlenderMCP] Reconnecting with rotated JWT (exp={self.jwt_expires_at})")
         finally:
-            self.connected = False
-            self.client = None
+            if refresh_task is not None:
+                refresh_task.cancel()
