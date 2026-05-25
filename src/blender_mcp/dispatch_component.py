@@ -44,7 +44,7 @@ import uuid as _uuid_mod
 from typing import Any, Optional
 
 from fastmcp import Context
-from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool
+from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_resource, mcp_tool
 
 from .bus_tools import _pending_jobs, _resolve_user_id
 from .job_waiter import job_waiter
@@ -676,4 +676,74 @@ class BlenderDispatchComponent(MCPMixin):
             {"uid": uid},
             target_uuid,
             _timeout,
+        )
+
+    # ---- Resources (live, dispatch-backed) -------------------------
+    # MCP clients render these as attachable, re-fetchable state snapshots
+    # rather than tool invocations. Each one shares the dispatch round-trip
+    # with the analogous tool above — same JSON shape, same auth/no_client/
+    # ambiguous_target semantics.
+
+    @mcp_resource(uri="blender://scene/info")
+    async def scene_info_resource(self, ctx: Context = None) -> str:
+        """JSON snapshot of the active scene (round-trip ``get_scene_info``)."""
+        return await self._call(ctx, "get_scene_info", {}, None, DEFAULT_TIMEOUT_S)
+
+    @mcp_resource(uri="blender://scene/objects")
+    async def scene_objects_resource(self, ctx: Context = None) -> str:
+        """First page of objects in ``bpy.data.objects`` (round-trip ``browse_data``)."""
+        return await self._call(
+            ctx,
+            "browse_data",
+            {
+                "collection": "objects",
+                "page": 1,
+                "page_size": 50,
+                "detail_level": "summary",
+            },
+            None,
+            DEFAULT_TIMEOUT_S,
+        )
+
+    # Templated resources are NOT decorated with @mcp_resource — that path
+    # (fastmcp.contrib.mcp_mixin.register_resources -> Resource.from_function)
+    # skips the "{" in uri template-detection check that the standalone
+    # @mcp.resource(...) decorator does, so braces get URL-encoded by pydantic
+    # AnyUrl validation and the URI ends up registered as a static URI literal
+    # named ``blender://console/%7Blevel%7D``. Instead we expose them as plain
+    # methods and wire them via :meth:`register_templated_resources` at
+    # server-build time, which uses ``mcp.resource(uri)(method)`` — that path
+    # runs the template detection correctly.
+
+    async def console_resource(self, level: str, ctx: Context = None) -> str:
+        """Page 1 of Blender console (``level`` in {all, info, warning, error, output})."""
+        return await self._call(
+            ctx,
+            "get_console_output",
+            {"level": level, "page": 1, "page_size": 50},
+            None,
+            DEFAULT_TIMEOUT_S,
+        )
+
+    async def console_paged_resource(
+        self, level: str, page: int, ctx: Context = None
+    ) -> str:
+        """Paginated Blender console scrape (``level`` in {all, info, warning, error, output})."""
+        return await self._call(
+            ctx,
+            "get_console_output",
+            {"level": level, "page": page, "page_size": 50},
+            None,
+            DEFAULT_TIMEOUT_S,
+        )
+
+    def register_templated_resources(self, mcp_server) -> None:
+        """Register URI-template resources via ``mcp.resource(uri)(method)``.
+
+        Workaround for the ``mcp_resource`` decorator's latent bug — see the
+        block comment above the methods for details.
+        """
+        mcp_server.resource(uri="blender://console/{level}")(self.console_resource)
+        mcp_server.resource(uri="blender://console/{level}/{page}")(
+            self.console_paged_resource
         )

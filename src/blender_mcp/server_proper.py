@@ -52,8 +52,30 @@ def build_http_mcp() -> FastMCP:
     """
     server = FastMCP("BlenderMCP")
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
-    BlenderBusComponent().register_all(mcp_server=server, prefix="blender")
-    BlenderDispatchComponent().register_all(mcp_server=server, prefix="blender")
+    # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
+    # don't collide with anything else in tool listings, but resources are
+    # registered WITHOUT a prefix — otherwise the MCPMixin double-prefixes the
+    # URI to ``blender+blender://...`` which (a) reads awkwardly to MCP clients
+    # and (b) breaks URI-template detection: pydantic's AnyUrl validation
+    # percent-encodes the ``{...}`` placeholders in the mangled URI, so
+    # ``FunctionResource.from_function`` no longer recognizes it as a template
+    # and registers it as a static URI literally named ``…/%7Blevel%7D``.
+    # Registering resources without prefix keeps URIs as the natural
+    # ``blender://...`` form and preserves template handling.
+    bus = BlenderBusComponent()
+    bus.register_tools(mcp_server=server, prefix="blender")
+    bus.register_resources(mcp_server=server)
+    bus.register_prompts(mcp_server=server, prefix="blender")
+
+    dispatch = BlenderDispatchComponent()
+    dispatch.register_tools(mcp_server=server, prefix="blender")
+    dispatch.register_resources(mcp_server=server)
+    dispatch.register_prompts(mcp_server=server, prefix="blender")
+    # Templated URI resources (e.g. blender://console/{level}) go through a
+    # different code path that supports template detection — see the block
+    # comment in dispatch_component.py above ``console_resource``.
+    dispatch.register_templated_resources(mcp_server=server)
+
     logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch")
     return server
 
