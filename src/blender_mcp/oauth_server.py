@@ -130,22 +130,50 @@ def _verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-USERS: dict[str, dict[str, Any]] = {
-    "admin": {
-        "user_id": "admin",
-        "username": "admin",
-        "password_hash": _hash_password(os.getenv("ADMIN_PASSWORD", "SecureAdmin123!")),
-        "roles": ["admin", "user"],
-        "scopes": ["*"],
-    },
-    "demo": {
-        "user_id": "demo",
-        "username": "demo",
-        "password_hash": _hash_password(os.getenv("DEMO_PASSWORD", "DemoUser456!")),
-        "roles": ["user"],
-        "scopes": ["read", "write"],
-    },
-}
+def _build_users() -> dict[str, dict[str, Any]]:
+    """Construct the in-memory user store from environment variables.
+
+    Hard-fail at module-load time if ``ADMIN_PASSWORD`` isn't set — shipping
+    a weak default ("SecureAdmin123!") that the world has seen in this repo
+    is a credential leak waiting to happen. The compose layer ALSO enforces
+    this via ``${ADMIN_PASSWORD:?}``; this is the defense-in-depth for
+    direct ``uvicorn`` / ``blender-mcp`` invocations that bypass compose.
+
+    Demo user is opt-in: only created when ``DEMO_PASSWORD`` is explicitly
+    set. Production deployments shouldn't have a demo account by default.
+    """
+    admin_password = os.getenv("ADMIN_PASSWORD")
+    if not admin_password:
+        raise RuntimeError(
+            "ADMIN_PASSWORD environment variable is required (no default is "
+            "provided — set it in .env, your shell, or compose). The previous "
+            "default 'SecureAdmin123!' was removed for security."
+        )
+
+    users: dict[str, dict[str, Any]] = {
+        "admin": {
+            "user_id": "admin",
+            "username": "admin",
+            "password_hash": _hash_password(admin_password),
+            "roles": ["admin", "user"],
+            "scopes": ["*"],
+        },
+    }
+
+    demo_password = os.getenv("DEMO_PASSWORD")
+    if demo_password:
+        users["demo"] = {
+            "user_id": "demo",
+            "username": "demo",
+            "password_hash": _hash_password(demo_password),
+            "roles": ["user"],
+            "scopes": ["read", "write"],
+        }
+
+    return users
+
+
+USERS: dict[str, dict[str, Any]] = _build_users()
 
 REFRESH_TOKENS: dict[str, dict[str, Any]] = {}
 

@@ -1,0 +1,118 @@
+# BlenderMCP FastMCP server — caddy-docker-proxy on the warehack.ing fabric.
+#
+# Service naming:
+#   The single reverse-proxy target is named `blender-mcp` (and `blender-mcp-dev`
+#   for the dev profile). Generic names like `server` / `app` / `mcp` would
+#   collide on the shared external `caddy` network — Docker Compose aliases the
+#   service name on every joined network and the caddy fabric is host-wide.
+#
+# TLS / ACME:
+#   `caddy.tls.import: rfc2136_local` references the rfc2136 DNS-01 snippet
+#   defined on the host Caddy. Without it, fresh certificate issuance falls
+#   back to 127.0.0.11 (Docker's embedded DNS, which doesn't know warehack.ing)
+#   and the ACME challenge silently loops forever.
+#
+# Streaming MCP labels:
+#   FastMCP's streamable-HTTP transport at /mcp holds connections open
+#   indefinitely (SSE-style). Caddy's default WebSocket-style idle timeouts
+#   close them around 60s, which manifests as MCP dispatch errors and dropped
+#   tool calls. The flush_interval / read_timeout / write_timeout / keepalive /
+#   stream_timeout block below disables those defaults so long-lived MCP
+#   streams survive. Documented in ~/.claude/CLAUDE.md "HMR Behind Reverse
+#   Proxy" — the same pattern applies to any long-lived stream behind Caddy.
+
+services:
+  blender-mcp:
+    build:
+      context: .
+      target: prod
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp}-prod
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-prod
+    restart: unless-stopped
+    environment:
+      # Required — compose refuses to start without these.
+      OAUTH_SECRET_KEY: ${OAUTH_SECRET_KEY:?OAUTH_SECRET_KEY must be set in .env (JWT signing key)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env (bootstraps admin user)}
+      # Optional — passed through if set in .env, app defaults otherwise.
+      # ``:-<default>`` is required (not ``:-``) because the Python defaults
+      # only fire when ``os.getenv`` returns None, NOT when it returns "". A
+      # bare ``${VAR:-}`` passes the empty string, then int("") raises.
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
+      BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      caddy.reverse_proxy: "{{upstreams 8000}}"
+      caddy.tls.import: rfc2136_local
+      caddy.encode: zstd gzip
+      # Streaming MCP survival — see file header for rationale.
+      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport.read_timeout: "0"
+      caddy.reverse_proxy.transport.write_timeout: "0"
+      caddy.reverse_proxy.transport.keepalive: "5m"
+      caddy.reverse_proxy.stream_timeout: "24h"
+    # Dockerfile already declares a healthcheck against /health via python
+    # urllib (slim image has no curl/wget). Not overriding it here.
+
+  # Dev variant — `docker compose --profile dev up`.
+  # DO NOT run alongside prod: both bind the same DOMAIN on the caddy fabric
+  # and caddy-docker-proxy will pick whichever container started last,
+  # producing confusing flapping. Use one or the other.
+  blender-mcp-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp}-dev
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-dev
+    restart: unless-stopped
+    # Override the image CMD — uvicorn with --reload picks up source changes
+    # from the mounted volumes below. The ASGI app lives at
+    # ``blender_mcp.oauth_server:app`` (FastAPI + mounted FastMCP), NOT at
+    # ``blender_mcp.server`` (which doesn't exist).
+    command:
+      - uvicorn
+      - blender_mcp.oauth_server:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/src
+      - --reload-dir
+      - /app/addon
+    environment:
+      OAUTH_SECRET_KEY: ${OAUTH_SECRET_KEY:?OAUTH_SECRET_KEY must be set in .env (JWT signing key)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env (bootstraps admin user)}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
+      BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Live source mounts — uvicorn --reload watches these dirs.
+      - ./src:/app/src
+      - ./addon:/app/addon
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      caddy.reverse_proxy: "{{upstreams 8000}}"
+      caddy.tls.import: rfc2136_local
+      caddy.encode: zstd gzip
+      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport.read_timeout: "0"
+      caddy.reverse_proxy.transport.write_timeout: "0"
+      caddy.reverse_proxy.transport.keepalive: "5m"
+      caddy.reverse_proxy.stream_timeout: "24h"
+
+networks:
+  caddy:
+    external: true

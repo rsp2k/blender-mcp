@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local environment / secrets (template lives in .env.example)
+.env
