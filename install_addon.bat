@@ -33,25 +33,30 @@ echo ==================================================
 
 REM Get script directory
 set "SCRIPT_DIR=%~dp0"
-set "ADDON_PATH=%SCRIPT_DIR%addon.py"
+set "ADDON_PKG=%SCRIPT_DIR%addon"
+set "ADDON_SHIM=%SCRIPT_DIR%addon.py"
 set "INSTALL_SCRIPT=%SCRIPT_DIR%install_addon.py"
 
-REM Check if addon.py exists
-if not exist "%ADDON_PATH%" (
-    echo %RED%[ERROR]%NC% addon.py not found at: %ADDON_PATH%
-    echo %RED%[ERROR]%NC% Please ensure you're running this script from the BlenderMCP directory
+REM Need at least one of: addon\ package directory or addon.py shim.
+REM install_addon.py prefers the package when both are present.
+if not exist "%ADDON_PKG%\" if not exist "%ADDON_SHIM%" (
+    echo %RED%[ERROR]%NC% Neither addon\ nor addon.py found in: %SCRIPT_DIR%
+    echo %RED%[ERROR]%NC% Please run this script from the BlenderMCP project directory
     pause
     exit /b 1
 )
 
-REM Check if install_addon.py exists
 if not exist "%INSTALL_SCRIPT%" (
     echo %RED%[ERROR]%NC% install_addon.py not found at: %INSTALL_SCRIPT%
     pause
     exit /b 1
 )
 
-echo %GREEN%[SUCCESS]%NC% Found addon.py at: %ADDON_PATH%
+if exist "%ADDON_PKG%\" (
+    echo %GREEN%[SUCCESS]%NC% Found addon\ package at: %ADDON_PKG% (preferred)
+) else (
+    echo %GREEN%[SUCCESS]%NC% Found addon.py shim at: %ADDON_SHIM%
+)
 
 REM Find Blender executable
 echo %BLUE%[INFO]%NC% Searching for Blender installation...

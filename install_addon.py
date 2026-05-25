@@ -1,180 +1,176 @@
 #!/usr/bin/env python3
-"""
-Automated Blender MCP Addon Installation Script
+"""Automated BlenderMCP addon installation, executed inside Blender.
 
-This script automates the installation of the BlenderMCP addon in Blender.
-It can be run via Blender's CLI to install and enable the addon without GUI interaction.
+Usage::
 
-Usage:
     blender -b -y --python install_addon.py
-    or
-    blender -b -y --python install_addon.py -- --addon-path /path/to/addon.py
+    # or to point at a specific addon source:
+    blender -b -y --python install_addon.py -- --addon-path /path/to/addon
+
+Two install paths are supported, in priority order:
+
+1. **Package directory** (default since the 9-phase refactor). If the
+   project ships an ``addon/`` directory next to this script, it's
+   zipped on the fly and handed to
+   ``bpy.ops.preferences.addon_install(filepath=<zip>)``. Blender
+   unpacks the zip into its ``scripts/addons/`` tree so the package
+   layout is preserved.
+
+2. **Single-file shim** (fallback). If only ``addon.py`` is present,
+   it's installed as-is. Useful for the ad-hoc "Install Add-on" file
+   dialog flow inside the Blender UI; less useful programmatically
+   because the shim's ``from addon import register, unregister``
+   needs the ``addon/`` package alongside it.
 """
 
-import bpy
+import argparse
 import os
 import sys
-import argparse
+import tempfile
+import zipfile
 from pathlib import Path
 
-
-def get_addon_info():
-    """Extract addon info from the addon.py file"""
-    addon_path = Path(__file__).parent / "addon.py"
-    
-    if not addon_path.exists():
-        raise FileNotFoundError(f"Addon file not found at: {addon_path}")
-    
-    # Read the bl_info from addon.py
-    with open(addon_path, 'r') as f:
-        content = f.read()
-    
-    # Extract bl_info dictionary (simple approach)
-    bl_info_start = content.find('bl_info = {')
-    if bl_info_start == -1:
-        raise ValueError("Could not find bl_info in addon.py")
-    
-    # Find the closing brace
-    brace_count = 0
-    bl_info_end = bl_info_start
-    for i, char in enumerate(content[bl_info_start:], bl_info_start):
-        if char == '{':
-            brace_count += 1
-        elif char == '}':
-            brace_count -= 1
-            if brace_count == 0:
-                bl_info_end = i + 1
-                break
-    
-    # Extract and evaluate bl_info
-    bl_info_code = content[bl_info_start:bl_info_end]
-    local_vars = {}
-    exec(bl_info_code, {}, local_vars)
-    
-    return addon_path, local_vars['bl_info']
+import bpy
 
 
-def install_blender_mcp_addon(addon_path=None):
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _make_addon_zip(pkg_dir: Path, dest: Path) -> Path:
+    """Zip ``pkg_dir`` so it's installable via ``addon_install``.
+
+    Entries are stored under the package name as the top-level directory
+    so the resulting tree at ``scripts/addons/<pkg>/...`` is correct.
+    ``__pycache__`` and ``*.pyc`` are skipped to keep the archive small.
     """
-    Install and enable the BlenderMCP addon
-    
-    Args:
-        addon_path: Optional path to addon.py file. If None, uses ./addon.py
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(pkg_dir):
+            # Don't descend into bytecode caches.
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                if name.endswith(".pyc"):
+                    continue
+                abs_path = Path(root) / name
+                # Store with `<pkg>/` prefix so Blender unpacks into a
+                # package directory of the same name.
+                arcname = pkg_dir.name + "/" + str(abs_path.relative_to(pkg_dir))
+                zf.write(abs_path, arcname)
+    return dest
+
+
+def _resolve_addon_source(override: str | None) -> tuple[Path, str]:
+    """Return (filepath_to_install, module_name_to_enable).
+
+    For a package directory, returns the zip path and the package name
+    (e.g. ``"addon"``). For a single-file shim, returns the .py path
+    and the filename stem.
     """
-    
-    if addon_path is None:
-        addon_path, bl_info = get_addon_info()
-    else:
-        addon_path = Path(addon_path)
-        if not addon_path.exists():
-            raise FileNotFoundError(f"Addon file not found at: {addon_path}")
-        
-        # For external paths, we need to determine the module name
-        # This is a simplified approach - in practice you'd parse the bl_info
-        bl_info = {"name": "Blender MCP"}
-    
-    addon_path = addon_path.resolve()
-    
-    print(f"Installing BlenderMCP addon from: {addon_path}")
-    print(f"Addon info: {bl_info.get('name', 'Unknown')} v{bl_info.get('version', 'Unknown')}")
-    
+    if override:
+        explicit = Path(override).resolve()
+        if explicit.is_dir() and (explicit / "__init__.py").exists():
+            zip_path = Path(tempfile.mkstemp(suffix=".zip", prefix="addon-")[1])
+            _make_addon_zip(explicit, zip_path)
+            return zip_path, explicit.name
+        if explicit.is_file() and explicit.suffix == ".py":
+            return explicit, explicit.stem
+        raise FileNotFoundError(f"Addon source not found at: {override}")
+
+    # Default discovery: prefer addon/ package, fall back to addon.py shim.
+    pkg_dir = PROJECT_ROOT / "addon"
+    if pkg_dir.is_dir() and (pkg_dir / "__init__.py").exists():
+        zip_path = Path(tempfile.mkstemp(suffix=".zip", prefix="addon-")[1])
+        _make_addon_zip(pkg_dir, zip_path)
+        return zip_path, pkg_dir.name
+
+    shim = PROJECT_ROOT / "addon.py"
+    if shim.is_file():
+        return shim, shim.stem
+
+    raise FileNotFoundError(
+        f"Neither addon/ nor addon.py found alongside {__file__}"
+    )
+
+
+def install_blender_mcp_addon(addon_path: str | None = None) -> bool:
+    """Install + enable the addon. Returns True on success."""
+
     try:
-        # Install the addon
-        bpy.ops.preferences.addon_install(
-            filepath=str(addon_path), 
-            overwrite=True
-        )
+        filepath, module_name = _resolve_addon_source(addon_path)
+    except FileNotFoundError as e:
+        print(f"❌ {e}")
+        return False
+
+    print(f"Installing BlenderMCP from: {filepath}")
+    print(f"Module name to enable:     {module_name}")
+
+    try:
+        bpy.ops.preferences.addon_install(filepath=str(filepath), overwrite=True)
         print("✓ Addon installed successfully")
-        
-        # Enable the addon
-        # The module name is typically the filename without extension
-        module_name = addon_path.stem
+
         bpy.ops.preferences.addon_enable(module=module_name)
         print(f"✓ Addon '{module_name}' enabled successfully")
-        
-        # Configure preferences for optimal MCP usage
+
+        # Configure preferences for optimal MCP usage (unchanged from pre-refactor).
         prefs = bpy.context.preferences
-        
-        # Disable splash screen for smoother automation
         prefs.view.show_splash = False
         print("✓ Splash screen disabled")
-        
-        # Disable save prompts on exit for better automation
         prefs.view.use_save_prompt = False
         print("✓ Save prompts disabled")
-        
-        # Enable mouse emulation for users without 3-button mouse
         prefs.inputs.use_mouse_emulate_3_button = True
         print("✓ Mouse emulation enabled")
-        
-        # Set reasonable save version count
         prefs.filepaths.save_version = 2
         print("✓ Save versions optimized")
-        
-        # Save user preferences to persist the installation
+
         bpy.ops.wm.save_userpref()
         print("✓ User preferences saved")
-        
-        # Verify the addon is enabled
+
         if module_name in bpy.context.preferences.addons:
             print(f"✓ Addon '{module_name}' is now active")
-            
-            # Try to access the addon's functionality
-            addon_prefs = bpy.context.preferences.addons.get(module_name)
-            if addon_prefs:
-                print(f"✓ Addon preferences accessible")
         else:
             print(f"⚠ Warning: Addon '{module_name}' not found in active addons")
-        
+
         print("\n🎉 BlenderMCP addon installation completed successfully!")
         print("\nNext steps:")
         print("1. Open Blender normally (with GUI)")
         print("2. In the 3D Viewport, press 'N' to open the sidebar")
         print("3. Look for the 'BlenderMCP' tab")
-        print("4. Click 'Connect to Claude' to start the server")
-        
+        print("4. Enter your username/password and click Login")
+        print("5. Click 'Connect' to start the bus client")
         return True
-        
+
     except Exception as e:
-        print(f"❌ Error installing addon: {str(e)}")
+        print(f"❌ Error installing addon: {e}")
         import traceback
         traceback.print_exc()
         return False
+    finally:
+        # If we created a temp zip, clean it up.
+        if str(filepath).endswith(".zip") and "addon-" in filepath.name:
+            try:
+                os.unlink(filepath)
+            except OSError:
+                pass
 
 
 def main():
-    """Main function to handle command line arguments and install addon"""
-    
-    # Parse command line arguments (after --)
+    # Parse args after the `--` separator (Blender's convention).
     argv = sys.argv
-    if "--" in argv:
-        argv = argv[argv.index("--") + 1:]
-    else:
-        argv = []
-    
+    argv = argv[argv.index("--") + 1:] if "--" in argv else []
+
     parser = argparse.ArgumentParser(description="Install BlenderMCP addon")
     parser.add_argument(
-        "--addon-path", 
-        help="Path to addon.py file (default: ./addon.py)",
-        default=None
+        "--addon-path",
+        help="Path to addon/ package or addon.py file. Defaults to auto-discovery alongside this script.",
+        default=None,
     )
-    
+
     try:
         args = parser.parse_args(argv)
     except SystemExit:
-        # argparse calls sys.exit() on error, but we want to handle it gracefully
-        print("Using default addon path: ./addon.py")
+        print("Using default addon source (auto-discovery alongside install_addon.py)")
         args = argparse.Namespace(addon_path=None)
-    
-    try:
-        success = install_blender_mcp_addon(args.addon_path)
-        if not success:
-            print("❌ Addon installation failed")
-            sys.exit(1)
-    except Exception as e:
-        print(f"❌ Fatal error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+
+    if not install_blender_mcp_addon(args.addon_path):
         sys.exit(1)
 
 
