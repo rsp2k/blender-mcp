@@ -45,6 +45,14 @@ class BlenderMCPClient:
         *,
         executor: Optional[Any] = None,
     ) -> None:
+        # Canonicalize: FastAPI mounts the FastMCP ASGI app at /mcp, which
+        # 307-redirects /mcp -> /mcp/. httpx (under fastmcp.Client) strips
+        # the Authorization header on redirect by default, so the redirected
+        # request hits the JWT middleware with no Bearer and returns 401.
+        # Append the trailing slash up front so the first request hits the
+        # mount directly.
+        if server_url.endswith("/mcp"):
+            server_url = server_url + "/"
         self.server_url = server_url
         self.jwt_token = jwt_token
         self.client_uuid = client_uuid
