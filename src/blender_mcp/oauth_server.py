@@ -203,8 +203,26 @@ def build_app() -> FastAPI:
     @app.middleware("http")
     async def jwt_middleware(request: Request, call_next):
         # Auth routes pass through; everything else under /mcp needs JWT.
+        # Phase G: also let OAuth-spec endpoints through so OIDCProxy can
+        # serve discovery + DCR + token exchange without our middleware
+        # 401-ing them first. These all live under /mcp/ via the mount.
         path = request.url.path
         if path.startswith("/auth/") or path in ("/health", "/docs", "/openapi.json", "/redoc"):
+            return await call_next(request)
+        # Phase G allowlist: OAuth discovery + endpoints get served by
+        # FastMCP/OIDCProxy without our middleware intercepting. FastMCP
+        # exposes them at /mcp/{register,authorize,token,revoke,callback}
+        # plus /mcp/.well-known/* for discovery.
+        if (
+            "/.well-known/" in path
+            or path in (
+                "/mcp/register", "/mcp/authorize", "/mcp/token",
+                "/mcp/revoke", "/mcp/callback", "/mcp/auth/callback",
+            )
+            or path.startswith("/mcp/authorize/")
+            or path.startswith("/mcp/callback/")
+            or path.startswith("/mcp/auth/callback")
+        ):
             return await call_next(request)
 
         if path.startswith("/mcp"):

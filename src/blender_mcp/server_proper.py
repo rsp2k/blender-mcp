@@ -6,16 +6,26 @@ no way to propagate that identity, so registering the bus tools there just
 gives every caller `unauthenticated` and pollutes tool discovery.
 
 - `build_stdio_mcp()` → diagnostics + install only (open access)
-- `build_http_mcp()`  → diagnostics + bus tools (the bus is OAuth-gated by
-                        the FastAPI middleware in `oauth_server.py`)
+- `build_http_mcp()`  → diagnostics + bus tools (the bus is OAuth-gated)
+
+The HTTP build's auth backend is selected by the ``AUTH_BACKEND`` env var:
+
+- ``AUTH_BACKEND=authentik`` (default): OIDC proxy to Authentik. Requires
+  ``AUTHENTIK_CONFIG_URL``, ``AUTHENTIK_CLIENT_ID``, ``AUTHENTIK_CLIENT_SECRET``,
+  ``PUBLIC_BASE_URL``. Production path.
+- ``AUTH_BACKEND=inmemory``: ``BlenderMCPOAuthProvider`` against a local
+  USERS dict. Local-dev fallback for working on the server when Authentik
+  isn't reachable. Requires ``ADMIN_PASSWORD`` like the pre-Phase-G setup.
 
 `oauth_server` imports the module-level `mcp` (the HTTP build); the stdio
 entry point in `main()` constructs the stdio build on demand.
 """
 
 import logging
+import os
 
 from fastmcp import FastMCP
+from fastmcp.server.auth.auth import AuthProvider
 
 from .bus_tools import BlenderBusComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
@@ -23,6 +33,65 @@ from .dispatch_component import BlenderDispatchComponent
 from .prompts_component import BlenderPromptsComponent
 
 logger = logging.getLogger(__name__)
+
+
+def _build_auth_provider() -> AuthProvider | None:
+    """Pick + construct the auth provider based on AUTH_BACKEND.
+
+    Returns None if auth is intentionally disabled (e.g. for stdio).
+    """
+    backend = os.getenv("AUTH_BACKEND", "authentik").lower()
+
+    if backend == "authentik":
+        from fastmcp.server.auth.oidc_proxy import OIDCProxy
+
+        config_url = os.environ["AUTHENTIK_CONFIG_URL"]
+        client_id = os.environ["AUTHENTIK_CLIENT_ID"]
+        client_secret = os.environ["AUTHENTIK_CLIENT_SECRET"]
+        # ``base_url`` is the public URL where OAuth endpoints live, INCLUDING
+        # any mount path. We mount FastMCP at /mcp in oauth_server.py, so
+        # OAuth endpoints land at /mcp/.well-known/* etc.
+        public_base = os.environ["PUBLIC_BASE_URL"].rstrip("/")
+        base_url = f"{public_base}/mcp"
+
+        logger.info("Auth: OIDCProxy → Authentik (%s)", config_url)
+        return OIDCProxy(
+            config_url=config_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            base_url=base_url,
+            # Authentik already has its own consent screen — skip FastMCP's
+            # second consent UI to avoid double-prompting users.
+            require_authorization_consent="external",
+            # Per-app issuer in Authentik
+            audience=client_id,
+            # Scopes MCP clients can request. The OIDC discovery's
+            # ``scopes_supported`` doesn't auto-propagate into DCR validation,
+            # so we list them explicitly. openid + profile are the standard
+            # OIDC scopes; offline_access lets us mint refresh tokens.
+            required_scopes=["openid"],
+        )
+
+    if backend == "inmemory":
+        from .mcp_oauth_provider import BlenderMCPOAuthProvider
+
+        # Lazy import to avoid pulling bcrypt into auth=authentik path
+        from . import oauth_server as _os
+
+        logger.warning(
+            "Auth: BlenderMCPOAuthProvider (in-memory, local-dev only). "
+            "Set AUTH_BACKEND=authentik for production."
+        )
+        return BlenderMCPOAuthProvider(
+            users=_os.USERS,
+            verify_password=_os._verify_password,
+            base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+            + "/mcp",
+        )
+
+    raise ValueError(
+        f"Unknown AUTH_BACKEND={backend!r}. Use 'authentik' or 'inmemory'."
+    )
 
 
 def build_stdio_mcp() -> FastMCP:
@@ -54,7 +123,8 @@ def build_http_mcp() -> FastMCP:
     - Dispatch tools: flat round-trip tools for the 24 addon commands;
       shield MCP clients from job_id correlation and notification-listening
     """
-    server = FastMCP("BlenderMCP")
+    auth_provider = _build_auth_provider()
+    server = FastMCP("BlenderMCP", auth=auth_provider)
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
     # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
     # don't collide with anything else in tool listings, but resources are

@@ -42,6 +42,14 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Phase G — OAuth backend selection. ``authentik`` (default) requires the
+      # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
+      # against the USERS dict (local dev only).
+      AUTH_BACKEND: ${AUTH_BACKEND:-authentik}
+      AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
     networks:
       - caddy
     labels:
@@ -100,6 +108,14 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Phase G — OAuth backend selection. ``authentik`` (default) requires the
+      # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
+      # against the USERS dict (local dev only).
+      AUTH_BACKEND: ${AUTH_BACKEND:-authentik}
+      AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:
