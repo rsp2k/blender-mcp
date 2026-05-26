@@ -13,6 +13,7 @@ from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prompt
 from fastmcp.prompts.base import Message
 
+from .client_role import require_role
 from .job_waiter import job_waiter
 from .message_bus import bus_manager, ClientInfo
 from .message_router import Priority, parse_priority
@@ -92,6 +93,7 @@ class BlenderBusComponent(MCPMixin):
     """Five-tool message-bus surface."""
 
     @mcp_tool()
+    @require_role("addon")
     async def register_client(
         self,
         client_uuid: str,
@@ -101,7 +103,12 @@ class BlenderBusComponent(MCPMixin):
         group_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Join the caller's user bus. Returns JSON {status, client}."""
+        """Join the caller's user bus. Returns JSON {status, client}.
+
+        Gated to ``addon`` role (phase H): only the BlenderMCP addon should
+        register as a bus participant. LLM clients drive the addon via
+        dispatch tools instead of registering themselves.
+        """
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
@@ -119,8 +126,9 @@ class BlenderBusComponent(MCPMixin):
         return json.dumps({"status": "ok", "client": registered.to_dict()})
 
     @mcp_tool()
+    @require_role("addon")
     async def unregister_client(self, client_uuid: str, ctx: Context = None) -> str:
-        """Leave the user bus."""
+        """Leave the user bus. Gated to ``addon`` role (phase H)."""
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
@@ -183,6 +191,7 @@ class BlenderBusComponent(MCPMixin):
         })
 
     @mcp_tool()
+    @require_role("addon")
     async def job_update(
         self,
         job_id: str,

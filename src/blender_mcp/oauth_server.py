@@ -13,6 +13,7 @@ MCP session — that's the wire transport for the bus.
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -21,10 +22,12 @@ from typing import Any, Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from .bus_tools import current_user_id
+from .client_role import record_client_role
 from .message_bus import bus_manager
 from .message_router import _message_bus, PRIORITY_TO_MCP_LEVEL, Priority
 from .server_proper import mcp
@@ -209,6 +212,67 @@ def build_app() -> FastAPI:
     @app.middleware("http")
     async def jwt_middleware(request: Request, call_next):
         return await call_next(request)
+
+    # ---- DCR-capture middleware (phase H — role attribution) ----
+    # Intercept POST /mcp/register to record (client_id → role) from the
+    # client's declared ``software_id``. We DON'T modify the request or the
+    # response — just snoop the body in flight.
+    #
+    # Pattern: read+restore the request body BEFORE passing through (so
+    # OAuthProxy sees the original), then buffer the response body to
+    # extract the issued client_id (and rebuild a fresh Response so the
+    # client still gets the JSON it expects).
+    @app.middleware("http")
+    async def dcr_role_middleware(request: Request, call_next):
+        if not (request.url.path == "/mcp/register" and request.method == "POST"):
+            return await call_next(request)
+
+        # 1. Snoop the request body, then re-attach for downstream consumers.
+        body_bytes = await request.body()
+        try:
+            req_data = json.loads(body_bytes) if body_bytes else {}
+            software_id = req_data.get("software_id")
+        except json.JSONDecodeError:
+            software_id = None
+
+        async def _replay_receive():
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+        request._receive = _replay_receive  # type: ignore[attr-defined]
+
+        # 2. Pass through; buffer the (streaming) response so we can read it.
+        response = await call_next(request)
+        if not (200 <= response.status_code < 300):
+            return response
+
+        buffered = b""
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+            buffered += chunk
+
+        # 3. Extract client_id from the response body. RFC 7591 guarantees
+        # `client_id` in a successful response. If we can't parse it, log
+        # and pass the response through unmodified — gating just won't apply
+        # to this client (defaults to llm-client).
+        try:
+            resp_data = json.loads(buffered)
+            client_id = resp_data.get("client_id")
+        except json.JSONDecodeError:
+            client_id = None
+
+        if client_id:
+            record_client_role(client_id, software_id)
+        else:
+            logger.warning(
+                "DCR response missing client_id; can't attribute role "
+                "(software_id=%r). Body preview: %r",
+                software_id, buffered[:200],
+            )
+
+        return Response(
+            content=buffered,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.media_type,
+        )
 
     # ---- auth endpoints ----
 

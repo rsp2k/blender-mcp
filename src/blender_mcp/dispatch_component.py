@@ -47,6 +47,7 @@ from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_resource, mcp_tool
 
 from .bus_tools import _pending_jobs, _resolve_user_id
+from .client_role import check_role_or_reject
 from .job_waiter import job_waiter
 from .message_bus import bus_manager
 from .message_router import Priority
@@ -202,7 +203,16 @@ class BlenderDispatchComponent(MCPMixin):
         target_uuid: Optional[str],
         timeout: float = DEFAULT_TIMEOUT_S,
     ) -> str:
-        """Auth-check + dispatch. Returns a JSON-string wire body."""
+        """Auth-check + role-gate + dispatch. Returns a JSON-string wire body.
+
+        Role gating happens here (phase H) because every dispatch tool +
+        every dispatch-backed resource funnels through this method. The
+        ``blender_<command>`` name (vs. the funnel's "_call") appears in
+        rejection logs so audit trails identify the actual offending tool.
+        """
+        rejection = check_role_or_reject(f"blender_{command}", ctx, "llm-client")
+        if rejection:
+            return rejection
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})

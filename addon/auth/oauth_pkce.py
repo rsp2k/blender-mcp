@@ -169,6 +169,14 @@ def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) 
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
+            # RFC 7591 software identity (phase H — role attribution). The
+            # server records (client_id → role="addon") at DCR time and
+            # uses it to gate addon-only tools (bus_register_client etc.)
+            # and reject LLM-client tools the addon shouldn't call. Static
+            # UUID is shared across all addon installs — server only cares
+            # about WHICH KIND of client this is, not which installation.
+            "software_id": "blender-mcp-addon",
+            "software_version": "1.0",
         },
         timeout=timeout,
     )
