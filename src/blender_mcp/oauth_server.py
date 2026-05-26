@@ -199,96 +199,68 @@ def build_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ---- JWT middleware ----
+    # ---- JWT middleware (LEGACY) ----
+    # Phase G3 removed the JWT validation logic; FastMCP's auth pipeline now
+    # handles token verification for /mcp/* via the configured provider
+    # (OIDCProxy or BlenderMCPOAuthProvider). The middleware function stays
+    # as a no-op pass-through for now in case future debugging needs an
+    # interception point; can be deleted entirely once the cutover is
+    # proven stable in production.
     @app.middleware("http")
     async def jwt_middleware(request: Request, call_next):
-        # Auth routes pass through; everything else under /mcp needs JWT.
-        # Phase G: also let OAuth-spec endpoints through so OIDCProxy can
-        # serve discovery + DCR + token exchange without our middleware
-        # 401-ing them first. These all live under /mcp/ via the mount.
-        path = request.url.path
-        if path.startswith("/auth/") or path in ("/health", "/docs", "/openapi.json", "/redoc"):
-            return await call_next(request)
-        # Phase G allowlist: OAuth discovery + endpoints get served by
-        # FastMCP/OIDCProxy without our middleware intercepting. FastMCP
-        # exposes them at /mcp/{register,authorize,token,revoke,callback}
-        # plus /mcp/.well-known/* for discovery.
-        if (
-            "/.well-known/" in path
-            or path in (
-                "/mcp/register", "/mcp/authorize", "/mcp/token",
-                "/mcp/revoke", "/mcp/callback", "/mcp/auth/callback",
-            )
-            or path.startswith("/mcp/authorize/")
-            or path.startswith("/mcp/callback/")
-            or path.startswith("/mcp/auth/callback")
-        ):
-            return await call_next(request)
-
-        if path.startswith("/mcp"):
-            auth = request.headers.get("authorization", "")
-            if not auth.lower().startswith("bearer "):
-                from starlette.responses import JSONResponse
-                return JSONResponse({"detail": "Bearer token required"}, status_code=401)
-            token = auth.split(None, 1)[1].strip()
-            try:
-                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            except JWTError as e:
-                from starlette.responses import JSONResponse
-                return JSONResponse({"detail": f"Invalid token: {e}"}, status_code=401)
-            user_id = payload.get("sub")
-            if not user_id:
-                from starlette.responses import JSONResponse
-                return JSONResponse({"detail": "Token missing sub"}, status_code=401)
-
-            request.state.user_id = user_id
-            token_cv = current_user_id.set(user_id)
-            try:
-                return await call_next(request)
-            finally:
-                current_user_id.reset(token_cv)
-
         return await call_next(request)
 
     # ---- auth endpoints ----
 
     @app.post("/auth/login")
     async def login(credentials: dict):
+        """Password-based token issuance for the addon flow.
+
+        Phase G: when AUTH_BACKEND=inmemory (Gate H + local dev), this mints
+        tokens via the BlenderMCPOAuthProvider's issue_tokens_for_user so the
+        resulting tokens are valid against FastMCP's auth pipeline.
+
+        When AUTH_BACKEND=authentik, the addon should use the OAuth flow
+        instead (G4); this endpoint returns 410 with a hint.
+        """
+        from .mcp_oauth_provider import BlenderMCPOAuthProvider
+
         username = credentials.get("username")
         password = credentials.get("password")
         if not username or not password:
             raise HTTPException(400, "username and password required")
 
-        user = USERS.get(username)
-        if not user or not _verify_password(password, user["password_hash"]):
-            # Constant-time-ish: still hash even on missing user.
-            if not user:
-                _verify_password(password, "$2b$12$" + "x" * 53)
-            raise HTTPException(401, "Invalid credentials",
-                                headers={"WWW-Authenticate": "Bearer"})
+        provider = mcp.auth
+        if not isinstance(provider, BlenderMCPOAuthProvider):
+            raise HTTPException(
+                410,
+                "Password login disabled. Use the OAuth flow at /mcp/authorize "
+                "(or set AUTH_BACKEND=inmemory for local dev).",
+            )
 
-        access = _create_access_token({
-            "sub": user["user_id"],
-            "username": user["username"],
-            "roles": user["roles"],
-            "scopes": user["scopes"],
-        })
-        refresh = _create_refresh_token({"sub": user["user_id"]})
-        REFRESH_TOKENS[refresh] = {
-            "user_id": user["user_id"],
-            "created_at": datetime.utcnow().isoformat(),
-        }
+        user_id = provider.authenticate_user(username, password)
+        if not user_id:
+            raise HTTPException(
+                401, "Invalid credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Find user record for the response (roles/scopes/username).
+        user = next(
+            (u for u in USERS.values() if u["user_id"] == user_id), None
+        )
+        oauth_tok = provider.issue_tokens_for_user(user_id)
 
         return {
-            "access_token": access,
-            "refresh_token": refresh,
+            "access_token": oauth_tok.access_token,
+            "refresh_token": oauth_tok.refresh_token,
             "token_type": "bearer",
-            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "expires_in": oauth_tok.expires_in,
             "user": {
-                "user_id": user["user_id"],
-                "username": user["username"],
-                "roles": user["roles"],
-                "scopes": user["scopes"],
+                "user_id": user_id,
+                "username": (user or {}).get("username", user_id),
+                "roles": (user or {}).get("roles", []),
+                "scopes": (user or {}).get("scopes", []),
             },
         }
 

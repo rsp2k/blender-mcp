@@ -73,18 +73,54 @@ def _build_auth_provider() -> AuthProvider | None:
         )
 
     if backend == "inmemory":
-        from .mcp_oauth_provider import BlenderMCPOAuthProvider
+        # Build USERS dict locally to avoid circular import with oauth_server
+        # (oauth_server imports `mcp` from this module, so we can't import
+        # USERS from oauth_server during this module's load).
+        import bcrypt
 
-        # Lazy import to avoid pulling bcrypt into auth=authentik path
-        from . import oauth_server as _os
+        def _hash(password: str) -> str:
+            return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+        def _verify(password: str, hashed: str) -> bool:
+            try:
+                return bcrypt.checkpw(password.encode(), hashed.encode())
+            except Exception:
+                return False
+
+        admin_pw = os.environ.get("ADMIN_PASSWORD")
+        if not admin_pw:
+            raise RuntimeError(
+                "AUTH_BACKEND=inmemory requires ADMIN_PASSWORD env var"
+            )
+
+        users = {
+            "admin": {
+                "user_id": "admin",
+                "username": "admin",
+                "password_hash": _hash(admin_pw),
+                "roles": ["admin", "user"],
+                "scopes": ["*"],
+            },
+        }
+        demo_pw = os.environ.get("DEMO_PASSWORD")
+        if demo_pw:
+            users["demo"] = {
+                "user_id": "demo",
+                "username": "demo",
+                "password_hash": _hash(demo_pw),
+                "roles": ["user"],
+                "scopes": ["read", "write"],
+            }
+
+        from .mcp_oauth_provider import BlenderMCPOAuthProvider
 
         logger.warning(
             "Auth: BlenderMCPOAuthProvider (in-memory, local-dev only). "
             "Set AUTH_BACKEND=authentik for production."
         )
         return BlenderMCPOAuthProvider(
-            users=_os.USERS,
-            verify_password=_os._verify_password,
+            users=users,
+            verify_password=_verify,
             base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
             + "/mcp",
         )

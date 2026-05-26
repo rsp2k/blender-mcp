@@ -25,15 +25,55 @@ _pending_jobs: dict[str, tuple[str, str]] = {}  # job_id -> (user_id, originator
 
 
 def _resolve_user_id(ctx: Optional[Context]) -> Optional[str]:
-    """Prefer ContextVar (set by middleware); fall back to request state."""
+    """Resolve the authenticated user_id from whichever auth path is active.
+
+    Phase G priority order:
+      1. ContextVar (set by legacy jwt_middleware — still works for any
+         pre-G3 paths that haven't migrated yet)
+      2. Legacy request.state.user_id (same)
+      3. FastMCP's get_access_token() — set by the new auth pipeline.
+         Resolves the bearer to a user_id via the provider:
+         - BlenderMCPOAuthProvider: look up _token_to_user
+         - OIDCProxy: decode the JWT and read 'sub' claim
+    """
     uid = current_user_id.get()
     if uid:
         return uid
-    if ctx is None:
-        return None
+
+    if ctx is not None:
+        try:
+            req = ctx.get_http_request()
+            if req and getattr(req.state, "user_id", None):
+                return req.state.user_id
+        except Exception:
+            pass
+
+    # FastMCP auth pipeline path
     try:
-        req = ctx.get_http_request()
-        return getattr(req.state, "user_id", None) if req else None
+        from fastmcp.server.dependencies import get_access_token
+
+        from .mcp_oauth_provider import BlenderMCPOAuthProvider
+        from .server_proper import mcp
+
+        access = get_access_token()
+        if access is None:
+            return None
+
+        provider = mcp.auth
+        # In-memory provider path: token→user mapping
+        if isinstance(provider, BlenderMCPOAuthProvider):
+            return provider.get_user_for_token(access.token)
+
+        # OIDCProxy path: decode the JWT, read 'sub' (Authentik's hashed_user_id)
+        try:
+            import jwt as _jwt
+            claims = _jwt.decode(
+                access.token,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            return claims.get("sub") or claims.get("preferred_username")
+        except Exception:
+            return None
     except Exception:
         return None
 
