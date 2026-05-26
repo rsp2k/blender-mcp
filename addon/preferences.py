@@ -68,11 +68,21 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
     refresh_token: StringProperty(
         name="Refresh Token",
         description=(
-            "Long-lived refresh token from /auth/login. Used by the bus client "
-            "to mint new access tokens before the current JWT expires, so the "
-            "session doesn't wedge mid-edit."
+            "Long-lived refresh token from /auth/login OR the OAuth /mcp/token "
+            "endpoint. Used by the bus client to mint new access tokens before "
+            "the current JWT expires, so the session doesn't wedge mid-edit."
         ),
         subtype="PASSWORD",
+        default="",
+    )
+    oauth_client_id: StringProperty(
+        name="OAuth Client ID",
+        description=(
+            "Dynamic Client Registration ID this addon instance received from "
+            "the MCP server's /mcp/register endpoint. Needed for the refresh "
+            "grant flow. Populated by the 'Login with OAuth' operator; empty "
+            "when using the legacy AUTH_BACKEND=inmemory password flow."
+        ),
         default="",
     )
     jwt_expires_at: StringProperty(

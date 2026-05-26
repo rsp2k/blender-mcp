@@ -139,24 +139,40 @@ class BlenderMCPClient:
     # --- JWT auto-rotation -------------------------------------------------
 
     async def _do_refresh_once(self) -> bool:
-        """Run a single /auth/refresh; update self.jwt_token + persist to prefs.
+        """Rotate the access token. Returns True on success, False on failure.
 
-        Returns True on success, False on failure (last_error is set + printed
-        either way). Used by both the pre-connect rescue path and the periodic
-        watcher. Does NOT set _rotate_requested — that's the caller's job (the
-        pre-connect path doesn't need a reconnect, since no connect happened
-        yet; the watcher does).
+        Chooses the refresh endpoint based on which login path produced the
+        current token:
+          - If ``oauth_client_id`` is set in prefs → OAuth /mcp/token endpoint
+          - Otherwise → legacy /auth/refresh (only valid for
+            AUTH_BACKEND=inmemory dev servers)
+
+        Used by both the pre-connect rescue path and the periodic watcher.
+        Does NOT set _rotate_requested — that's the caller's job.
         """
         import time
-        from ..auth import LoginError, refresh_token as do_refresh
+
+        from ..auth import LoginError, OAuthError
+        from ..auth import refresh_token as do_legacy_refresh
+        from ..auth import refresh_oauth_token
+        from ..preferences import get_prefs
+
+        prefs = get_prefs()
+        oauth_client_id = getattr(prefs, "oauth_client_id", "") or ""
 
         try:
-            # /auth/refresh is a synchronous requests.post in the helper;
-            # run it in a thread so the asyncio loop isn't blocked.
-            payload = await asyncio.to_thread(
-                do_refresh, self.server_url, self.refresh_token,
-            )
-        except LoginError as e:
+            if oauth_client_id:
+                payload = await asyncio.to_thread(
+                    refresh_oauth_token,
+                    self.server_url,
+                    self.refresh_token,
+                    oauth_client_id,
+                )
+            else:
+                payload = await asyncio.to_thread(
+                    do_legacy_refresh, self.server_url, self.refresh_token,
+                )
+        except (LoginError, OAuthError) as e:
             self.last_error = f"JWT refresh failed: {e}"
             print(f"[BlenderMCP] {self.last_error} — re-Login required")
             return False
@@ -171,6 +187,12 @@ class BlenderMCPClient:
             self.last_error = "Refresh response malformed"
             print(f"[BlenderMCP] {self.last_error}")
             return False
+
+        # OAuth refresh rotates the refresh_token too (per spec — old one
+        # is immediately invalidated). Capture the new one if returned.
+        new_refresh = payload.get("refresh_token")
+        if new_refresh:
+            self.refresh_token = new_refresh
 
         self.jwt_token = new_jwt
         self.jwt_expires_at = int(time.time()) + new_expires_in
@@ -229,6 +251,11 @@ class BlenderMCPClient:
             prefs = get_prefs()
             prefs.jwt_token = self.jwt_token
             prefs.jwt_expires_at = str(self.jwt_expires_at)
+            # Persist the rotated refresh token too (OAuth refresh rotates
+            # the refresh_token per spec; without persisting we'd lose the
+            # new one across Blender restarts).
+            if self.refresh_token:
+                prefs.refresh_token = self.refresh_token
         except Exception as e:
             print(f"[BlenderMCP] Could not persist rotated JWT to prefs: {e}")
 
