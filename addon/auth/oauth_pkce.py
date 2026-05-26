@@ -152,7 +152,14 @@ def _normalize_server_url(server_url: str) -> str:
 
 
 def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) -> dict:
-    """Dynamic Client Registration. Returns the full registration response."""
+    """Dynamic Client Registration. Returns the full registration response.
+
+    Note: we intentionally don't request specific scopes here. The MCP server
+    is single-tenant + single-app (one Authentik OAuth app, all clients
+    proxy through it), so scope-gated authorization isn't doing useful
+    work. Requesting scopes would force them into Authentik's
+    ``scopes_supported`` config which adds friction without benefit.
+    """
     url = f"{server_url}/register"
     resp = requests.post(
         url,
@@ -162,7 +169,6 @@ def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) 
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
-            "scope": "openid",
         },
         timeout=timeout,
     )
@@ -238,7 +244,9 @@ def oauth_login(
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "state": state,
-                "scope": "openid",
+                # No scope requested — see _register_client docstring for why.
+                # Authentik still issues a JWT access_token with sub claim
+                # that our bus uses for user identity.
             }
         )
     )

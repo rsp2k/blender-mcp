@@ -65,11 +65,14 @@ def _build_auth_provider() -> AuthProvider | None:
             require_authorization_consent="external",
             # Per-app issuer in Authentik
             audience=client_id,
-            # Scopes MCP clients can request. The OIDC discovery's
-            # ``scopes_supported`` doesn't auto-propagate into DCR validation,
-            # so we list them explicitly. openid + profile are the standard
-            # OIDC scopes; offline_access lets us mint refresh tokens.
-            required_scopes=["openid"],
+            # IMPORTANT: do NOT pass required_scopes. Authentik's access tokens
+            # don't carry a `scope` or `scp` claim (those live on the ID token
+            # per OIDC spec, not on the OAuth2 access token). If we set
+            # required_scopes=["openid"], JWTVerifier extracts scopes=[] from
+            # the access JWT and 401s every request. We're single-tenant +
+            # single-app — scope-gated authorization isn't load-bearing.
+            # OIDCProxy auto-populates scopes_supported from Authentik's
+            # discovery doc, so DCR with scope=openid still works.
         )
 
     if backend == "inmemory":
