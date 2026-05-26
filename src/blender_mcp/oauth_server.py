@@ -324,6 +324,26 @@ def build_app() -> FastAPI:
             "clients_per_bus": {uid: len(b.all_clients()) for uid, b in buses.items()},
         }
 
+    # OAuth discovery (RFC 8414 + RFC 9728) — FastMCP's auth provider knows
+    # the right path-aware shapes for its mounted MCP resource. Mount those
+    # routes at the FastAPI root so a fresh MCP client can follow the 401 →
+    # resource_metadata → authorization-server chain. Without this, the
+    # `WWW-Authenticate: ... resource_metadata="…/oauth-protected-resource/mcp/"`
+    # header advertises a URL that 404s, and DCR-capable clients (Claude Code,
+    # etc.) can't bootstrap. The addon's hard-coded /mcp/register flow works
+    # either way; this fixes the spec-compliant discovery path.
+    # `mcp_path="/"` (NOT "/mcp") matches what FastMCP advertises in its own
+    # WWW-Authenticate `resource_metadata=…/oauth-protected-resource/mcp/`
+    # header. The auth provider thinks of the resource as living at "/" inside
+    # the http_app (since we built it with path="/"); the outer FastAPI mount
+    # at "/mcp" stacks the prefix on the OUTSIDE. Passing "/mcp" here double-
+    # prefixes and yields /oauth-protected-resource/mcp/mcp — confirmed by
+    # probing get_well_known_routes() with several arg values.
+    auth_provider = getattr(mcp, "auth", None)
+    if auth_provider is not None and hasattr(auth_provider, "get_well_known_routes"):
+        for route in auth_provider.get_well_known_routes(mcp_path="/"):
+            app.router.routes.append(route)
+
     # Mount FastMCP last so middleware ordering is correct.
     app.mount("/mcp", mcp_asgi)
 
