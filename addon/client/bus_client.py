@@ -138,19 +138,55 @@ class BlenderMCPClient:
 
     # --- JWT auto-rotation -------------------------------------------------
 
-    async def _refresh_watcher(self) -> None:
-        """Wake ~60s before JWT expiry, swap in a fresh access token.
+    async def _do_refresh_once(self) -> bool:
+        """Run a single /auth/refresh; update self.jwt_token + persist to prefs.
 
-        Self-cancels via ``self.running``. On refresh success: updates
-        ``self.jwt_token`` + ``self.jwt_expires_at`` + writes through to
-        AddonPreferences (so subsequent Blender restarts don't re-issue
-        a Login prompt before the refresh token itself dies), then sets
-        ``_rotate_requested`` to bounce the FastMCP Client onto the new
-        bearer. On refresh failure: logs, sets last_error, and gives up
-        (user will need to re-Login).
+        Returns True on success, False on failure (last_error is set + printed
+        either way). Used by both the pre-connect rescue path and the periodic
+        watcher. Does NOT set _rotate_requested — that's the caller's job (the
+        pre-connect path doesn't need a reconnect, since no connect happened
+        yet; the watcher does).
         """
         import time
         from ..auth import LoginError, refresh_token as do_refresh
+
+        try:
+            # /auth/refresh is a synchronous requests.post in the helper;
+            # run it in a thread so the asyncio loop isn't blocked.
+            payload = await asyncio.to_thread(
+                do_refresh, self.server_url, self.refresh_token,
+            )
+        except LoginError as e:
+            self.last_error = f"JWT refresh failed: {e}"
+            print(f"[BlenderMCP] {self.last_error} — re-Login required")
+            return False
+        except Exception as e:
+            self.last_error = f"JWT refresh crashed: {e}"
+            print(f"[BlenderMCP] {self.last_error}")
+            return False
+
+        new_jwt = payload.get("access_token", "")
+        new_expires_in = int(payload.get("expires_in", 0))
+        if not new_jwt or not new_expires_in:
+            self.last_error = "Refresh response malformed"
+            print(f"[BlenderMCP] {self.last_error}")
+            return False
+
+        self.jwt_token = new_jwt
+        self.jwt_expires_at = int(time.time()) + new_expires_in
+        self._persist_rotated_jwt_to_prefs()
+        print(f"[BlenderMCP] JWT rotated; new exp in {new_expires_in}s")
+        return True
+
+    async def _refresh_watcher(self) -> None:
+        """Wake ~60s before JWT expiry, swap in a fresh access token.
+
+        Self-cancels via ``self.running``. On refresh success: sets
+        ``_rotate_requested`` to bounce the FastMCP Client onto the new
+        bearer. On refresh failure: gives up (LoginError) or sleeps + retries
+        (network blip).
+        """
+        import time
 
         while self.running:
             if not self.jwt_expires_at:
@@ -166,41 +202,19 @@ class BlenderMCPClient:
             if not self.running:
                 return
 
-            try:
-                # /auth/refresh is a synchronous requests.post in the helper;
-                # run it in a thread so the asyncio loop isn't blocked.
-                payload = await asyncio.to_thread(
-                    do_refresh, self.server_url, self.refresh_token,
-                )
-            except LoginError as e:
-                self.last_error = f"JWT refresh failed: {e}"
-                print(f"[BlenderMCP] {self.last_error} — re-Login required")
-                self.running = False
-                return
-            except Exception as e:
-                self.last_error = f"JWT refresh crashed: {e}"
-                print(f"[BlenderMCP] {self.last_error}")
-                # Don't kill the session — try again on the next cycle (server
-                # might just be briefly unreachable).
-                await asyncio.sleep(30)
+            if await self._do_refresh_once():
+                self._rotate_requested = True
                 continue
 
-            new_jwt = payload.get("access_token", "")
-            new_expires_in = int(payload.get("expires_in", 0))
-            if not new_jwt or not new_expires_in:
-                print("[BlenderMCP] Refresh returned no token/expiry — abandoning")
-                self.last_error = "Refresh response malformed"
+            # Refresh failed. LoginError-class failures (refresh token itself
+            # expired) are fatal — bus connection is dead in the water without
+            # a way to re-auth. Transient failures (network blip) leave
+            # last_error populated but we'll retry in 30s instead of killing
+            # the session.
+            if "JWT refresh failed" in (self.last_error or ""):
                 self.running = False
                 return
-
-            self.jwt_token = new_jwt
-            self.jwt_expires_at = int(time.time()) + new_expires_in
-            self._persist_rotated_jwt_to_prefs()
-            self._rotate_requested = True
-            print(
-                f"[BlenderMCP] JWT rotated; new exp in {new_expires_in}s — "
-                "reconnect on next loop iteration"
-            )
+            await asyncio.sleep(30)
 
     def _persist_rotated_jwt_to_prefs(self) -> None:
         """Best-effort save of the rotated JWT/expiry to AddonPreferences.
@@ -248,7 +262,21 @@ class BlenderMCPClient:
         the inner ``async with`` to exit cleanly and re-enter with the new
         bearer. Each reconnect re-registers the same client UUID, which the
         bus treats as an idempotent overwrite.
+
+        Before the very first connect, if the stored JWT is past (or near)
+        its expiry but a refresh_token is on hand, rotate proactively. This
+        is the "Blender restart after long session" case: prefs have a stale
+        access token saved from the prior run, but the refresh token is still
+        within its 7-day window. Refreshing here means the user doesn't see
+        a 401 from the bus client and isn't forced to re-Login.
         """
+        if self.refresh_token and self.jwt_expires_at:
+            import time
+            if self.jwt_expires_at <= int(time.time()) + 60:
+                print("[BlenderMCP] Stored JWT is stale; refreshing before connect")
+                if not await self._do_refresh_once():
+                    return  # last_error already set + printed
+
         refresh_task: Optional[asyncio.Task] = None
         try:
             while self.running:
