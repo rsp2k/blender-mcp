@@ -18,21 +18,25 @@ A production deploy uses three pieces: the server image, a `.env` file, and cadd
 
 ## .env
 
-Copy `.env.production` to `.env` and fill in the secrets.
+Copy `.env.example` to `.env` and fill in the secrets. The Makefile's `make secret-gen` target generates `OAUTH_SECRET_KEY` for you if it's missing or blank (idempotent — re-runs preserve the existing key).
 
 ```bash
-# Required
+# Required — server refuses to start without these
+OAUTH_SECRET_KEY=     # `make secret-gen` fills this in
+ADMIN_PASSWORD=       # no default; RuntimeError if unset (see below)
+DOMAIN=mcp.example.com
 COMPOSE_PROJECT_NAME=blender-mcp
-JWT_SECRET=<run: openssl rand -hex 32>
-HOSTNAME=blender-mcp.example.com
 
-# Optional
-LOG_LEVEL=INFO
-BLENDER_MCP_USERS_FILE=/data/users.json
+# Optional — demo user is opt-in
+DEMO_PASSWORD=        # only set this if you want a `demo` account created
 ```
 
 <Aside type="caution">
-`JWT_SECRET` rotation invalidates every issued token. Treat the value like a database password.
+**`ADMIN_PASSWORD` is required** at module load. `oauth_server.py` raises a `RuntimeError` if it's missing — the old "SecureAdmin123!" default was removed because it shipped in this public repo. The compose layer also enforces this via `${ADMIN_PASSWORD:?}`, but the in-process check is defense-in-depth for `uv run blender-mcp` invocations that bypass compose.
+
+**Demo user is opt-in.** Production deployments should leave `DEMO_PASSWORD` unset so no demo account exists.
+
+`OAUTH_SECRET_KEY` rotation invalidates every issued token. Treat it like a database password.
 </Aside>
 
 ## docker-compose.yml
@@ -50,7 +54,7 @@ services:
       - caddy
       - internal
     labels:
-      caddy: ${HOSTNAME}
+      caddy: ${DOMAIN}
       caddy.reverse_proxy: "{{upstreams 8000}}"
       caddy.tls.import: rfc2136_local
 
@@ -63,6 +67,12 @@ networks:
 
 The `caddy.tls.import: rfc2136_local` line pulls in a Caddy snippet that uses RFC 2136 dynamic DNS-01 challenges. Drop the line if you're using HTTP-01.
 
+<Aside type="caution">
+**caddy-docker-proxy silently drops some `caddy.reverse_proxy.transport.*` labels.** A `caddy.reverse_proxy.transport: http` directive co-located with `caddy.reverse_proxy: "{{upstreams 8000}}"` gets dropped by the proxy's label parser, producing a broken transport config that makes the TLS handshake fail with `curl: (35)`. This was discovered during the first live deploy attempt against `mcp.l.warehack.ing`. If you need a custom transport, set the upstream scheme inline (`{{upstreams http 8000}}`) instead of using a separate transport label.
+
+**Domain collision is a thing.** caddy-docker-proxy merges matching domains as upstream load-balancers rather than path-routing. Two containers labeled `caddy: ${DOMAIN}` on the same host become a multi-target reverse_proxy and silently break. Use distinct subdomains for distinct services co-located on the same host.
+</Aside>
+
 <Aside type="note">
 The `internal` network exists so future sidecar services (Redis, a persistence layer, a metrics scraper) can talk to the server without joining the shared `caddy` namespace.
 </Aside>
@@ -71,64 +81,84 @@ The `internal` network exists so future sidecar services (Redis, a persistence l
 
 <Steps>
 
-1. **Build:**
+1. **Generate the secret + set the admin password:**
 
    ```bash
-   make build
-   # or: docker compose build
+   make secret-gen          # fills OAUTH_SECRET_KEY in .env if blank
+   $EDITOR .env             # set ADMIN_PASSWORD (required)
    ```
 
-2. **Start:**
+2. **Start the production stack:**
 
    ```bash
-   make up
-   # or: docker compose up -d
+   make prod                # builds image, brings up compose with caddy labels
    ```
 
-3. **Check logs:**
+3. **Watch the logs:**
 
    ```bash
-   docker compose logs -f blender-mcp
+   make logs                # or: docker compose logs -f
    ```
 
    Expected first lines:
 
    ```
-   blender-mcp  | BlenderMCP v2026.05.25 — HTTP mode
    blender-mcp  | INFO uvicorn:Started server process [1]
    blender-mcp  | INFO uvicorn:Uvicorn running on http://0.0.0.0:8000
    ```
 
-4. **Verify TLS** from another host:
+4. **Verify TLS** from another host (the Makefile has a target for this):
 
    ```bash
-   curl -fsS https://${HOSTNAME}/health
+   make health              # GETs https://${DOMAIN}/health, pretty-prints JSON
+   # or directly:
+   curl -fsS https://${DOMAIN}/health
    ```
 
 </Steps>
 
+## Makefile targets
+
+The root `Makefile` has 14 targets. `make help` renders them all:
+
+| Target | Purpose |
+|---|---|
+| `prod` | Start the production stack (FastMCP server behind caddy-docker-proxy) |
+| `dev` | Start the dev stack with hot reload |
+| `down` | Stop both stacks (prod + dev) |
+| `logs` | Tail logs from whichever stack is running |
+| `restart` | Graceful restart without rebuild |
+| `build` | Build the production image without starting it |
+| `rebuild` | Full no-cache rebuild of prod image |
+| `ps` | Show running services |
+| `shell` | Open an interactive bash shell in the running prod container |
+| `caddy-reload` | Force the host Caddy to re-read its config |
+| `secret-gen` | Generate `OAUTH_SECRET_KEY` into `.env` only if missing/blank |
+| `health` | Hit the public `/health` endpoint and pretty-print the response |
+| `clean` | Stop everything and remove project volumes |
+| `help` | Show all targets |
+
 ## Environment variables
 
-| Variable | Default | Purpose |
+| Variable | Required? | Purpose |
 |---|---|---|
-| `JWT_SECRET` | _(required)_ | HMAC signing key for issued tokens |
-| `JWT_ALGORITHM` | `HS256` | JWT algorithm |
-| `JWT_ACCESS_TTL_SECONDS` | `3600` | Access token lifetime |
-| `JWT_REFRESH_TTL_SECONDS` | `2592000` | Refresh token lifetime (30 d) |
-| `BLENDER_MCP_USERS_FILE` | `/data/users.json` | Path to the user store |
-| `LOG_LEVEL` | `INFO` | Server log verbosity |
-| `HOST` | `0.0.0.0` | Uvicorn bind address |
-| `PORT` | `8000` | Uvicorn port (inside container) |
+| `OAUTH_SECRET_KEY` | yes | HMAC signing key for issued tokens. Generate with `make secret-gen`. |
+| `ADMIN_PASSWORD` | yes | Admin user's password. No default — server refuses to start without it. |
+| `DOMAIN` | yes | Public hostname Caddy serves from. |
+| `COMPOSE_PROJECT_NAME` | yes | Compose project namespace. |
+| `DEMO_PASSWORD` | no | When set, creates a `demo` user with this password. Leave unset in production. |
 
 ## Hot-reload in dev
 
-Swap to `docker-compose.dev.yml` to mount the source and run with `--reload`:
-
 ```bash
-docker compose -f docker-compose.dev.yml up
+make dev          # docker compose up with the dev profile + source mounts + --reload
 ```
 
-That image runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.0.0.0`.
+That target runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.0.0.0` inside the container with source volumes mounted from the host.
+
+## Live reference deploy
+
+The branch's reference deployment runs at **`https://mcp.l.warehack.ing/mcp/`** (note the trailing slash — see [Quickstart](/tutorials/quickstart/) for why the addon auto-adds it). If you want to skip standing up your own server while exploring the API, you can authenticate against this deployment with the demo credentials and point clients at it directly.
 
 ## Operational notes
 

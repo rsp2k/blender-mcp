@@ -15,6 +15,6 @@ Public API:
 
 from __future__ import annotations
 
-from .login import LoginError, login, refresh_token
+from .login import LoginError, login, logout, refresh_token
 
-__all__ = ["login", "refresh_token", "LoginError"]
+__all__ = ["login", "logout", "refresh_token", "LoginError"]

@@ -19,6 +19,8 @@ from fastmcp import FastMCP
 
 from .bus_tools import BlenderBusComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
+from .dispatch_component import BlenderDispatchComponent
+from .prompts_component import BlenderPromptsComponent
 
 logger = logging.getLogger(__name__)
 
@@ -33,21 +35,56 @@ def build_stdio_mcp() -> FastMCP:
     """
     server = FastMCP("BlenderMCP")
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
-    logger.info("FastMCP server built (stdio): diagnostics only")
+    # Prompts are pure templates — no bus, no user_id, no Blender peer needed.
+    # Safe + useful in stdio (prototyping scripts before connecting Blender).
+    BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+    logger.info("FastMCP server built (stdio): diagnostics + prompts")
     return server
 
 
 def build_http_mcp() -> FastMCP:
     """Build the HTTP MCP server.
 
-    Diagnostics + bus tools. The bus tools resolve user identity from a
-    ContextVar set by the FastAPI middleware in `oauth_server.py` after
-    JWT verification.
+    Diagnostics + bus tools + dispatch tools. The bus tools and dispatch
+    tools both resolve user identity from a ContextVar set by the FastAPI
+    middleware in `oauth_server.py` after JWT verification.
+
+    - Diagnostics: open-access helpers (Blender install probes)
+    - Bus tools: low-level register/send/list (used by addon + advanced clients)
+    - Dispatch tools: flat round-trip tools for the 24 addon commands;
+      shield MCP clients from job_id correlation and notification-listening
     """
     server = FastMCP("BlenderMCP")
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
-    BlenderBusComponent().register_all(mcp_server=server, prefix="blender")
-    logger.info("FastMCP server built (HTTP): diagnostics + bus")
+    # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
+    # don't collide with anything else in tool listings, but resources are
+    # registered WITHOUT a prefix — otherwise the MCPMixin double-prefixes the
+    # URI to ``blender+blender://...`` which (a) reads awkwardly to MCP clients
+    # and (b) breaks URI-template detection: pydantic's AnyUrl validation
+    # percent-encodes the ``{...}`` placeholders in the mangled URI, so
+    # ``FunctionResource.from_function`` no longer recognizes it as a template
+    # and registers it as a static URI literally named ``…/%7Blevel%7D``.
+    # Registering resources without prefix keeps URIs as the natural
+    # ``blender://...`` form and preserves template handling.
+    bus = BlenderBusComponent()
+    bus.register_tools(mcp_server=server, prefix="blender")
+    bus.register_resources(mcp_server=server)
+    bus.register_prompts(mcp_server=server, prefix="blender")
+
+    dispatch = BlenderDispatchComponent()
+    dispatch.register_tools(mcp_server=server, prefix="blender")
+    dispatch.register_resources(mcp_server=server)
+    dispatch.register_prompts(mcp_server=server, prefix="blender")
+    # Templated URI resources (e.g. blender://console/{level}) go through a
+    # different code path that supports template detection — see the block
+    # comment in dispatch_component.py above ``console_resource``.
+    dispatch.register_templated_resources(mcp_server=server)
+
+    # Skeletal prompts — same registration as stdio (templates only,
+    # no per-request state).
+    BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + prompts")
     return server
 
 

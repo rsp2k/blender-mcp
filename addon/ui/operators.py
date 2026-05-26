@@ -13,13 +13,70 @@ import bpy
 import requests  # for catching requests.exceptions.RequestException
 
 from .. import state
-from ..auth import LoginError, login
+from ..auth import LoginError, login, logout
+from ..auth.login import _auth_base
 from ..client import BlenderMCPClient
 from ..client.bus_client import FASTMCP_AVAILABLE
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
 from ..preferences import get_prefs
+
+
+class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
+    """Probe the configured server's /health endpoint and report status.
+
+    Quick smoke test the user can run BEFORE clicking Login — confirms
+    the server URL is reachable, the certificate validates, and the
+    health check returns 200 with a sensible body. Saves a round of
+    "wrong URL?" / "is the server up?" diagnostic guessing.
+
+    Uses a 3-second timeout so a missing host fails fast in the UI
+    rather than freezing Blender's prefs panel.
+    """
+
+    bl_idname = "blendermcp.test_connection"
+    bl_label = "Test Connection"
+    bl_description = "GET {server_url}/health with a 3s timeout; report status to the operator log"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        server_url = prefs.server_url
+        if not server_url:
+            self.report({'ERROR'}, "Server URL is empty")
+            return {'CANCELLED'}
+
+        health_url = f"{_auth_base(server_url)}/health"
+        try:
+            resp = requests.get(health_url, timeout=3.0)
+        except requests.exceptions.Timeout:
+            self.report({'ERROR'}, f"Timeout (>3s) hitting {health_url}")
+            return {'CANCELLED'}
+        except requests.exceptions.SSLError as e:
+            self.report({'ERROR'}, f"TLS error: {e}")
+            return {'CANCELLED'}
+        except requests.exceptions.ConnectionError as e:
+            self.report({'ERROR'}, f"Cannot reach {health_url}: {e}")
+            return {'CANCELLED'}
+        except requests.exceptions.RequestException as e:
+            self.report({'ERROR'}, f"Network error: {e}")
+            return {'CANCELLED'}
+
+        if resp.status_code != 200:
+            self.report({'ERROR'}, f"FAILED: HTTP {resp.status_code} from {health_url}")
+            return {'CANCELLED'}
+
+        # Compact body summary — /health returns
+        #   {"status": "healthy", "buses": N, "clients_per_bus": {...}}
+        try:
+            body = resp.json()
+            buses = body.get("buses", "?")
+            status = body.get("status", "?")
+            self.report({'INFO'}, f"OK — server {status}, {buses} bus(es) active")
+        except ValueError:
+            # /health didn't return JSON — odd but not fatal; still 200.
+            self.report({'INFO'}, f"OK — HTTP 200 (non-JSON body, {len(resp.content)} bytes)")
+        return {'FINISHED'}
 
 
 class BLENDERMCP_OT_Login(bpy.types.Operator):
@@ -64,12 +121,71 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
             return {'CANCELLED'}
 
         prefs.jwt_token = payload.get("access_token", "")
+        # Store refresh token + computed expiry so the bus client can
+        # pre-emptively rotate the JWT before it expires (avoiding the
+        # mid-session 401 wedge). expires_in is a relative duration in
+        # seconds; convert to absolute epoch so a Blender restart doesn't
+        # confuse the math.
+        prefs.refresh_token = payload.get("refresh_token", "")
+        expires_in = int(payload.get("expires_in", 0))
+        if expires_in:
+            import time
+            prefs.jwt_expires_at = str(int(time.time()) + expires_in)
         # Clear the password field so it's not lingering in the UI.
         scene.blendermcp_password_tmp = ""
 
         user = payload.get("user", {})
         who = user.get("username", username)
         self.report({'INFO'}, f"Logged in as {who}")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_Logout(bpy.types.Operator):
+    """Disconnect, notify the server, clear the stored JWT.
+
+    Order matters: disconnect FIRST (so the bus's SSE stream closes
+    cleanly before the server invalidates its session-bound state),
+    then notify the server via /auth/logout (best-effort — server
+    failure does not block client cleanup), then clear local prefs.
+    Always succeeds from the user's perspective: even on network
+    failure, the local credentials are gone.
+    """
+
+    bl_idname = "blendermcp.logout"
+    bl_label = "Logout"
+    bl_description = "Disconnect, invalidate server-side refresh tokens, clear local JWT"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        scene = context.scene
+
+        # 1. Disconnect first if connected — closes the bus client thread
+        #    so the worker isn't holding an authenticated stream when we
+        #    pull the JWT out from under it.
+        if state._client is not None:
+            try:
+                state._client.stop()
+            except Exception:
+                pass  # best-effort — proceed with logout regardless
+            state._client = None
+        scene.blendermcp_server_running = False
+
+        # 2. Tell the server (best-effort).
+        token = prefs.jwt_token
+        if token:
+            try:
+                logout(prefs.server_url, token)
+            except Exception:
+                pass  # logout helper already swallows; belt-and-suspenders
+
+        # 3. Clear local credentials. Username stays — it's not a secret,
+        #    and forcing the user to retype it on next login is annoying.
+        prefs.jwt_token = ""
+        prefs.refresh_token = ""
+        prefs.jwt_expires_at = ""
+        scene.blendermcp_password_tmp = ""
+
+        self.report({'INFO'}, "Logged out")
         return {'FINISHED'}
 
 
@@ -113,11 +229,23 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
 
             if state._client is None:
                 uuid_mgr = StickyUUIDManager()
+                # Pass refresh creds so the worker can pre-emptively rotate
+                # the JWT before it expires. Falls back gracefully (no refresh)
+                # if refresh_token isn't set — e.g. for prefs migrated from
+                # before the refresh-flow landed.
+                expires_at = 0
+                if prefs.jwt_expires_at:
+                    try:
+                        expires_at = int(prefs.jwt_expires_at)
+                    except ValueError:
+                        pass
                 state._client = BlenderMCPClient(
                     server_url=prefs.server_url,
                     jwt_token=prefs.jwt_token,
                     client_uuid=uuid_mgr.get_client_id(),
                     executor=state._executor,  # injected so drainer exposes to scripts
+                    refresh_token=prefs.refresh_token,
+                    jwt_expires_at=expires_at,
                 )
                 scene.blendermcp_client_id = state._client.client_uuid
 

@@ -6,9 +6,16 @@ the authoritative entry point. The top-level `addon.py` survives as a
 works; users who prefer the directory layout install this package
 directly (zip the addon/ folder).
 
-bl_info is a literal dict here (Blender parses it via AST without
-importing the module), so the version string is duplicated between
-``addon/_version.py`` and the bl_info tuple. The check is::
+The bl_info dict below is a literal (Blender parses it via AST without
+importing the module), so the version tuple is duplicated between
+``addon/_version.py`` and the manifest. Quick consistency check::
+
+(Note: any line starting with "bl_info" at column zero confuses
+Blender's _fake_module speedy line-extractor — it will think the line
+is the start of the manifest and try to ast.parse subsequent prose
+lines as Python. Keep that token off the left margin in this docstring.)
+
+::
 
     grep -hE '"version": \\(' addon.py addon/__init__.py
     grep -E '__version__' addon/_version.py

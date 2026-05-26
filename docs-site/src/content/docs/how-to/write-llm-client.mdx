@@ -1,13 +1,30 @@
 ---
 title: "Write your own LLM client"
-description: "Connect to a BlenderMCP server: OAuth login, FastMCP transport, message_handler, JobWaiter, register, dispatch."
+description: "Two client styles: direct dispatch tool calls (simple) vs custom _message_bus subscription (advanced). Pick the right one."
 ---
 
 import { Steps, Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
 
-A custom LLM-side client needs five things: a JWT, an MCP transport, a message handler that filters `_message_bus` notifications, a way to await a specific `job_id`, and registration so the client appears on the bus. This page builds one in stages.
+A custom LLM-side client comes in two flavors. **Style A** is what most clients should do: call dispatch tools, get JSON back. **Style B** is for clients that need to observe bus traffic the server didn't originate on their behalf — progress events, dispatches from other LLMs, event broadcasts.
 
-## Stage 1 — Get a JWT
+## Pick a style
+
+| Need | Style A (direct calls) | Style B (custom subscription) |
+|------|------------------------|-------------------------------|
+| Read scene info, run code, download assets | Yes | Yes |
+| Listen for progress on long-running bakes | No | Yes |
+| Observe dispatches you didn't originate | No | Yes |
+| Approval-workflow inbox | No | Yes |
+| Multi-LLM coordination via broadcasts | No | Yes |
+| Boilerplate to write | Low (just JWT + client) | High (handler + JobWaiter + filter) |
+
+Start with Style A. Only fall back to Style B when the pattern requires it.
+
+## Style A — direct dispatch tool calls
+
+The minimal happy path. Three things: JWT, transport, tool call.
+
+### Stage 1 — Get a JWT
 
 ```python
 import requests
@@ -25,9 +42,7 @@ auth = login("http://localhost:8000", "demo", "demo")
 token = auth["access_token"]
 ```
 
-The token is a bearer credential. The server identifies your user from it on every MCP request.
-
-## Stage 2 — Open an authenticated FastMCP transport
+### Stage 2 — Open an authenticated FastMCP transport
 
 ```python
 from fastmcp import Client
@@ -39,9 +54,94 @@ transport = StreamableHttpTransport(
 )
 ```
 
-The `Authorization` header is set per-transport, not per-call. The same header flows on every notification subscription.
+### Stage 3 — Call dispatch tools
 
-## Stage 3 — A message handler that filters bus traffic
+```python
+import asyncio, json
+
+async def main():
+    async with Client(transport) as client:
+        # Read the active scene. Returns a JSON string; parse it.
+        raw = await client.call_tool("blender_get_scene_info", {})
+        result = json.loads(raw.content[0].text)
+        print(result)
+        # {"status": "completed", "command": "get_scene_info",
+        #  "target_uuid": "blender-demo01", "job_id": "j-...",
+        #  "result": "{...scene info as JSON string...}", "error": ""}
+
+        # Run arbitrary Python in Blender.
+        raw = await client.call_tool("blender_execute_code", {
+            "code": "import bpy; print(len(bpy.data.objects))"
+        })
+        print(json.loads(raw.content[0].text)["result"])  # "3\n"
+
+        # Download a PolyHaven HDRI. Status probe first.
+        status = json.loads(
+            (await client.call_tool("blender_get_polyhaven_status", {})).content[0].text
+        )
+        if status["status"] == "completed":
+            await client.call_tool("blender_download_polyhaven_asset", {
+                "asset_id": "kloofendal_43d_clear_puresky",
+                "asset_type": "hdris",
+                "resolution": "2k",
+            })
+
+asyncio.run(main())
+```
+
+That's a complete Style A client. No registration, no `from_uuid`, no `job_id`. The server's `BlenderDispatchComponent` handles all of it.
+
+### When `target_uuid` matters
+
+Auto-pick works when exactly one `blender` client is connected. With zero or more than one, dispatch tools return structured errors:
+
+```json
+{"status": "no_client", "command": "get_scene_info",
+ "hint": "No Blender client connected to your bus. Open Blender, enable the BlenderMCP addon, click Login then Connect."}
+```
+
+```json
+{"status": "ambiguous_target", "command": "get_scene_info",
+ "candidates": ["blender-abc", "blender-def"],
+ "hint": "Multiple Blender clients connected; pass target_uuid=<one of candidates> to disambiguate."}
+```
+
+Pass `target_uuid` in the arguments dict to pick one:
+
+```python
+await client.call_tool("blender_get_scene_info", {"target_uuid": "blender-abc"})
+```
+
+### Tuning timeouts
+
+Every dispatch tool accepts `_timeout` (underscore prefix avoids collision with handler kwargs):
+
+```python
+await client.call_tool("blender_download_polyhaven_asset", {
+    "asset_id": "...", "asset_type": "models",
+    "_timeout": 600.0,  # default for downloads is 180s; bump for big models
+})
+```
+
+Per-tool defaults: status probes 15s, most reads 30s, code exec / Rodin jobs 60s, downloads 180s.
+
+## Style B — Custom `_message_bus` subscription
+
+For long-running progress streams, observing other LLMs' dispatches, or receiving broadcasts. Five things: JWT, transport, message handler, client-side JobWaiter, register-on-the-bus.
+
+<Aside type="note">
+Style B's JobWaiter is **client-side** — it lives in your process and correlates replies you subscribed to. The server has its own `JobWaiter` internal to `BlenderDispatchComponent`; the two don't interact. A Style B client doesn't use the server's dispatch tools, so the server's JobWaiter never sees its jobs.
+</Aside>
+
+### Stage 1 — Get a JWT
+
+Same as Style A.
+
+### Stage 2 — Open an authenticated FastMCP transport
+
+Same as Style A.
+
+### Stage 3 — A message handler that filters bus traffic
 
 ```python
 import json
@@ -74,11 +174,9 @@ async def on_message(message):
     handle_bus_record(data)
 ```
 
-The same shape arrives at every bus subscriber — Blender peers and LLM clients alike. The filter on `logger == "_message_bus"` is what keeps other MCP log traffic from being misinterpreted.
+The same shape arrives at every bus subscriber. The filter on `logger == "_message_bus"` is what keeps other MCP log traffic from being misinterpreted.
 
-## Stage 4 — JobWaiter (correlate replies to dispatches)
-
-When you dispatch a job, you want to `await` its completion. A JobWaiter is a `dict[job_id, Future]` populated by your handler.
+### Stage 4 — Client-side JobWaiter
 
 ```python
 import asyncio
@@ -105,7 +203,7 @@ class JobWaiter:
 
 Wire `waiter.resolve(data)` into your `on_message`.
 
-## Stage 5 — Register, dispatch, await
+### Stage 5 — Register, dispatch, await
 
 ```python
 async def main():
@@ -129,7 +227,7 @@ async def main():
             "capabilities": ["chat"],
         })
 
-        # Dispatch.
+        # Dispatch a script.
         job_id = "job-abc123"
         fut = waiter.register(job_id)
 
@@ -155,7 +253,7 @@ asyncio.run(main())
 Pass your own `from_uuid` and `job_id` to `blender_send_message`. The server uses `from_uuid` as the originator for the `_pending_jobs` correlation; if you omit it, the message gets stamped `server:<user_id>` and the job-update reply is broadcast instead of directly routed to you.
 </Aside>
 
-## Cleanup
+### Cleanup
 
 ```python
 await client.call_tool("blender_unregister_client", {"client_uuid": my_uuid})
@@ -163,9 +261,15 @@ await client.call_tool("blender_unregister_client", {"client_uuid": my_uuid})
 
 Ephemeral clients (`is_persistent=False`) age out of the bus when the session drops, but an explicit unregister keeps the client list clean and saves the next `list_available_clients` consumer from seeing stale entries.
 
+## Mixing styles
+
+Nothing stops you from doing both. A Style A client that occasionally needs to observe broadcasts can wire a Style B `message_handler` onto its `Client` and keep using dispatch tools for the request/response paths. The server doesn't care which style produced a given tool call.
+
 ## Reference
 
-- [Bus tools](/reference/bus-tools/) — full signatures
+- [Dispatch tools](/reference/dispatch-tools/) — all 24 signatures, return shapes, timeouts
+- [Bus tools](/reference/bus-tools/) — `register_client`, `send_message`, `job_update`, `list_available_clients`, `unregister_client`
 - [Priority levels](/reference/priorities/) — what `priority="info"` actually means
 - [Routing modes](/reference/routing-modes/) — direct, group, type-filter, broadcast
 - [ClientInfo](/reference/client-info/) — what `register_client` writes
+- [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/) — the underlying design

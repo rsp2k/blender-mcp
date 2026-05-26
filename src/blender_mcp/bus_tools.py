@@ -11,9 +11,9 @@ from typing import Any, Optional
 
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prompt
-from fastmcp.prompts.prompt import PromptMessage
-from mcp.types import TextContent
+from fastmcp.prompts.base import Message
 
+from .job_waiter import job_waiter
 from .message_bus import bus_manager, ClientInfo
 from .message_router import Priority, parse_priority
 
@@ -184,6 +184,10 @@ class BlenderBusComponent(MCPMixin):
             priority=Priority.NOTICE,
             job_id=job_id,
         )
+        # Wake any awaiter registered through the dispatch_component layer.
+        # No-op if the job came from old-style send_message + listen-pattern
+        # callers (no Future was ever registered for it).
+        job_waiter.deliver(user_id, job_id, status, result, error)
         # Terminal states clean up the tracking entry.
         if status in {"completed", "failed", "cancelled"}:
             _pending_jobs.pop(job_id, None)
@@ -238,7 +242,7 @@ class BlenderBusComponent(MCPMixin):
         script: str,
         priority: str = "info",
         description: Optional[str] = None,
-    ) -> list[PromptMessage]:
+    ) -> list[Message]:
         """Render a blender_send_message call template for a Blender job_dispatch."""
         target_uuid_line = "<omit>"
         group_id_line = "<omit>"
@@ -279,4 +283,4 @@ class BlenderBusComponent(MCPMixin):
             "The job_id inside payload MUST be a fresh UUID; the addon echoes it on completion."
         )
 
-        return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+        return [Message(text, role="user")]

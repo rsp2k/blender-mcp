@@ -1,11 +1,13 @@
 ---
 title: "Resources"
-description: "Read-only MCP resources exposed by the bus: client snapshots and bus stats."
+description: "Read-only MCP resources: bus state, scene snapshots, paginated console output."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The server exposes two MCP resources. Both return JSON scoped to the caller's user bus and require a valid JWT.
+Six MCP resources. The two `blender://bus/*` resources are local to the server (no Blender peer needed). The four others (`blender://scene/*`, `blender://console/{level}`, `blender://console/{level}/{page}`) dispatch through a Blender peer using the same JobWaiter round-trip as the [dispatch tools](/reference/dispatch-tools/) — they require an active persistent Blender on the user's bus.
+
+All resources scope returns to the caller's user bus and require a valid JWT. The `blender://` URI scheme is declared explicitly on each `@mcp_resource(uri=...)` and is **not** modified by MCPMixin's `prefix="blender"` (which only affects tool and prompt names).
 
 ## `blender://bus/clients`
 
@@ -41,7 +43,7 @@ Snapshot of the caller's bus: persistent + ephemeral clients with their UUIDs, t
 }
 ```
 
-This is the read-only equivalent of [`blender_list_available_clients`](/reference/bus-tools/) — useful when a client wants to observe bus state through a resource subscription rather than a polling tool call.
+Read-only equivalent of [`blender_list_available_clients`](/reference/bus-tools/) — useful when a client wants to observe bus state through a resource subscription rather than a polling tool call.
 
 ## `blender://bus/stats`
 
@@ -58,22 +60,58 @@ Counts for the caller's bus.
 }
 ```
 
-`pending_jobs_for_user` is the number of dispatches awaiting a [`blender_job_update`](/reference/bus-tools/) reply on behalf of this user. The counter is per-user — other tenants on the host are invisible.
+`pending_jobs_for_user` is the number of dispatches awaiting a [`blender_job_update`](/reference/bus-tools/) reply on behalf of this user.
+
+## `blender://scene/info`
+
+Live JSON snapshot of the active Blender scene. Internally dispatches `get_scene_info` through the bus.
+
+**Returns:** same payload as [`blender_get_scene_info`](/reference/dispatch-tools/) — scene name, object count, first ~10 objects, materials count, wrapped in the standard dispatch envelope:
+
+```json
+{
+  "status": "completed",
+  "command": "get_scene_info",
+  "target_uuid": "blender-...",
+  "job_id": "j-...",
+  "result": "<JSON-encoded scene snapshot>",
+  "error": ""
+}
+```
+
+If no Blender peer is connected, `status` is `no_client`.
+
+## `blender://scene/objects`
+
+First page of `bpy.data.objects`. Dispatches `browse_data` with `collection="objects"`, `page=1`, `page_size=50`.
+
+**Returns:** the standard dispatch envelope with `result` containing the paginated object list. For other pages or other collections (materials, meshes, etc.) call [`blender_browse_data`](/reference/dispatch-tools/) directly.
+
+## `blender://console/{level}`
+
+Templated resource. `{level}` is one of `all`, `info`, `warning`, `error`, `output`. Returns the first page of console output filtered by level.
+
+Dispatches `get_console_output` with `page=1`, `page_size=50`. For other pages, use the explicit-page variant below or call [`blender_get_console_output`](/reference/dispatch-tools/) directly.
+
+## `blender://console/{level}/{page}`
+
+Templated resource. `{level}` as above; `{page}` is a 1-indexed integer. Returns page `{page}` of console output at the requested level.
+
+<Aside>
+The console resources use FastMCP's URI-template registration path (`mcp.resource(uri)(method)`) rather than the `@mcp_resource` decorator, because the decorator's URI-template detection has issues with curly braces in URIs. See `dispatch_component.register_templated_resources()` for the wiring.
+</Aside>
 
 ## Authentication
 
-Both resources call the same `_resolve_user_id(ctx)` helper as the tools. An unauthenticated read returns:
+All resources call the same `_resolve_user_id(ctx)` helper as the tools. An unauthenticated read returns:
 
 ```json
 {"status": "error", "error": "unauthenticated"}
 ```
 
-<Aside>
-The URI scheme `blender://` is declared explicitly in `@mcp_resource(uri=...)` and is **not** modified by the MCPMixin's `register_all(prefix="blender")`. Tools and prompts get the `blender_` prefix; resource URIs are taken as-is.
-</Aside>
-
 ## Related
 
-- [Bus tools](/reference/bus-tools/) — the full tool surface, including the `blender_list_available_clients` equivalent
+- [Bus tools](/reference/bus-tools/) — the tool surface that includes equivalents for the bus resources
+- [Dispatch tools](/reference/dispatch-tools/) — the tool equivalents for the scene + console resources
 - [ClientInfo](/reference/client-info/) — the dataclass each entry in `persistent`/`ephemeral` is serialized from
-- [OAuth and per-user buses](/explanation/oauth-buses/) — why the resource scope is per-user
+- [OAuth and per-user buses](/explanation/oauth-buses/) — why resource scope is per-user

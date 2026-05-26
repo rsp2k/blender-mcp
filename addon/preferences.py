@@ -65,9 +65,22 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         subtype="PASSWORD",
         default="",
     )
+    refresh_token: StringProperty(
+        name="Refresh Token",
+        description=(
+            "Long-lived refresh token from /auth/login. Used by the bus client "
+            "to mint new access tokens before the current JWT expires, so the "
+            "session doesn't wedge mid-edit."
+        ),
+        subtype="PASSWORD",
+        default="",
+    )
     jwt_expires_at: StringProperty(
         name="JWT Expires At",
-        description="ISO 8601 timestamp of when the access token expires",
+        description=(
+            "Unix epoch (seconds) when the current access token expires. "
+            "The bus client watches this and refreshes ~60s before."
+        ),
         default="",
     )
 
@@ -114,7 +127,11 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         layout = self.layout
         col = layout.column(align=True)
         col.label(text="Connection", icon='NETWORK_DRIVE')
-        col.prop(self, "server_url")
+        # Server URL + Test Connection on one row — quick reachability check
+        # without round-tripping a full login.
+        row = col.row(align=True)
+        row.prop(self, "server_url")
+        row.operator("blendermcp.test_connection", text="", icon='URL')
         col.prop(self, "username")
         # JWT is shown but read-only-ish: clicking the field reveals it,
         # but the Login operator is the normal way to populate it.

@@ -5,6 +5,10 @@ description: "Every command the BlenderMCP addon registers, grouped by domain. 2
 
 import { Aside } from '@astrojs/starlight/components';
 
+<Aside title="These are wrapped as MCP tools">
+All 23 commands below are also exposed as 24 first-class MCP [dispatch tools](/reference/dispatch-tools/) (`blender_<command_name>`). The dispatch tools are the recommended way to call them from an LLM client — they handle the bus round-trip via JobWaiter and return results synchronously. This page documents the underlying registry, useful when you want to dispatch via a custom `command_dispatch` payload, write a [`job_dispatch`](/explanation/dispatch-vs-script/) script that calls `executor.<name>(...)` directly, or extend the addon with new commands (see [Add an addon command](/how-to/add-an-addon-command/)).
+</Aside>
+
 The addon registers commands via `@command(name, gate=...)` on per-domain mixins. The composed `BlenderCommandExecutor` exposes the union. `executor` is in scope inside every `job_dispatch` script, so anything below is callable as `executor.<name>(...)`.
 
 23 commands across 8 domains. Commands with a **Gate** column entry are only dispatchable when the matching `AddonPreferences` flag is true.
