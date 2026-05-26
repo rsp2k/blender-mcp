@@ -34,16 +34,27 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
 
         # --- Login section ---
         has_jwt = bool(prefs.jwt_token)
+        is_oauth = bool(prefs.oauth_client_id)
         if not has_jwt:
             col.separator()
             col.label(text="Login:", icon='UNLOCKED')
+            # OAuth (production path): browser flow against Authentik.
+            col.operator(
+                "blendermcp.oauth_login",
+                text="Login with OAuth (browser)",
+                icon='URL',
+            )
+            # Legacy password flow (only for AUTH_BACKEND=inmemory dev servers).
+            col.separator()
+            col.label(text="(or password login — dev only)", icon='INFO')
             col.prop(prefs, "username", text="Username")
-            # Password remains on Scene (transient _tmp slot — never persisted).
             col.prop(scene, "blendermcp_password_tmp", text="Password")
-            col.operator("blendermcp.login", text="Login", icon='KEYINGSET')
+            col.operator("blendermcp.login", text="Password Login", icon='KEYINGSET')
         else:
             row = col.row(align=True)
-            row.label(text=f"Logged in as {prefs.username or '?'}", icon='LOCKED')
+            who = prefs.username or "OAuth user"
+            method = "OAuth" if is_oauth else "password"
+            row.label(text=f"Logged in ({method}): {who}", icon='LOCKED')
             # Logout: disconnects + notifies server + clears local JWT.
             row.operator("blendermcp.logout", text="", icon='UNLOCKED')
 

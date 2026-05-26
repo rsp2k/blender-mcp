@@ -7,13 +7,14 @@ AddonPreferences accessors.
 
 from __future__ import annotations
 
+import threading
 import traceback
 
 import bpy
 import requests  # for catching requests.exceptions.RequestException
 
 from .. import state
-from ..auth import LoginError, login, logout
+from ..auth import LoginError, OAuthError, login, logout, oauth_login
 from ..auth.login import _auth_base
 from ..client import BlenderMCPClient
 from ..client.bus_client import FASTMCP_AVAILABLE
@@ -140,6 +141,87 @@ class BLENDERMCP_OT_Login(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
+    """Authenticate via the MCP-spec OAuth flow (Authentik in prod).
+
+    Spawns a worker thread that drives the RFC 8252 PKCE flow:
+      1. POST /mcp/register — Dynamic Client Registration
+      2. Open the user's system browser to /mcp/authorize
+      3. Authentik authenticates the user in the browser
+      4. Browser redirects to localhost callback; addon captures the code
+      5. POST /mcp/token — exchange code for access+refresh tokens
+      6. Store tokens in addon prefs
+
+    The flow runs in a worker thread so Blender's UI doesn't freeze for
+    the 30s-2min the user is in the browser. A bpy.app.timer polls the
+    thread's result and updates the panel when complete.
+
+    Use this against AUTH_BACKEND=authentik servers. The legacy
+    password-based ``blendermcp.login`` is for AUTH_BACKEND=inmemory.
+    """
+
+    bl_idname = "blendermcp.oauth_login"
+    bl_label = "Login with OAuth"
+    bl_description = (
+        "Open browser → authenticate via Authentik → store tokens in prefs. "
+        "Use against MCP servers configured with AUTH_BACKEND=authentik."
+    )
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        server_url = prefs.server_url
+        if not server_url:
+            self.report({'ERROR'}, "Server URL is empty")
+            return {'CANCELLED'}
+
+        # Thread state — stored on the module so the timer callback can read.
+        state._oauth_result = None
+        state._oauth_error = None
+
+        def _worker():
+            try:
+                token = oauth_login(server_url, timeout=300.0)
+                state._oauth_result = token
+            except OAuthError as e:
+                state._oauth_error = str(e)
+            except Exception as e:
+                state._oauth_error = f"Unexpected: {e}"
+                traceback.print_exc()
+
+        thread = threading.Thread(target=_worker, daemon=True, name="oauth-login")
+        thread.start()
+
+        # Poll for completion on the main thread via bpy.app.timer.
+        # The timer callback persists results into prefs (which IS main-thread).
+        def _poll():
+            if state._oauth_result is None and state._oauth_error is None:
+                return 0.5  # keep polling
+            if state._oauth_error:
+                print(f"[BlenderMCP] OAuth login failed: {state._oauth_error}")
+                state._oauth_error = None
+                return None  # unregister timer
+
+            tok = state._oauth_result
+            state._oauth_result = None
+            import time as _time
+            prefs_now = get_prefs()
+            prefs_now.jwt_token = tok["access_token"]
+            prefs_now.refresh_token = tok.get("refresh_token", "")
+            prefs_now.oauth_client_id = tok.get("client_id", "")
+            expires_in = int(tok.get("expires_in", 0))
+            if expires_in:
+                prefs_now.jwt_expires_at = str(int(_time.time()) + expires_in)
+            print(
+                f"[BlenderMCP] OAuth login complete; access token expires in "
+                f"{expires_in}s, client_id={prefs_now.oauth_client_id}"
+            )
+            return None  # unregister timer
+
+        bpy.app.timers.register(_poll, first_interval=0.5)
+        self.report({'INFO'}, "Browser opened — complete login there")
+        return {'FINISHED'}
+
+
 class BLENDERMCP_OT_Logout(bpy.types.Operator):
     """Disconnect, notify the server, clear the stored JWT.
 
@@ -183,6 +265,7 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         prefs.jwt_token = ""
         prefs.refresh_token = ""
         prefs.jwt_expires_at = ""
+        prefs.oauth_client_id = ""
         scene.blendermcp_password_tmp = ""
 
         self.report({'INFO'}, "Logged out")

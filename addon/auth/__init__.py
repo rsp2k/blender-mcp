@@ -16,5 +16,22 @@ Public API:
 from __future__ import annotations
 
 from .login import LoginError, login, logout, refresh_token
+from .oauth_pkce import (
+    OAuthError,
+    oauth_login,
+    refresh_oauth_token,
+    revoke_oauth_token,
+)
 
-__all__ = ["login", "logout", "refresh_token", "LoginError"]
+__all__ = [
+    # Legacy password-based flow (kept for AUTH_BACKEND=inmemory dev servers)
+    "login",
+    "logout",
+    "refresh_token",
+    "LoginError",
+    # MCP-spec OAuth PKCE flow (production path, against AUTH_BACKEND=authentik)
+    "oauth_login",
+    "refresh_oauth_token",
+    "revoke_oauth_token",
+    "OAuthError",
+]

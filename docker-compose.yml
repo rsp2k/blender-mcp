@@ -30,9 +30,11 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-prod
     restart: unless-stopped
     environment:
-      # Required — compose refuses to start without these.
-      OAUTH_SECRET_KEY: ${OAUTH_SECRET_KEY:?OAUTH_SECRET_KEY must be set in .env (JWT signing key)}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env (bootstraps admin user)}
+      # Legacy AUTH_BACKEND=inmemory vars. Not required for the OAuth path
+      # (AUTH_BACKEND=authentik) — server will fall back to ephemeral values
+      # at startup with a WARNING if these are missing AND inmemory is selected.
+      OAUTH_SECRET_KEY: ${OAUTH_SECRET_KEY:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Optional — passed through if set in .env, app defaults otherwise.
       # ``:-<default>`` is required (not ``:-``) because the Python defaults
       # only fire when ``os.getenv`` returns None, NOT when it returns "". A
@@ -42,6 +44,14 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Phase G — OAuth backend selection. ``authentik`` (default) requires the
+      # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
+      # against the USERS dict (local dev only).
+      AUTH_BACKEND: ${AUTH_BACKEND:-authentik}
+      AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
     networks:
       - caddy
     labels:
@@ -100,6 +110,14 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Phase G — OAuth backend selection. ``authentik`` (default) requires the
+      # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
+      # against the USERS dict (local dev only).
+      AUTH_BACKEND: ${AUTH_BACKEND:-authentik}
+      AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:
