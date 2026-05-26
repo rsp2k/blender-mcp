@@ -22,7 +22,13 @@ services:
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}
       caddy.reverse_proxy: "{{upstreams 80}}"
-      caddy.tls.import: rfc2136_local
+      # Caddy verifies DNS-01 propagation against public resolvers rather
+      # than the Docker DNS chain — needed for fresh issuance on hosts where
+      # the global `acme_dns rfc2136` config doesn't specify resolvers.
+      # 60s/600s give the rfc2136 server time to publish before verification.
+      caddy.tls.resolvers: "1.1.1.1 9.9.9.9"
+      caddy.tls.propagation_delay: 60s
+      caddy.tls.propagation_timeout: 600s
       caddy.encode: zstd gzip
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]

@@ -3,7 +3,6 @@ title: "Deploy with Docker + Caddy"
 description: "Production deploy with docker compose, caddy-docker-proxy reverse proxy, and an rfc2136 TLS path."
 ---
 
-import { Steps, Tabs, TabItem, Aside, FileTree, Code } from '@astrojs/starlight/components';
 
 A production deploy uses three pieces: the server image, a `.env` file, and caddy-docker-proxy labels on the external `caddy` network.
 

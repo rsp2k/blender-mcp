@@ -3,7 +3,6 @@ title: "Addon package tour"
 description: "Why the addon is a package, not a single file. Walk through auth/, client/, executor/, ui/ — what each does and why the split."
 ---
 
-import { Aside, FileTree } from '@astrojs/starlight/components';
 
 The addon used to be one ~2000-line `addon.py`. Phases 4, 6, 8, and 9 refactored it into a proper package. This page walks the layout and explains why each split exists.
 

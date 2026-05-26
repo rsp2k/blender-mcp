@@ -3,7 +3,6 @@ title: "Addon preferences"
 description: "BlenderMCPPreferences fields: connection, asset integrations. Migration from pre-Phase-8 Scene properties."
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 
 `BlenderMCPPreferences` is an `AddonPreferences` subclass that holds all per-user addon config. Lives in `addon/preferences.py`. Accessed everywhere via `get_prefs()`.
 

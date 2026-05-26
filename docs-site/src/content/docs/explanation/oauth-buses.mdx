@@ -1,137 +1,91 @@
 ---
 title: "OAuth and per-user buses"
-description: "JWT issuance, ContextVar plumbing, UserMessageBus isolation, _pending_jobs same-user check."
+description: "How an authenticated identity maps to a UserMessageBus. Why your peers are invisible to other users."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The server holds one `UserMessageBus` per user. Authentication maps each MCP request to a `user_id`; the bus tools resolve their target bus from that. Users can't see each other.
+A BlenderMCP server holds one `UserMessageBus` per authenticated user. Every authorized request resolves to a `user_id`, and every bus operation is implicitly scoped to that user's bus. Two users can hit the same physical server and never see each other — different buses, different client lists, different `_pending_jobs` namespaces.
 
-## JWT issuance
+## The identity chain
 
-`POST /auth/login` accepts `{username, password}` and returns:
-
-```json
-{
-  "access_token": "eyJhbGciOi...",
-  "refresh_token": "eyJhbGciOi...",
-  "token_type": "Bearer",
-  "expires_in": 3600,
-  "user": {"username": "demo", "id": "demo"}
-}
+```
+OAuth access token  ──┐
+                      │   server-side
+                      ▼
+              JWT verification         ← Authentik (prod) or in-memory provider (dev)
+                      │
+                      ▼
+              subject claim → user_id
+                      │
+                      ▼
+              ContextVar(current_user_id)
+                      │
+                      ▼
+            bus_manager.get_bus(user_id) → UserMessageBus
 ```
 
-The access token is signed with `JWT_SECRET` (HS256 by default). Its claims include `sub` (the user id), `exp`, and `iat`. The refresh token has a longer TTL and is exchanged via `POST /auth/refresh`.
+Each step is invisible from the consumer's perspective — you send a Bearer token, the server picks the right bus. But the chain matters for understanding what isolation guarantees you actually get.
 
-The addon's `auth/login.py` is a pure-`requests` implementation — no `bpy` imports, runnable outside Blender, which is what makes the auth flow testable without a Blender process.
+## Step 1 — Token → user_id
 
-```python
-# addon/auth/login.py
-def login(server_url, username, password, *, timeout=10.0):
-    url = f"{_auth_base(server_url)}/auth/login"
-    resp = requests.post(url, json={"username": username, "password": password}, timeout=timeout)
-    if resp.status_code != 200:
-        raise LoginError(_detail(resp), status_code=resp.status_code)
-    return resp.json()
-```
+The server's auth pipeline validates the `Authorization: Bearer <token>` header on every request to `/mcp/`. Production servers use [Authentik](https://goauthentik.io/) via FastMCP's `OIDCProxy`; the access token is an RS256 JWT signed by Authentik, and the `sub` claim becomes the user_id. Dev servers use an in-memory provider that issues opaque tokens backed by a local `USERS` dict; same outcome, different signing material.
 
-`_auth_base()` strips trailing `/mcp` from the panel's stored URL — the panel holds the MCP endpoint, but `/auth/*` lives at the FastAPI root.
+Consumers don't need to know which backend is running — the [discovery URLs](/reference/auth/) are identical, and the token is opaque from your side.
 
-## ContextVar mechanics
+## Step 2 — user_id → ContextVar
 
-`bus_tools.py` declares:
+Once decoded, the user_id lands in a Python `ContextVar`:
 
 ```python
 from contextvars import ContextVar
-current_user_id: ContextVar[Optional[str]] = ContextVar("current_user_id", default=None)
+current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
 ```
 
-The FastAPI JWT middleware runs before MCP dispatch. For each request:
+`ContextVar` is asyncio-aware — each request gets its own copy, so concurrent requests with different tokens don't see each other's user. This is the whole reason a `ContextVar` is used instead of a module-level global.
 
-1. Read `Authorization: Bearer <token>`.
-2. Decode + verify the JWT.
-3. `current_user_id.set(claims["sub"])`.
+## Step 3 — ContextVar → UserMessageBus
 
-Every bus tool resolves the user identity by reading `current_user_id.get()`:
+Every bus tool starts with the same line:
 
 ```python
-def _resolve_user_id(ctx: Optional[Context]) -> Optional[str]:
-    uid = current_user_id.get()
-    if uid:
-        return uid
-    if ctx is None:
-        return None
-    try:
-        req = ctx.get_http_request()
-        return getattr(req.state, "user_id", None) if req else None
-    except Exception:
-        return None
+user_id = _resolve_user_id(ctx)
+if not user_id:
+    return json.dumps({"status": "error", "error": "unauthenticated"})
+
+bus = bus_manager.get_bus(user_id)
 ```
 
-The fallback to `ctx.get_http_request().state.user_id` covers the case where middleware uses request-state assignment instead of (or alongside) `ContextVar`.
+`bus_manager.get_bus(user_id)` lazy-creates a `UserMessageBus` per user. The buses share nothing — separate client registries, separate `last_activity` clocks, separate `_pending_jobs` namespaces, separate everything. There's no "cross-bus" routing primitive.
 
-`ContextVar` works correctly with `asyncio` — each request gets its own copy, so concurrent requests don't see each other's user. This is the whole reason it was chosen over a module-level global.
+## What isolation actually guarantees
+
+A `blender_send_message` call from user A operates exclusively on A's bus. Concrete consequences:
+
+- **Client visibility**: `blender_list_available_clients` returns only your registered clients. A's Blender peers don't show up in B's list.
+- **Routing**: `target_uuid="blender-X"` resolves against your bus only. If `blender-X` is on a different user's bus, you get `unknown_target`.
+- **Job correlation**: `_pending_jobs` is keyed by `(user_id, job_id)`. Even if you guess another user's `job_id`, calling `blender_job_update` returns `{"status": "error", "error": "cross_user_job_update"}` — the same-user check fires before any side effect.
+- **Resources**: `blender://bus/clients` and `blender://bus/stats` return your bus's state only.
 
 <Aside type="caution">
-The bus tools are **not registered on the stdio MCP build**. Over stdio there's no transport-level identity — every caller would resolve to `None` and get `{"status":"error","error":"unauthenticated"}`. Showing tools that can never succeed pollutes tool discovery. `build_stdio_mcp()` registers only diagnostics.
+Isolation is a per-user partition, **not** per-client. Multiple clients registered under the same user_id share the bus and can see each other freely. If you want two independent Blender sessions to be mutually invisible, give them separate user identities.
 </Aside>
 
-## UserMessageBus isolation
+## What isolation does NOT guarantee
 
-`bus_manager.get_bus(user_id)` lazy-creates a `UserMessageBus` per user. The buses share nothing — separate client registries, separate `last_activity` clocks, separate everything.
+- **No per-user quotas.** A single authenticated user can register an unlimited number of clients on their bus.
+- **No per-job timeout enforced on the addon side.** A `job_dispatch` payload runs as long as the addon takes to finish. The MCP tool's `_timeout` only bounds how long the server-side `JobWaiter` waits before returning `{"status": "timeout"}` — the addon may keep running.
+- **No capability authorization.** Any client on a user's bus can dispatch to any other client on that bus. Capabilities declared in `register_client` are advisory metadata, not enforcement.
 
-A `blender_send_message` call from user A operates exclusively on A's bus. A's clients can't see B's clients. There's no "cross-bus" routing primitive at all.
+## Why this design
 
-## _pending_jobs — the same-user check
+OAuth-derived identity gives consumers a clean mental model: *the same credentials that authenticated you also scope everything you do*. No separate "API key for the bus." No "tenant ID" parameter on every call. The same token resolves consistently across all bus operations, and the server enforces isolation centrally rather than at every call site.
 
-When `send_message` records a dispatched job, it stores both the user and the originator:
-
-```python
-# bus_tools.py send_message
-_pending_jobs[tracking_id] = (user_id, origin)
-```
-
-When a `job_update` comes in, the tool resolves the calling user's id, looks up the entry, and enforces:
-
-```python
-owner_user, originator_uuid = entry
-if owner_user != user_id:
-    return json.dumps({"status": "error", "error": "cross_user_job_update"})
-```
-
-This is the defense against a malicious client guessing another user's `job_id` and sending a fake completion. The originator's JWT-resolved user id must match the user id recorded at dispatch time.
-
-`_pending_jobs` itself is a module-level dict shared across users. It's keyed by `job_id`, which clients generate. The same-user check is what makes the shared dict safe — anyone can store a tuple, only the originating user can read or write a reply.
-
-<Aside type="note">
-`_pending_jobs` is a module global. In a clustered deployment this needs to become a shared store (Redis, etc.) — and the same-user check moves with it. Single-instance deployment is the current target, so the in-memory dict suffices.
-</Aside>
-
-## Token lifecycle in the addon
-
-The Login operator (`addon/ui/operators.py`) calls `addon.auth.login.login(...)`, stores the result in `AddonPreferences.jwt_token` and `jwt_expires_at`, then clears `Scene.blendermcp_password_tmp`. The token is held in prefs (per-user, in `userpref.blend`) — never in the scene file.
-
-A periodic refresh via `addon.auth.login.refresh_token` keeps the access token valid for long-running sessions. The refresh token has a 30-day TTL; after that, the user has to log in again.
-
-## Production defaults — hardened
-
-The server refuses to start without an `ADMIN_PASSWORD`. There's no built-in default — the previous `"SecureAdmin123!"` placeholder was removed because it shipped in this public repo. Two layers enforce it:
-
-1. **Module load** in `oauth_server.py` — raises `RuntimeError` on import if `os.getenv("ADMIN_PASSWORD")` is empty. Catches `uv run blender-mcp` invocations that bypass compose.
-2. **Compose** — `${ADMIN_PASSWORD:?}` in `docker-compose.yml` fails the stack at `up` time if the env var is missing.
-
-The `demo` user is **opt-in**: only created when `DEMO_PASSWORD` is explicitly set. Production deployments leave it unset so no demo account exists. Local dev sets it in `.env` (or via `make dev`) when running the quickstart.
-
-`OAUTH_SECRET_KEY` (the JWT signing key) is generated via `make secret-gen` — idempotent, only writes if blank, never overwrites an existing key. Rotating it invalidates every issued token.
-
-## What's NOT enforced
-
-- **No per-user quotas.** A user with valid credentials can register unlimited clients on their bus.
-- **No per-job timeouts.** A `job_dispatch` payload runs as long as the addon takes to finish.
-- **No capability authorization.** Any client on a user's bus can dispatch to any other client on that bus. Capabilities are advisory, not enforced. See [Use capabilities](/how-to/use-capabilities/).
+The cost is that **the server's bus state lives in memory**, partitioned by user_id. Restarting the server drops every user's `_pending_jobs` and disconnects every persistent client. For a clustered deployment, the in-process dict needs to become a shared store (Redis, etc.) — and the same-user check needs to move with it. Single-instance deployment is the current target; the in-memory model is intentional, not vestigial.
 
 ## Related
 
-- [Architecture](/explanation/architecture/) — where the middleware sits
-- [Bus tools](/reference/bus-tools/) — every tool reads `current_user_id`
-- [Deploy with Docker + Caddy](/how-to/deploy-docker/) — `JWT_SECRET` and TLS in production
+- [Authentication reference](/reference/auth/) — the OAuth 2.1 + PKCE wire details
+- [Bus tools](/reference/bus-tools/) — every tool resolves `current_user_id`
+- [Architecture](/explanation/architecture/) — where the middleware sits in the request lifecycle
+- [ClientInfo](/reference/client-info/) — what's in your bus's client list

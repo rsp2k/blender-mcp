@@ -10,7 +10,7 @@ const HMR_HOST = process.env.HMR_HOST || 'localhost';
 const HMR_PROTOCOL = process.env.HMR_PROTOCOL || 'ws';
 const HMR_CLIENT_PORT = Number(process.env.HMR_CLIENT_PORT || 4321);
 
-const SITE = process.env.SITE_URL || 'https://blender-mcp.l.warehack.ing';
+const SITE = process.env.SITE_URL || 'https://blender.bet';
 
 // https://astro.build/config
 export default defineConfig({

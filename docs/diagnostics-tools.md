@@ -3,7 +3,6 @@ title: "Diagnostics tools"
 description: "Five blender_* tools for environment diagnosis and addon install. Available on stdio and HTTP, no auth required."
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Five tools for bootstrapping a host that doesn't have Blender or the addon set up yet. The bus tools can't help an empty-handed caller — they need an OAuth session that doesn't exist yet. These tools are deliberately **unauthenticated** and appear on **both** the stdio and HTTP builds.
 

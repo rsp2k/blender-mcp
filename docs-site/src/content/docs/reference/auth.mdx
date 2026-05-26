@@ -1,0 +1,193 @@
+---
+title: "Authentication"
+description: "MCP-spec OAuth 2.1 with PKCE + Dynamic Client Registration. Discovery URLs, endpoints, token shape."
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+BlenderMCP servers implement the MCP-spec authorization profile: OAuth 2.1 with PKCE (S256), Dynamic Client Registration, and `.well-known/` discovery. **Consumers should use a library that handles this flow** — `fastmcp.Client` and any MCP-spec-compliant client do — but the wire details are documented here for anyone implementing a client from scratch or debugging an unexpected token failure.
+
+## Discovery — start here
+
+Every interaction starts with a 401 that points at the resource-metadata endpoint:
+
+```bash
+$ curl -i https://mcp.blender.bet/mcp/
+HTTP/2 401
+www-authenticate: Bearer error="invalid_token",
+  error_description="...",
+  resource_metadata="https://mcp.blender.bet/.well-known/oauth-protected-resource/mcp/"
+```
+
+Follow the `resource_metadata` URL to find the authorization server:
+
+```bash
+$ curl https://mcp.blender.bet/.well-known/oauth-protected-resource/mcp/
+{
+  "resource": "https://mcp.blender.bet/mcp/",
+  "authorization_servers": ["https://mcp.blender.bet/mcp"],
+  "scopes_supported": [],
+  "bearer_methods_supported": ["header"]
+}
+```
+
+Follow the `authorization_servers[0]` URL to find the endpoints:
+
+```bash
+$ curl https://mcp.blender.bet/.well-known/oauth-authorization-server/mcp
+{
+  "issuer": "https://mcp.blender.bet/mcp",
+  "authorization_endpoint": "https://mcp.blender.bet/mcp/authorize",
+  "token_endpoint":         "https://mcp.blender.bet/mcp/token",
+  "registration_endpoint":  "https://mcp.blender.bet/mcp/register",
+  "revocation_endpoint":    "https://mcp.blender.bet/mcp/revoke",
+  "scopes_supported": [],
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+  "revocation_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+  "code_challenge_methods_supported": ["S256"],
+  "client_id_metadata_document_supported": true
+}
+```
+
+Three endpoints matter to a client: `registration_endpoint`, `authorization_endpoint`, `token_endpoint`.
+
+<Aside type="note">
+Discovery URLs use the **full MCP path** in the metadata key (`oauth-protected-resource/mcp/`, `oauth-authorization-server/mcp`). Don't strip the trailing path component — that's how the server distinguishes multiple resources mounted on the same host.
+</Aside>
+
+## Step 1 — Dynamic Client Registration (DCR)
+
+Public clients register themselves at runtime. No advance coordination with the operator needed:
+
+```bash
+$ curl -X POST https://mcp.blender.bet/mcp/register \
+  -H 'content-type: application/json' \
+  -d '{
+    "client_name": "my-llm-agent",
+    "redirect_uris": ["http://127.0.0.1:51234/callback"],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"]
+  }'
+```
+
+Returns:
+
+```json
+{
+  "client_id": "mcp-xxxxxxxx",
+  "client_name": "my-llm-agent",
+  "redirect_uris": ["http://127.0.0.1:51234/callback"],
+  "token_endpoint_auth_method": "none",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "client_id_issued_at": 1716_000_000
+}
+```
+
+`token_endpoint_auth_method: "none"` marks this as a public client — no `client_secret`, PKCE substitutes for it. Loopback redirect URIs (`http://127.0.0.1:<port>/`) are allowed per RFC 8252 for installed apps.
+
+## Step 2 — Authorization Code + PKCE
+
+Generate a verifier and S256 challenge:
+
+```python
+import secrets, hashlib, base64
+verifier = secrets.token_urlsafe(64)
+challenge = base64.urlsafe_b64encode(
+    hashlib.sha256(verifier.encode()).digest()
+).rstrip(b"=").decode()
+state = secrets.token_urlsafe(16)  # CSRF protection
+```
+
+Open the user's browser to:
+
+```
+https://mcp.blender.bet/mcp/authorize?
+  response_type=code&
+  client_id=mcp-xxxxxxxx&
+  redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&
+  state=<state>&
+  code_challenge=<challenge>&
+  code_challenge_method=S256
+```
+
+The user authenticates against the upstream identity provider (Authentik in production, or the server's in-memory provider in dev mode). On success, the browser is redirected back to your loopback `redirect_uri`:
+
+```
+http://127.0.0.1:51234/callback?code=<authorization_code>&state=<state>
+```
+
+Verify `state` matches what you sent. The `code` is single-use and short-lived (~60s).
+
+## Step 3 — Exchange code for tokens
+
+```bash
+$ curl -X POST https://mcp.blender.bet/mcp/token \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  -d 'grant_type=authorization_code' \
+  -d 'code=<authorization_code>' \
+  -d 'redirect_uri=http://127.0.0.1:51234/callback' \
+  -d 'client_id=mcp-xxxxxxxx' \
+  -d 'code_verifier=<verifier>'
+```
+
+Returns:
+
+```json
+{
+  "access_token":  "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "<opaque>",
+  "token_type":    "Bearer",
+  "expires_in":    28800,
+  "scope":         ""
+}
+```
+
+Use `access_token` as `Authorization: Bearer <access_token>` on every request to `/mcp/`.
+
+## Step 4 — Refresh before expiry
+
+When `expires_in` is close to elapsed, exchange the refresh token:
+
+```bash
+$ curl -X POST https://mcp.blender.bet/mcp/token \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  -d 'grant_type=refresh_token' \
+  -d 'refresh_token=<refresh_token>' \
+  -d 'client_id=mcp-xxxxxxxx'
+```
+
+Returns a new `access_token` (and usually a rotated `refresh_token`). Treat the new refresh token as canonical and discard the old one.
+
+## Auth backends
+
+The server runs one of two providers, selected at boot via `AUTH_BACKEND`:
+
+| Backend | What it does | When |
+|---|---|---|
+| `authentik` | Bridges to an upstream Authentik OIDC provider via `OIDCProxy`. Users authenticate with their Authentik credentials (SSO, federated identity, etc.). | Production. |
+| `inmemory` | `BlenderMCPOAuthProvider` — a complete MCP-spec OAuth 2.1 implementation backed by an in-process `USERS` dict. Useful for local dev and CI. | Development / no Authentik. |
+
+Discovery URLs and endpoint shapes are **identical between backends** — the choice is transparent to consumers. The token format differs (Authentik issues RS256 JWTs with rich claims; inmemory issues opaque tokens), but consumers should treat both as opaque `Bearer` strings.
+
+## What the server gets from your token
+
+The server resolves a `user_id` from the access token and uses it as the bus partition key. All bus tools — [`register_client`](/reference/bus-tools/), [`send_message`](/reference/bus-tools/), [`list_available_clients`](/reference/bus-tools/), [`job_update`](/reference/bus-tools/), and the [dispatch tools](/reference/dispatch-tools/) — operate exclusively on the bus owned by the resolved user. Users can't see each other's clients or job state. See [OAuth and per-user buses](/explanation/oauth-buses/) for the isolation guarantees.
+
+## Common errors
+
+| Status / Error | Cause |
+|---|---|
+| `401 invalid_token` | Token expired, revoked, or never valid. Re-run the PKCE flow (or refresh if you still have a refresh token). |
+| `400 invalid_grant` | `code_verifier` doesn't match the `code_challenge` from step 2, OR the code was already used, OR `redirect_uri` mismatch. |
+| `400 invalid_client` | `client_id` not registered. Re-run DCR. |
+| `400 invalid_request` (missing PKCE) | Server requires PKCE; you sent `response_type=code` without `code_challenge`. |
+
+## Related
+
+- [OAuth and per-user buses](/explanation/oauth-buses/) — how authenticated identity maps to bus isolation
+- [Quickstart](/tutorials/quickstart/) — full end-to-end including auth, using a library
+- [Write your own LLM client](/how-to/write-llm-client/) — Style A (library-mediated) and Style B (manual PKCE)
+- [Bus tools](/reference/bus-tools/) — what you call once you have a token

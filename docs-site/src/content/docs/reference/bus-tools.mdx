@@ -9,7 +9,7 @@ import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
 This page documents the **control plane** — five tools that let clients join the bus, route messages, and report job status. For the **action plane** — 24 tools like `blender_get_scene_info` and `blender_execute_code` that drive Blender directly — see [Dispatch tools](/reference/dispatch-tools/). Most LLM use cases call dispatch tools; bus tools are for client lifecycle and custom routing scenarios.
 </Aside>
 
-Five tools, all prefixed `blender_`, all on the HTTP build only (the stdio build omits them — there's no transport-level identity over stdio). Every tool returns a JSON-encoded string. Authentication is implicit: the JWT middleware in `oauth_server.py` populates a `ContextVar` before dispatch, and each tool resolves the calling user from it.
+Five tools, all prefixed `blender_`. Every tool returns a JSON-encoded string. Authentication is implicit: the OAuth-validated bearer token is decoded into a `user_id` by the FastMCP auth pipeline, which populates a `ContextVar` before dispatch — each tool resolves the calling user from it. See [Authentication](/reference/auth/) for the wire flow that gets you a bearer token.
 
 ## blender_register_client
 

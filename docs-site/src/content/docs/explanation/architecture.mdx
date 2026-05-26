@@ -24,7 +24,7 @@ Every connection is a standard MCP transport. The server doesn't speak any custo
 
 ### LLM clients
 
-Any process that speaks MCP can be a client. The reference client (`examples/llm_client_example.py`) uses `fastmcp.Client` over `StreamableHttpTransport`. Login at `POST /auth/login` returns a JWT, which is set as the `Authorization` bearer header on the transport.
+Any process that speaks MCP can be a client. The reference client (`examples/llm_client_example.py`) uses `fastmcp.Client`, which discovers the server's [OAuth endpoints](/reference/auth/) via `/.well-known/oauth-protected-resource/mcp/`, runs a DCR + PKCE flow, and sets the resulting access token as `Authorization: Bearer …` on every subsequent request.
 
 LLM clients are typically **ephemeral** — `is_persistent=False`. They join the bus, dispatch some jobs, await replies, leave.
 
@@ -32,14 +32,15 @@ LLM clients are typically **ephemeral** — `is_persistent=False`. They join the
 
 A FastAPI app that mounts:
 
-- `POST /auth/login` and `POST /auth/refresh` — the OAuth surface
-- `/mcp` — the Streamable HTTP MCP endpoint produced by `build_http_mcp()`
+- `/.well-known/oauth-protected-resource/mcp/` and `/.well-known/oauth-authorization-server/mcp` — discovery
+- `/mcp/{register,authorize,token,revoke}` — the MCP-spec OAuth endpoints (proxied to Authentik in prod, served by an in-memory provider in dev)
+- `/mcp/` — the Streamable HTTP MCP endpoint produced by `build_http_mcp()`
 
-A request-scoped middleware:
+FastMCP's auth pipeline:
 
 1. Reads the bearer token from the `Authorization` header.
-2. Verifies the JWT.
-3. Sets `current_user_id` (a `ContextVar`) before dispatch.
+2. Validates it against the active provider (Authentik or in-memory).
+3. Resolves the subject claim to a `user_id` and stashes it in `current_user_id` (a `ContextVar`) before dispatch.
 4. Tool calls read `current_user_id.get()` to resolve which `UserMessageBus` to operate on.
 
 The server holds:
@@ -51,10 +52,10 @@ The server holds:
 
 The MCP tool surface registered by `build_http_mcp()`:
 
-- `BlenderDiagnosticsComponent` — Blender install probes (5 tools)
 - `BlenderBusComponent` — `register_client`, `send_message`, `job_update`, etc. (5 tools, 2 resources, 1 prompt)
 - `BlenderDispatchComponent` — flat round-trip tools for the 24 addon commands (24 tools, 4 resources)
 - `BlenderPromptsComponent` — skeletal scripting + workflow prompts (8 prompts)
+- `BlenderDiagnosticsComponent` — install/setup probes (5 tools, also exposed on the stdio build for `claude mcp add` setup flows)
 
 ### Blender addons
 
@@ -69,7 +70,7 @@ Each addon installation is one FastMCP `Client` running on a worker thread insid
   - preferences.py         AddonPreferences (Phase 8)
   - state.py               _client, _executor singletons
   - auth/
-    - login.py             pure-requests /auth/login + /auth/refresh
+    - oauth_pkce.py        DCR + PKCE + loopback callback for Authentik login
   - client/
     - bus_client.py        FastMCP lifecycle + asyncio loop
     - message_pump.py      _on_message notification filter
@@ -162,4 +163,3 @@ The server is intended to run as a **single instance**. Sharing buses across ins
 - [Dispatch tools reference](/reference/dispatch-tools/) — all 24 tool signatures
 - [Why MCP logging as a bus](/explanation/why-mcp-logging/) — the design rationale
 - [OAuth and per-user buses](/explanation/oauth-buses/) — JWT, ContextVar, isolation
-- [Addon package tour](/explanation/addon-package-tour/) — why the addon is split this way

@@ -1,164 +1,153 @@
 ---
 title: "Quickstart"
-description: "Boot the BlenderMCP server, attach a fake Blender peer, call a dispatch tool, see the reply. Five minutes."
+description: "Authenticate against a BlenderMCP server, list connected Blender peers, dispatch your first tool call. Five minutes."
 ---
 
-import { Steps, Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-End-to-end in five steps. No real Blender required — a stub peer stands in for the addon so you can see the round-trip before installing anything in Blender.
+End-to-end: auth → connect → call a dispatch tool. You don't need to run a server yourself for this walkthrough — point at the public reference deployment.
 
 ## Prerequisites
 
 - Python 3.10+
 - `uv` installed
-- A clone of the repo
+- A browser (for the OAuth login step)
+- A target MCP server URL — `https://mcp.blender.bet/mcp/` for the reference deployment
 
 ## Steps
 
 <Steps>
 
-1. **Start the server.** Pick one:
+1. **Install the `fastmcp` client library.**
+
+   ```bash
+   uv pip install --system fastmcp
+   ```
+
+   `fastmcp.Client` speaks the MCP-spec OAuth flow (discovery, DCR, PKCE) for you. If you'd rather drive the wire yourself, see the [Authentication reference](/reference/auth/).
+
+2. **Open a session.** Save this as `quickstart.py`:
+
+   ```python
+   import asyncio, json
+   from fastmcp import Client
+
+   SERVER = "https://mcp.blender.bet/mcp/"
+
+   async def main():
+       async with Client(SERVER) as client:
+           # First run pops your browser to log in. Tokens persist
+           # to ~/.config/fastmcp so you only do this once.
+           result = await client.call_tool("blender_list_available_clients", {})
+           print(json.loads(result.content[0].text))
+
+   asyncio.run(main())
+   ```
+
+   ```bash
+   uv run python quickstart.py
+   ```
+
+   First run: a browser tab opens, you authenticate, the tab closes itself. Subsequent runs reuse the cached token.
+
+   Expected output (no Blender connected yet):
+
+   ```json
+   {
+     "user_id": "<your-id>",
+     "persistent": [],
+     "ephemeral": [{"uuid": "fastmcp-...", "client_type": "llm", ...}]
+   }
+   ```
+
+   You've successfully authenticated. The `ephemeral` list shows your own session.
+
+3. **Connect a Blender peer** so there's something to dispatch to. In Blender:
 
    <Tabs>
-   <TabItem label="Local (uv)">
+   <TabItem label="From the addon UI">
+   - Install `addon.py` from this repo: Edit → Preferences → Add-ons → Install
+   - In the BlenderMCP panel (sidebar `N`): set Server URL to `https://mcp.blender.bet/mcp/`
+   - Click **Login** — same browser-based PKCE flow
+   - Click **Connect**
 
-   ```bash
-   cd blender-mcp
-   uv sync
-   export ADMIN_PASSWORD=adminpw      # required; server refuses to start without it
-   export DEMO_PASSWORD=demopw        # optional; creates a `demo` user
-   uv run blender-mcp
-   ```
-
-   Expected output:
-
-   ```
-   INFO  oauth_server  /auth/login mounted
-   INFO  oauth_server  /mcp mounted (Streamable HTTP)
-   INFO  uvicorn       Uvicorn running on http://0.0.0.0:8000
-   ```
-
-   For the next steps, set `MCP=http://localhost:8000`.
-
+   Status pill should turn green with the client UUID displayed.
    </TabItem>
-   <TabItem label="Public dev server">
-
-   Skip setup entirely — use the reference deploy:
-
-   ```bash
-   export MCP=https://mcp.l.warehack.ing
-   ```
-
-   Demo credentials are the same as below. Jump to step 2.
-
-   </TabItem>
-   </Tabs>
-
-2. **Get a JWT.**
+   <TabItem label="From a stub (no Blender)">
+   For testing the flow without installing the addon, use the bundled stub:
 
    ```bash
-   curl -s -X POST "$MCP/auth/login" \
-     -H 'content-type: application/json' \
-     -d '{"username":"demo","password":"demopw"}' | jq -r .access_token
-   ```
-
-   Save the token as `TOKEN=...` for the next two terminals. (Replace `demopw` with whatever you set `DEMO_PASSWORD` to.)
-
-3. **Run a fake Blender peer** in terminal 2. This registers as a persistent `blender` client and responds to both `command_dispatch` and `job_dispatch` payloads.
-
-   ```bash
+   # Get a token first (one-time browser flow)
+   uv run python -c "
+   import asyncio
+   from fastmcp import Client
+   asyncio.run(Client('https://mcp.blender.bet/mcp/').__aenter__())
+   "
+   # Then run the stub (reads cached token, registers as a fake blender)
    uv run python examples/fake_blender_peer.py \
-     --server http://localhost:8000/mcp \
-     --token "$TOKEN" \
+     --server https://mcp.blender.bet/mcp/ \
      --uuid blender-demo01
    ```
 
-   Expected output:
+   Output:
 
    ```
    [peer] Connected as blender-demo01
-   [peer] set_logging_level=debug
    [peer] register_client ok
    [peer] waiting for jobs...
    ```
+   </TabItem>
+   </Tabs>
 
-4. **Call a dispatch tool** in terminal 3 — the simplest happy path. No `job_id`, no subscription, no notification filtering. The server hides the bus round-trip.
+4. **Dispatch a tool.** Edit `quickstart.py`:
 
-   ```bash
-   curl -s -X POST http://localhost:8000/mcp \
-     -H "authorization: Bearer $TOKEN" \
-     -H 'content-type: application/json' \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
-          "params":{"name":"blender_get_scene_info","arguments":{}}}'
+   ```python
+   async with Client(SERVER) as client:
+       result = await client.call_tool("blender_get_scene_info", {})
+       envelope = json.loads(result.content[0].text)
+       print(json.dumps(envelope, indent=2))
    ```
 
-   Expected output (single MCP tool result, JSON-encoded):
+   ```bash
+   uv run python quickstart.py
+   ```
+
+   Expected output:
 
    ```json
-   {"status":"completed","command":"get_scene_info",
-    "target_uuid":"blender-demo01","job_id":"j-7a3f2c1e9b04",
-    "result":"{\"name\":\"Scene\",\"object_count\":3,...}","error":""}
+   {
+     "status": "completed",
+     "command": "get_scene_info",
+     "target_uuid": "blender-demo01",
+     "job_id": "j-7a3f2c1e9b04",
+     "result": "{\"name\":\"Scene\",\"object_count\":3,...}",
+     "error": ""
+   }
    ```
 
-   The server auto-picked `blender-demo01` because it's the only Blender peer on the user's bus. Pass `target_uuid` in `arguments` to override.
+   The server auto-picked `blender-demo01` as the target because it's the only Blender on your bus. With multiple peers, pass `target_uuid` in the arguments dict.
 
-5. **Inspect what's connected.** In a fourth terminal:
+5. **Try a different tool.** Run arbitrary Python in Blender:
 
-   ```bash
-   curl -s -X POST http://localhost:8000/mcp \
-     -H "authorization: Bearer $TOKEN" \
-     -H 'content-type: application/json' \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
-          "params":{"name":"blender_list_available_clients","arguments":{}}}'
+   ```python
+   result = await client.call_tool("blender_execute_code", {
+       "code": "import bpy; print(len(bpy.data.objects))"
+   })
+   print(json.loads(result.content[0].text)["result"])  # "3\n"
    ```
 
-   Returns the persistent + ephemeral client lists for the `demo` user's bus.
+   The full [dispatch tool catalog](/reference/dispatch-tools/) has 24 entries across scene inspection, code execution, viewport capture, console operations, msgbus, PolyHaven, Hyper3D Rodin, and Sketchfab.
 
 </Steps>
 
 ## What just happened
 
-Terminal 2 registered as a **persistent** client (`is_persistent=true`) of type `blender`. Terminal 3 called `blender_get_scene_info` — a flat MCP tool. The server's dispatch component:
-
-1. Auto-picked the lone `blender` client (`blender-demo01`) as the target.
-2. Registered a Future via `JobWaiter` keyed on `(demo, j-...)`.
-3. Routed a `command_dispatch` payload through the bus.
-4. The forwarding handler pushed an MCP notification to terminal 2's session.
-5. Terminal 2's drainer dispatched `get_scene_info` to its executor (the stub returns a canned scene snapshot), then called `blender_job_update`.
-6. The server's `job_update` handler called `job_waiter.deliver(...)`. The Future resolved.
-7. The dispatch tool's `await asyncio.wait_for(future)` returned, the JSON wire body went back to terminal 3.
-
-The same flow works against a real Blender addon — the stub just shortcuts the actual `bpy` call.
-
-<Aside type="note">
-The `examples/fake_blender_peer.py` script ships in the repo and is the test fixture used by the integration suite. Read it if you want a minimal, real `FastMCPClient` subscriber to crib from.
-</Aside>
-
-## Advanced — dispatch a free-form script
-
-For multi-step Python or anything outside the dispatch tool surface, send a `job_dispatch` payload via `blender_send_message`. This is the original path; it still works.
-
-```bash
-uv run python examples/llm_client_example.py \
-  --server http://localhost:8000/mcp \
-  --token "$TOKEN" \
-  --target blender-demo01 \
-  --script 'import bpy; print(len(bpy.data.objects))'
-```
-
-Expected output:
-
-```
-[llm] send_message -> job_id=job-9c2f...
-[llm] received job_update status=completed
-[llm] result: 3
-```
-
-The example client maintains its own `_message_bus` subscription, a JobWaiter, and a notification filter. See [Write your own LLM client](/how-to/write-llm-client/) for both styles in detail.
+You authenticated against the MCP server using OAuth 2.1 with PKCE (the library handled discovery → DCR → PKCE → token exchange). Your access token resolves to a `user_id` server-side, which scopes every subsequent call to your personal bus — your Blender peers can't be seen by anyone else, and other users' peers don't show up in your `list_available_clients`. Each `blender_*` tool call traversed the bus to your Blender peer, executed there, and returned the result inline via [JobWaiter](/explanation/dispatch-vs-script/) — the bus round-trip is invisible from the caller's perspective.
 
 ## Next
 
-- Install the real addon and run a job against actual Blender — see [Add an addon command](/how-to/add-an-addon-command/) for the registry walkthrough.
-- Learn when to reach for script-dispatch — see [Command dispatch vs script dispatch](/explanation/dispatch-vs-script/).
-- Build your own LLM client — see [Write your own LLM client](/how-to/write-llm-client/).
-- Understand what's happening under the hood — see [Architecture](/explanation/architecture/) and [Why MCP logging](/explanation/why-mcp-logging/).
+- [Authentication reference](/reference/auth/) — the OAuth flow in wire detail
+- [Dispatch tools](/reference/dispatch-tools/) — all 24 tools, signatures, return shapes
+- [Write your own LLM client](/how-to/write-llm-client/) — building beyond `fastmcp.Client`
+- [Use cases](/explanation/use-cases/) — multi-LLM collaboration patterns
+- [Architecture](/explanation/architecture/) — what's under the hood

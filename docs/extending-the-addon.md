@@ -3,7 +3,6 @@ title: "Add an addon command"
 description: "Register a new dispatchable command on a handler mixin. One decorator, no central switch to edit."
 ---
 
-import { Steps, Tabs, TabItem, Aside, FileTree, Code } from '@astrojs/starlight/components';
 
 The addon's command registry is decorator-based. Adding a command touches one file — the handler mixin where it belongs. No central dispatch dict to update.
 

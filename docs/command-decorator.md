@@ -3,7 +3,6 @@ title: "@command decorator"
 description: "Register an addon command. Module: addon.executor.registry. Decorator, CommandSpec dataclass, filter_kwargs behavior."
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 
 `@command(name, gate=...)` is the only registration mechanism for addon commands. Decorating a handler method on any mixin enters it into `COMMAND_REGISTRY`. Dispatch is a single lookup.
 

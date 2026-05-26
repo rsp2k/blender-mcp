@@ -18,7 +18,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 BlenderMCP turns Blender into a shared workspace. A central MCP server runs an OAuth-gated, per-user message bus; Blender addons connect as persistent clients; LLM sessions connect as ephemeral clients. Anything can dispatch a job to anything else.
 
-The HTTP build exposes **34 MCP tools** — 5 bus tools, 5 diagnostics tools, and 24 dispatch tools that wrap Blender's command surface as flat MCP calls. Plus **6 resources** for bus state, scene snapshots, and paginated console scrape, and **9 prompts** covering dispatch recipes and Blender scripting workflows. The transport is the standard MCP `notifications/message` log channel — no custom socket, no WebSocket layer.
+The server exposes **29 consumer-facing MCP tools** — 5 bus tools and 24 dispatch tools that wrap Blender's command surface as flat MCP calls. Plus **6 resources** for bus state, scene snapshots, and paginated console scrape, and **9 prompts** covering dispatch recipes and Blender scripting workflows. Authentication is standard MCP-spec OAuth 2.1 with PKCE; the transport is the standard MCP `notifications/message` log channel. No custom socket, no WebSocket layer.
 
 <CardGrid stagger>
   <Card title="Get running in 5 minutes" icon="rocket">
