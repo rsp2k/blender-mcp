@@ -89,6 +89,50 @@ def _session_from_ctx(ctx: Optional[Context]) -> Any:
         return None
 
 
+async def resolve_bus(
+    user_id: str,
+    bus_id_str: Optional[str] = None,
+) -> dict:
+    """Resolve a (user, bus_id_or_None) request into a live MessageBus.
+
+    Three-step gate used by every tool that needs to operate on a bus:
+
+    1. If ``bus_id_str`` is None → ensure the user's personal bus
+       exists in DB → return its in-memory MessageBus.
+    2. If ``bus_id_str`` is set → parse to UUID → verify the bus
+       exists and the user is an active member → return its in-memory
+       MessageBus.
+    3. On any failure return a dict the tool can ``json.dumps`` straight
+       to the wire: ``{"status": "error", "error": <kind>, ...}``.
+
+    Success shape: ``{"ok": True, "bus": MessageBus, "bus_id": UUID,
+    "name": str}``. Failure shape: ``{"ok": False, "status": "error",
+    "error": <kind>}``.
+    """
+    import uuid as _u
+
+    from .message_bus import bus_manager
+    from .storage import bus_repo, get_session
+
+    if bus_id_str is None:
+        async with get_session() as s:
+            bus_row = await bus_repo.ensure_personal_bus(s, user_id)
+    else:
+        try:
+            bus_uuid = _u.UUID(bus_id_str)
+        except (ValueError, AttributeError):
+            return {"ok": False, "status": "error", "error": "invalid_bus_id"}
+        async with get_session() as s:
+            bus_row = await bus_repo.get_bus(s, bus_uuid)
+            if bus_row is None:
+                return {"ok": False, "status": "error", "error": "bus_not_found"}
+            if not await bus_repo.is_member(s, bus_uuid, user_id):
+                return {"ok": False, "status": "error", "error": "not_a_member"}
+
+    mb = bus_manager.get_or_create(bus_row.bus_id, name=bus_row.name)
+    return {"ok": True, "bus": mb, "bus_id": bus_row.bus_id, "name": bus_row.name}
+
+
 class BlenderBusComponent(MCPMixin):
     """Five-tool message-bus surface."""
 
@@ -99,6 +143,7 @@ class BlenderBusComponent(MCPMixin):
         client_uuid: str,
         client_type: str,
         label: Optional[str] = None,
+        bus_id: Optional[str] = None,
         is_persistent: bool = False,
         capabilities: Optional[list[str]] = None,
         group_id: Optional[str] = None,
@@ -126,6 +171,10 @@ class BlenderBusComponent(MCPMixin):
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
 
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+
         info = ClientInfo(
             uuid=client_uuid,
             client_type=client_type,
@@ -135,19 +184,29 @@ class BlenderBusComponent(MCPMixin):
             group_id=group_id,
             session=_session_from_ctx(ctx),
         )
-        bus = bus_manager.get_bus(user_id)
-        registered = bus.register(info)
-        return json.dumps({"status": "ok", "client": registered.to_dict()})
+        registered = resolved["bus"].register(info)
+        return json.dumps({
+            "status": "ok",
+            "bus_id": str(resolved["bus_id"]),
+            "client": registered.to_dict(),
+        })
 
     @mcp_tool()
     @require_role("addon")
-    async def unregister_client(self, client_uuid: str, ctx: Context = None) -> str:
-        """Leave the user bus. Gated to ``addon`` role (phase H)."""
+    async def unregister_client(
+        self,
+        client_uuid: str,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Leave the bus. Gated to ``addon`` role (phase H)."""
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
-        bus = bus_manager.get_bus(user_id)
-        ok = bus.unregister(client_uuid)
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        ok = resolved["bus"].unregister(client_uuid)
         return json.dumps({"status": "ok" if ok else "not_found", "client_uuid": client_uuid})
 
     @mcp_tool()
@@ -159,10 +218,14 @@ class BlenderBusComponent(MCPMixin):
         client_type: Optional[str] = None,
         priority: str = "info",
         from_uuid: Optional[str] = None,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Route a message. Mode picked by which targeting arg is set.
-        Precedence: target_uuid > group_id > client_type > broadcast."""
+        """Route a message on a bus. Mode picked by which targeting arg is set.
+        Precedence: target_uuid > group_id > client_type > broadcast.
+
+        ``bus_id`` defaults to the caller's personal bus.
+        """
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
@@ -181,7 +244,10 @@ class BlenderBusComponent(MCPMixin):
         except ValueError as e:
             return json.dumps({"status": "error", "error": str(e)})
 
-        bus = bus_manager.get_bus(user_id)
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        bus = resolved["bus"]
         # Use caller's from_uuid if given; otherwise tag as 'server:<user_id>'.
         origin = from_uuid or f"server:{user_id}"
 
@@ -194,7 +260,9 @@ class BlenderBusComponent(MCPMixin):
         tracking_id = client_job_id or result.message_id
 
         if origin and not origin.startswith("server:"):
-            _pending_jobs[tracking_id] = (user_id, origin)
+            # Track (bus_id, originator_uuid) per job so job_update can route
+            # the reply back to the right bus + sender across shared buses.
+            _pending_jobs[tracking_id] = (str(resolved["bus_id"]), origin)
 
         return json.dumps({
             "status": "ok",
@@ -214,12 +282,17 @@ class BlenderBusComponent(MCPMixin):
         error: str = "",
         ctx: Context = None,
     ) -> str:
-        """Client -> server reply. Routed back to the originator via the bus."""
+        """Client -> server reply. Routed back to the originator via the bus.
+
+        Bus is inferred from ``_pending_jobs[job_id]`` (which holds the
+        bus_id the original send_message used). If no entry exists, falls
+        back to broadcasting on the addon's PERSONAL bus — preserves
+        legacy "no-context" behavior for any pre-Phase-I clients.
+        """
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
 
-        bus = bus_manager.get_bus(user_id)
         update_payload = {
             "kind": "job_update",
             "job_id": job_id,
@@ -228,17 +301,24 @@ class BlenderBusComponent(MCPMixin):
             "error": error,
         }
 
-        # Look up where to send it.
         entry = _pending_jobs.get(job_id)
         if entry is None:
-            # No originator known — broadcast on the user's bus.
+            # No originator known — broadcast on the addon's personal bus.
+            resolved = await resolve_bus(user_id, None)
+            if not resolved["ok"]:
+                return json.dumps(resolved)
+            bus = resolved["bus"]
             r = bus.route(update_payload, from_uuid=f"server:{user_id}",
                           routing={"type": "broadcast"}, priority=Priority.NOTICE)
             return json.dumps({"status": "ok", "delivered": "broadcast", "targets": r.targets})
 
-        owner_user, originator_uuid = entry
-        if owner_user != user_id:
-            return json.dumps({"status": "error", "error": "cross_user_job_update"})
+        bus_id_str, originator_uuid = entry
+        # The dispatching bus must be one the responding addon is a member
+        # of — otherwise this is a cross-bus job_update attempt.
+        resolved = await resolve_bus(user_id, bus_id_str)
+        if not resolved["ok"]:
+            return json.dumps({"status": "error", "error": "cross_bus_job_update"})
+        bus = resolved["bus"]
 
         r = bus.route(
             update_payload,
@@ -248,21 +328,31 @@ class BlenderBusComponent(MCPMixin):
             job_id=job_id,
         )
         # Wake any awaiter registered through the dispatch_component layer.
-        # No-op if the job came from old-style send_message + listen-pattern
-        # callers (no Future was ever registered for it).
-        job_waiter.deliver(user_id, job_id, status, result, error)
+        # job_waiter keys by (bus_id_str, job_id) — see I5 dispatch refactor.
+        job_waiter.deliver(bus_id_str, job_id, status, result, error)
         # Terminal states clean up the tracking entry.
         if status in {"completed", "failed", "cancelled"}:
             _pending_jobs.pop(job_id, None)
         return json.dumps({"status": "ok", "delivered": "direct", "targets": r.targets})
 
     @mcp_tool()
-    async def list_available_clients(self, ctx: Context = None) -> str:
-        """List persistent + ephemeral clients on the caller's user bus."""
+    async def list_available_clients(
+        self,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """List persistent + ephemeral clients on the given bus.
+
+        ``bus_id`` defaults to the caller's personal bus. Returns
+        ``not_a_member`` if the caller isn't a member of the bus.
+        """
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
-        bus = bus_manager.get_bus(user_id)
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        bus = resolved["bus"]
         return json.dumps({
             "status": "ok",
             "user_id": user_id,
@@ -272,12 +362,21 @@ class BlenderBusComponent(MCPMixin):
 
     @mcp_resource(uri="blender://bus/clients")
     async def clients_resource(self, ctx: Context = None) -> str:
-        """JSON snapshot of the caller's bus: persistent + ephemeral clients."""
+        """JSON snapshot of the caller's PERSONAL bus.
+
+        MCP resources can't take dynamic args, so this resource always
+        targets the personal bus. For shared-bus listings use the
+        ``bus_list_available_clients(bus_id=...)`` tool.
+        """
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
-        bus = bus_manager.get_bus(user_id)
+        resolved = await resolve_bus(user_id, None)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        bus = resolved["bus"]
         return json.dumps({
+            "bus_id": str(resolved["bus_id"]),
             "user_id": user_id,
             "persistent": [c.to_dict() for c in bus.persistent_clients.values()],
             "ephemeral": [c.to_dict() for c in bus.ephemeral_clients.values()],
@@ -285,17 +384,22 @@ class BlenderBusComponent(MCPMixin):
 
     @mcp_resource(uri="blender://bus/stats")
     async def stats_resource(self, ctx: Context = None) -> str:
-        """JSON counts for the caller's bus."""
+        """JSON counts for the caller's personal bus."""
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
-        bus = bus_manager.get_bus(user_id)
-        pending = sum(1 for owner, _ in _pending_jobs.values() if owner == user_id)
+        resolved = await resolve_bus(user_id, None)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        bus = resolved["bus"]
+        bid_str = str(resolved["bus_id"])
+        pending = sum(1 for bid, _ in _pending_jobs.values() if bid == bid_str)
         return json.dumps({
+            "bus_id": bid_str,
             "user_id": user_id,
             "persistent_count": len(bus.persistent_clients),
             "ephemeral_count": len(bus.ephemeral_clients),
-            "pending_jobs_for_user": pending,
+            "pending_jobs_for_bus": pending,
         })
 
     # ---- Phase I3: bus membership management ------------------------------

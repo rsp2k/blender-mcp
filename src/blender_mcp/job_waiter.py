@@ -1,4 +1,10 @@
-"""Server-side asyncio.Future registry keyed by (user_id, job_id).
+"""Server-side asyncio.Future registry keyed by (bus_id, job_id).
+
+Phase I5 renamed the first key element from ``user_id`` to ``bus_id``
+— shared buses can have multiple users, and the dispatch awaiter is
+scoped to the BUS (where the message was routed) rather than the USER
+(who issued the dispatch tool call). The 2-tuple shape is unchanged;
+only the namespace concept is now bus, not user.
 
 Lets new dispatch tools in :mod:`dispatch_component` send a message to
 a blender client and ``await`` the reply transparently, instead of
@@ -7,15 +13,15 @@ forcing the MCP caller to listen for ``notifications/message`` on
 
 The flow:
 
-1. Dispatch tool calls :meth:`JobWaiter.register(user_id, job_id)` →
+1. Dispatch tool calls :meth:`JobWaiter.register(bus_id, job_id)` →
    gets back an ``asyncio.Future`` already inserted in the registry.
-2. Tool calls :func:`bus_tools.send_message` to push the job onto the
-   bus (which carries the ``job_id`` to the addon).
+2. Tool routes the job message through the bus (which carries the
+   ``job_id`` to the addon).
 3. Tool calls ``await asyncio.wait_for(future, timeout=...)``.
 4. Addon executes the script/command, sends ``blender_job_update``.
 5. :meth:`JobWaiter.deliver` is called from inside
-   :func:`bus_tools.job_update` after the existing routing — it
-   resolves the Future with a result dict, waking the tool.
+   :func:`bus_tools.job_update` — resolves the Future with a result
+   dict, waking the tool.
 6. Tool returns the result; the registry entry is auto-cleaned in a
    ``finally``.
 
@@ -25,10 +31,8 @@ the JobWaiter is fully additive on top of the pre-existing
 :meth:`register` still get the broadcast/log-notification behavior they
 had before this module existed.
 
-Keying on ``(user_id, job_id)`` — not just ``job_id`` — prevents
-cross-user job_id collisions from waking the wrong tool call. Two
-sessions in different OAuth-isolated buses can both pick ``job_id="x"``
-without interfering.
+Keying on ``(bus_id, job_id)`` — not just ``job_id`` — prevents
+cross-bus job_id collisions from waking the wrong tool call.
 """
 
 from __future__ import annotations
@@ -61,7 +65,7 @@ class JobWaiter:
 
     # --- registration / cancellation ---------------------------------
 
-    def register(self, user_id: str, job_id: str) -> asyncio.Future:
+    def register(self, bus_id: str, job_id: str) -> asyncio.Future:
         """Create + register a Future for the given (user, job).
 
         The Future is created on the *running* loop, which means callers
@@ -70,13 +74,13 @@ class JobWaiter:
         Future and silently drops anyone awaiting it — generally
         indicates a bug in the caller (don't reuse job_ids within a user).
         """
-        key = (user_id, job_id)
+        key = (bus_id, job_id)
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._futures[key] = future
         return future
 
-    def cancel(self, user_id: str, job_id: str) -> None:
+    def cancel(self, bus_id: str, job_id: str) -> None:
         """Drop the registry entry without resolving its Future.
 
         Used by dispatch tools in their ``finally`` block after
@@ -85,7 +89,7 @@ class JobWaiter:
         itself stays cancelled; any latecomer ``deliver`` for the same
         key becomes a no-op (the entry is gone).
         """
-        fut = self._futures.pop((user_id, job_id), None)
+        fut = self._futures.pop((bus_id, job_id), None)
         if fut is not None and not fut.done():
             fut.cancel()
 
@@ -93,13 +97,13 @@ class JobWaiter:
 
     def deliver(
         self,
-        user_id: str,
+        bus_id: str,
         job_id: str,
         status: str,
         result: Any = "",
         error: str = "",
     ) -> bool:
-        """Resolve the Future for ``(user_id, job_id)`` if one is registered.
+        """Resolve the Future for ``(bus_id, job_id)`` if one is registered.
 
         Returns ``True`` if a Future was waked, ``False`` if no awaiter
         was registered (caller didn't go through the dispatch tool
@@ -112,7 +116,7 @@ class JobWaiter:
         the old behavior for any non-dispatch-tool subscribers; deliver
         second wakes the new dispatch-tool awaiter.
         """
-        fut = self._futures.pop((user_id, job_id), None)
+        fut = self._futures.pop((bus_id, job_id), None)
         if fut is None or fut.done():
             return False
         fut.set_result({
@@ -124,14 +128,14 @@ class JobWaiter:
 
     # --- introspection (handy for tests + /health-style checks) ------
 
-    def pending_count(self, user_id: Optional[str] = None) -> int:
-        """Number of awaiting Futures; optionally filtered to one user."""
-        if user_id is None:
+    def pending_count(self, bus_id: Optional[str] = None) -> int:
+        """Number of awaiting Futures; optionally filtered to one bus."""
+        if bus_id is None:
             return len(self._futures)
-        return sum(1 for (uid, _) in self._futures if uid == user_id)
+        return sum(1 for (bid, _) in self._futures if bid == bus_id)
 
     def pending_keys(self) -> list[tuple[str, str]]:
-        """All currently-pending (user_id, job_id) keys. Snapshot copy."""
+        """All currently-pending (bus_id, job_id) keys. Snapshot copy."""
         return list(self._futures.keys())
 
 

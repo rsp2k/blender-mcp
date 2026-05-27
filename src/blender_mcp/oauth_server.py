@@ -385,7 +385,8 @@ def build_app() -> FastAPI:
         return {
             "status": "healthy",
             "buses": len(buses),
-            "clients_per_bus": {uid: len(b.all_clients()) for uid, b in buses.items()},
+            # Phase I5: dict is keyed by bus_id (UUID); stringify for JSON.
+            "clients_per_bus": {str(bid): len(b.all_clients()) for bid, b in buses.items()},
         }
 
     # OAuth discovery (RFC 8414 + RFC 9728) — FastMCP's auth provider knows
