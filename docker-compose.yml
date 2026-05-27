@@ -51,11 +51,18 @@ services:
       AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
     networks:
       - caddy
     labels:
-      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      # Primary hostname + optional alias list (for graceful URL renames).
+      # ``${VAR:+,suffix}`` expands to ",suffix" only if VAR is set, so
+      # DOMAIN_ALIASES="mcp.l.warehack.ing" yields:
+      #   caddy: mcp.blender.bet, mcp.l.warehack.ing
+      # Each comma-separated host becomes a separate vhost; Caddy issues a
+      # cert for each automatically. Drop the alias once the rename has
+      # settled (no more clients targeting the old name).
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       caddy.reverse_proxy: "{{upstreams 8000}}"
       caddy.encode: zstd gzip
       # Streaming MCP survival — see file header for rationale.
@@ -116,7 +123,7 @@ services:
       AUTHENTIK_CONFIG_URL: ${AUTHENTIK_CONFIG_URL:-}
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.l.warehack.ing}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -126,7 +133,7 @@ services:
     networks:
       - caddy
     labels:
-      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       caddy.reverse_proxy: "{{upstreams 8000}}"
       caddy.encode: zstd gzip
       caddy.reverse_proxy.flush_interval: "-1"
