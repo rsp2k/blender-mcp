@@ -20,7 +20,12 @@ services:
     networks:
       - caddy
     labels:
-      caddy: ${DOMAIN:?DOMAIN must be set in .env}
+      # Primary hostname + optional alias list (for graceful URL renames).
+      # ``${VAR:+, suffix}`` expands to ", suffix" only when set, so
+      # DOMAIN_ALIASES=blender.bet yields:
+      #   caddy: docs.blender.bet, blender.bet
+      # Each comma-separated host becomes a vhost with its own Caddy cert.
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       caddy.reverse_proxy: "{{upstreams 80}}"
       # Caddy verifies DNS-01 propagation against public resolvers rather
       # than the Docker DNS chain — needed for fresh issuance on hosts where
