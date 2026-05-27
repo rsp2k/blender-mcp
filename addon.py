@@ -14,7 +14,7 @@
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 2, 0),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 3, 0),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (

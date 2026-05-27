@@ -49,6 +49,21 @@ import sys
 import threading
 import webbrowser
 from typing import Any
+
+
+def _addon_version() -> str:
+    """Resolve the addon version string for DCR's software_version field.
+
+    Robust against weird import contexts (Blender's _fake_module
+    introspection, sys.modules dance during addon reload, etc.):
+    falls back to a sentinel rather than raising. The version is
+    informational — DCR succeeds either way.
+    """
+    try:
+        from .._version import __version__  # type: ignore[no-redef]
+        return __version__
+    except Exception:
+        return "unknown"
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -173,10 +188,12 @@ def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) 
             # server records (client_id → role="addon") at DCR time and
             # uses it to gate addon-only tools (bus_register_client etc.)
             # and reject LLM-client tools the addon shouldn't call. Static
-            # UUID is shared across all addon installs — server only cares
-            # about WHICH KIND of client this is, not which installation.
+            # software_id is shared across all addon installs — server
+            # only cares about WHICH KIND of client this is, not which
+            # installation. Version pulled from _version.py so telemetry
+            # reflects the actual running build.
             "software_id": "blender-mcp-addon",
-            "software_version": "1.0",
+            "software_version": _addon_version(),
         },
         timeout=timeout,
     )
