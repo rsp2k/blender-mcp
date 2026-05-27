@@ -57,7 +57,6 @@ services:
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}
       caddy.reverse_proxy: "{{upstreams 8000}}"
-      caddy.tls.import: rfc2136_local
       caddy.encode: zstd gzip
       # Streaming MCP survival — see file header for rationale.
       # The bare ``transport: http`` label is required: caddy-docker-proxy
@@ -129,7 +128,6 @@ services:
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}
       caddy.reverse_proxy: "{{upstreams 8000}}"
-      caddy.tls.import: rfc2136_local
       caddy.encode: zstd gzip
       caddy.reverse_proxy.flush_interval: "-1"
       caddy.reverse_proxy.transport.read_timeout: "0"
