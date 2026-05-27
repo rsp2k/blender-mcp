@@ -34,7 +34,6 @@ export default defineConfig({
           'users',
           'rocket',
           'github',
-          'check', // used on /login-complete (post-OAuth landing)
         ],
       },
     }),

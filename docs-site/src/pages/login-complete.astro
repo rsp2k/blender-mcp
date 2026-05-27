@@ -15,8 +15,13 @@
  *
  * This is a standalone Astro page (NOT inside the Starlight docs frame)
  * so it can present as a celebratory landing instead of a docs chapter.
+ *
+ * Icons are inlined SVG rather than via astro-icon/components — the
+ * Icon integration's icon-set discovery is initialized as part of
+ * Starlight content rendering, which doesn't run for standalone pages
+ * under src/pages. Inline SVG sidesteps the issue and keeps this page
+ * self-contained.
  */
-import { Icon } from 'astro-icon/components';
 ---
 
 <!DOCTYPE html>
@@ -187,7 +192,20 @@ import { Icon } from 'astro-icon/components';
   <body>
     <main>
       <div class="check">
-        <Icon name="lucide:check" width="34" height="34" />
+        <!-- lucide:check (inlined) -->
+        <svg
+          width="34"
+          height="34"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
       </div>
       <h1>Login complete</h1>
       <p class="lede">
@@ -207,7 +225,12 @@ import { Icon } from 'astro-icon/components';
       <ul class="next-list">
         <li>
           <a href="/tutorials/quickstart/">
-            <Icon name="lucide:compass" />
+            <!-- lucide:compass -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" />
+              <circle cx="12" cy="12" r="10" />
+            </svg>
             <div>
               Quickstart
               <small>Connect your first MCP client + dispatch a script</small>
@@ -216,7 +239,12 @@ import { Icon } from 'astro-icon/components';
         </li>
         <li>
           <a href="/reference/tools/">
-            <Icon name="lucide:book-open" />
+            <!-- lucide:book-open -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 7v14" />
+              <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+            </svg>
             <div>
               Tool reference
               <small>All 24+ blender_* tools, with examples</small>
@@ -225,7 +253,13 @@ import { Icon } from 'astro-icon/components';
         </li>
         <li>
           <a href="/explanation/architecture/">
-            <Icon name="lucide:workflow" />
+            <!-- lucide:workflow -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="8" height="8" x="3" y="3" rx="2" />
+              <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+              <rect width="8" height="8" x="13" y="13" rx="2" />
+            </svg>
             <div>
               How it works
               <small>The bus, role attribution, OAuth flow</small>
