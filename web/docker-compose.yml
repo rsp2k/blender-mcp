@@ -30,7 +30,6 @@ services:
       - caddy
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
-      caddy.reverse_proxy: "{{upstreams 4321}}"
       # Caddy verifies DNS-01 propagation against public resolvers (not
       # Docker's embedded DNS, which doesn't know blender.bet).
       caddy.tls.resolvers: "1.1.1.1 9.9.9.9"
@@ -38,13 +37,27 @@ services:
       caddy.tls.propagation_timeout: 600s
       caddy.encode: zstd gzip
 
-      # ---- Authentik forward_auth on /login-complete* ----
-      # Path matcher: gate ONLY this route. Apex `/` + future public
-      # routes stay reachable without authentication.
+      # ---- Authentik proxy outpost integration ----
+      # Authentik's proxy outpost lives at https://auth.supported.systems
+      # behind paths under /outpost.goauthentik.io/. The browser hits THIS
+      # site (blender.bet) on those paths after Authentik's OAuth flow
+      # bounces the user back — so we MUST proxy them through to the
+      # upstream outpost or the callback 404s on Astro. The `0_` prefix
+      # makes Caddy evaluate this matcher BEFORE the catch-all below.
+      caddy.@outpost.path: /outpost.goauthentik.io/*
+      caddy.0_reverse_proxy: "@outpost https://auth.supported.systems"
+      caddy.0_reverse_proxy.header_up: "Host {upstream_hostport}"
+
+      # Path matcher: gate ONLY /login-complete* with forward_auth.
+      # Apex `/` + future public routes stay reachable without auth.
       caddy.@protected.path: /login-complete*
       caddy.forward_auth: "@protected https://auth.supported.systems"
       caddy.forward_auth.uri: /outpost.goauthentik.io/auth/caddy
       caddy.forward_auth.copy_headers: X-Authentik-Username X-Authentik-Email X-Authentik-Name X-Authentik-Groups X-Authentik-Uid
+
+      # Catch-all reverse_proxy to Astro (no path matcher = matches everything
+      # not claimed by the @outpost matcher above).
+      caddy.reverse_proxy: "{{upstreams 4321}}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4321/", "-O", "/dev/null"]
       interval: 30s
