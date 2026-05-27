@@ -86,34 +86,106 @@ def _gen_pkce() -> tuple[str, str]:
 
 # ---- Loopback callback server ---------------------------------------------
 
-_SUCCESS_HTML = """<!DOCTYPE html>
-<html><head><title>BlenderMCP Authorized</title>
-<style>body{font-family:system-ui;text-align:center;padding:4em;
-background:#1a1a1a;color:#e0e0e0}h1{color:#5fa}</style></head>
-<body><h1>BlenderMCP login complete</h1>
-<p>You can close this tab and return to Blender.</p></body></html>""".encode("utf-8")
+_SUCCESS_STYLE = """
+body{font-family:system-ui,sans-serif;background:#0e1116;color:#d4d4d4;
+  margin:0;min-height:100vh;display:grid;place-items:center;padding:2em}
+.card{background:#161b22;border:1px solid #2a313a;border-radius:10px;
+  padding:2.5em 3em;max-width:560px;width:100%;
+  box-shadow:0 10px 40px rgba(0,0,0,.4)}
+h1{color:#5fb878;margin:0 0 .2em;font-size:1.6em;font-weight:600}
+.sub{color:#8b949e;margin:0 0 1.6em;font-size:.95em}
+.next{margin:0 0 1.8em;line-height:1.45}
+table{width:100%;border-collapse:collapse;font-size:.9em;
+  font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace}
+th{text-align:left;color:#8b949e;font-weight:400;padding:.35em .7em .35em 0;
+  white-space:nowrap;vertical-align:top}
+td{color:#d4d4d4;padding:.35em 0;word-break:break-all}
+.foot{margin-top:1.8em;padding-top:1.2em;border-top:1px solid #2a313a;
+  font-size:.78em;color:#6e7681;text-align:center;line-height:1.5}
+.foot code{color:#8b949e;background:#0e1116;padding:1px 5px;border-radius:3px}
+"""
+
+_SUCCESS_HTML_TEMPLATE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>BlenderMCP Authorized</title>
+<style>{style}</style></head>
+<body><div class="card">
+<h1>{ok} BlenderMCP login complete</h1>
+<p class="sub">You can close this tab and return to Blender.</p>
+<p class="next">The addon is now exchanging the authorization code for an
+access token in the background. Status will appear in Blender's panel
+within a second or two.</p>
+<table>
+<tr><th>Server</th><td>{server_url}</td></tr>
+<tr><th>Addon</th><td>BlenderMCP {addon_version}</td></tr>
+<tr><th>Client ID</th><td>{client_id}</td></tr>
+<tr><th>Issued at</th><td>{timestamp}</td></tr>
+<tr><th>Callback</th><td>{redirect_uri}</td></tr>
+</table>
+<div class="foot">
+MCP-spec OAuth 2.1 + PKCE &middot; RFC 8252 native-app flow<br>
+Powered by Authentik via FastMCP <code>OIDCProxy</code>
+</div>
+</div></body></html>"""
 
 _ERROR_HTML_TEMPLATE = """<!DOCTYPE html>
-<html><head><title>BlenderMCP Authorization Failed</title>
-<style>body{font-family:system-ui;text-align:center;padding:4em;
-background:#1a1a1a;color:#e0e0e0}h1{color:#f55}pre{background:#000;
-padding:1em;text-align:left;display:inline-block}</style></head>
-<body><h1>Authorization failed</h1>
-<pre>{}</pre>
-<p>Close this tab; you can retry from Blender's panel.</p></body></html>"""
+<html><head><meta charset="utf-8"><title>BlenderMCP Authorization Failed</title>
+<style>{style}h1{{color:#f97583}}pre{{background:#0e1116;border:1px solid #2a313a;
+border-radius:6px;padding:1em;text-align:left;overflow:auto;
+font-family:'JetBrains Mono','SF Mono',Menlo,monospace;font-size:.85em;
+color:#d4d4d4}}</style></head>
+<body><div class="card">
+<h1>Authorization failed</h1>
+<p class="sub">The OAuth flow couldn't complete. The addon stopped before
+exchanging the code.</p>
+<pre>{detail}</pre>
+<p class="next">Close this tab and retry from Blender's BlenderMCP panel.
+If this keeps happening, the most useful diagnostic is the server log:
+<br><code>docker logs blender-mcp-server-prod | grep -i 'authoriz\\|invalid'</code>
+</p>
+</div></body></html>"""
+
+
+def _render_success(ctx: dict) -> bytes:
+    """Render the success page from the loopback-handler context dict.
+
+    ``ctx`` carries non-secret values gathered before/during the OAuth
+    flow: server_url, addon_version, client_id (DCR-issued), timestamp,
+    redirect_uri. Tokens and codes are NEVER passed in — they exist only
+    long enough for the next-step token exchange and don't belong in a
+    tab the user might leave open.
+    """
+    return _SUCCESS_HTML_TEMPLATE.format(
+        style=_SUCCESS_STYLE,
+        ok="✓",  # heavy check mark — UTF-8, no extra font deps
+        **ctx,
+    ).encode("utf-8")
+
+
+def _render_error(detail: str) -> bytes:
+    return _ERROR_HTML_TEMPLATE.format(
+        style=_SUCCESS_STYLE,
+        detail=detail,
+    ).encode("utf-8")
 
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     """Single-shot HTTP handler that captures the OAuth callback.
 
-    Sets class-level vars ``received_code`` / ``received_state`` / ``received_error``
-    when a callback arrives. The caller reads these after server.handle_request()
-    returns.
+    Class-level state slots (set by the handler when a callback arrives,
+    read by oauth_login after server.handle_request() returns):
+
+    - ``received_code`` / ``received_state`` / ``received_error`` — what the
+      OAuth server sent back as query params.
+    - ``page_context`` — populated by oauth_login BEFORE starting the
+      server; rendered into the success page so the user sees server URL,
+      addon version, DCR client_id, timestamp, callback URL. Non-secret;
+      no codes or tokens.
     """
 
     received_code: str | None = None
     received_state: str | None = None
     received_error: str | None = None
+    page_context: dict | None = None  # populated by oauth_login before .serve()
 
     def do_GET(self) -> None:  # noqa: N802 — http.server interface
         parsed = urlparse(self.path)
@@ -126,8 +198,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(400)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            html = _ERROR_HTML_TEMPLATE.format(_CallbackHandler.received_error)
-            self.wfile.write(html.encode("utf-8"))
+            self.wfile.write(_render_error(_CallbackHandler.received_error))
             return
 
         if "code" in params:
@@ -136,7 +207,8 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(_SUCCESS_HTML)
+            ctx = _CallbackHandler.page_context or {}
+            self.wfile.write(_render_success(ctx))
             return
 
         self.send_response(400)
@@ -244,6 +316,7 @@ def oauth_login(
     _CallbackHandler.received_code = None
     _CallbackHandler.received_state = None
     _CallbackHandler.received_error = None
+    _CallbackHandler.page_context = None
 
     # 1. Bind callback server first so we know the port for DCR / authorize URL.
     httpd = socketserver.TCPServer(("127.0.0.1", 0), _CallbackHandler)
@@ -258,7 +331,19 @@ def oauth_login(
     verifier, challenge = _gen_pkce()
     state = secrets.token_urlsafe(16)
 
-    # 4. Spawn the callback server thread BEFORE opening the browser
+    # 4. Populate context for the success page (non-secret only — see
+    #    _render_success docstring). Set BEFORE starting the server so
+    #    the handler thread sees it even on a fast redirect.
+    import datetime as _dt
+    _CallbackHandler.page_context = {
+        "server_url": server_url,
+        "addon_version": _addon_version(),
+        "client_id": client_id,
+        "timestamp": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z").strip(),
+        "redirect_uri": redirect_uri,
+    }
+
+    # 5. Spawn the callback server thread BEFORE opening the browser
     #    (otherwise browser could redirect before server is listening).
     server_thread = threading.Thread(
         target=httpd.handle_request, daemon=True, name="oauth-callback"
