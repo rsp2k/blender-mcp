@@ -22,7 +22,7 @@ from ..client.bus_client import FASTMCP_AVAILABLE
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
-from ..preferences import get_prefs, get_server_base_url
+from ..preferences import get_client_label, get_prefs, get_server_base_url
 
 
 class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
@@ -243,6 +243,7 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
                     executor=state._executor,
                     refresh_token=prefs.refresh_token,
                     jwt_expires_at=expires_at,
+                    label=get_client_label(prefs),
                 )
                 scene.blendermcp_client_id = state._client.client_uuid
 

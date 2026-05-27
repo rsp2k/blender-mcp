@@ -25,6 +25,11 @@ class ClientInfo:
     """One client on a user's bus."""
     uuid: str
     client_type: str  # "blender" | "llm" | other
+    # Human-readable identity for multi-instance disambiguation.
+    # The addon defaults this to e.g. "Blender 5.1 on rpm-bullet"; an
+    # LLM session can register a label like "Claude Code · Ryan's
+    # terminal". Falls back to the uuid in displays when None.
+    label: Optional[str] = None
     is_persistent: bool = False
     capabilities: list[str] = field(default_factory=list)
     group_id: Optional[str] = None
@@ -41,6 +46,7 @@ class ClientInfo:
         return {
             "uuid": self.uuid,
             "client_type": self.client_type,
+            "label": self.label,
             "is_persistent": self.is_persistent,
             "capabilities": list(self.capabilities),
             "group_id": self.group_id,
@@ -78,6 +84,11 @@ class UserMessageBus:
             existing.capabilities = client_info.capabilities
             existing.group_id = client_info.group_id
             existing.last_seen = time.time()
+            # Only overwrite label if a new one is supplied — None means
+            # "keep what's there." That way the addon can re-register on
+            # reconnect without having to recompute its label every time.
+            if client_info.label is not None:
+                existing.label = client_info.label
             if client_info.session is not None:
                 existing.session = client_info.session
             self.last_activity = time.time()

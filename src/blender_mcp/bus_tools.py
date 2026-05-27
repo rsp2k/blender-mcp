@@ -98,12 +98,25 @@ class BlenderBusComponent(MCPMixin):
         self,
         client_uuid: str,
         client_type: str,
+        label: Optional[str] = None,
         is_persistent: bool = False,
         capabilities: Optional[list[str]] = None,
         group_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Join the caller's user bus. Returns JSON {status, client}.
+
+        Args:
+            client_uuid: Stable UUID for THIS client instance (the addon
+                generates a sticky UUID per Blender install).
+            client_type: ``"blender"`` for the addon; future expansion
+                ``"llm"`` for LLM sessions that opt in to be visible.
+            label: Human-readable identity for multi-instance
+                disambiguation (e.g. ``"Blender 5.1 on rpm-bullet"``).
+                Optional — if omitted on re-registration, the prior
+                label is preserved; if omitted on first registration,
+                the client appears with just its uuid.
+            is_persistent, capabilities, group_id: as before.
 
         Gated to ``addon`` role (phase H): only the BlenderMCP addon should
         register as a bus participant. LLM clients drive the addon via
@@ -116,6 +129,7 @@ class BlenderBusComponent(MCPMixin):
         info = ClientInfo(
             uuid=client_uuid,
             client_type=client_type,
+            label=label,
             is_persistent=bool(is_persistent),
             capabilities=list(capabilities or []),
             group_id=group_id,

@@ -119,6 +119,16 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         ),
         default=DEFAULT_SERVER_HOSTNAME,
     )
+    client_label: StringProperty(
+        name="Client label",
+        description=(
+            "Human-readable name for THIS Blender instance on the bus. "
+            "Shown when multiple Blenders are connected, to help LLM "
+            "clients (and you) pick which one to target. Leave blank to "
+            "auto-derive from hostname + Blender version."
+        ),
+        default="",
+    )
     jwt_token: StringProperty(
         name="JWT Token",
         description="Bearer token obtained via OAuth login. Populated by the Login operator.",
@@ -206,6 +216,11 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         row.prop(self, "server_url", text="")
         row.operator("blendermcp.test_connection", text="", icon='URL')
 
+        # Optional client label — surfaces in bus_list_available_clients so
+        # multiple Blenders are distinguishable. Empty = auto-derive at
+        # connect-time (see get_client_label below).
+        col.prop(self, "client_label")
+
         # --- Login / Logout ---
         col.separator()
         draw_login_section(layout, self)
@@ -234,6 +249,34 @@ def get_prefs(context=None) -> "BlenderMCPPreferences":
     if context is None:
         context = bpy.context
     return context.preferences.addons[ADDON_PACKAGE_NAME].preferences
+
+
+def get_client_label(prefs: Optional["BlenderMCPPreferences"] = None) -> str:
+    """Resolve the human-readable label THIS Blender instance registers as.
+
+    Returns ``prefs.client_label`` if the user set one, otherwise auto-
+    derives ``"Blender <version> on <hostname>"`` (e.g.
+    ``"Blender 5.1 on rpm-bullet"``). Used by bus_register_client so
+    multi-instance setups are distinguishable in
+    ``bus_list_available_clients`` output.
+    """
+    if prefs is None:
+        prefs = get_prefs()
+    user_set = (prefs.client_label or "").strip()
+    if user_set:
+        return user_set
+    # Auto-derive — short and stable.
+    try:
+        import bpy as _bpy
+        version = ".".join(str(p) for p in _bpy.app.version[:2])
+    except Exception:
+        version = "?"
+    try:
+        import socket
+        host = socket.gethostname()
+    except Exception:
+        host = "unknown-host"
+    return f"Blender {version} on {host}"
 
 
 # --- One-shot migration from legacy Scene properties --------------------------
