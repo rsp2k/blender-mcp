@@ -107,12 +107,14 @@ td{color:#d4d4d4;padding:.35em 0;word-break:break-all}
 
 _SUCCESS_HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BlenderMCP Authorized</title>
+<meta http-equiv="refresh" content="3;url={redirect_to}">
 <style>{style}</style></head>
 <body><div class="card">
 <h1>{ok} BlenderMCP login complete</h1>
 <p class="sub">You can close this tab and return to Blender.</p>
-<p class="next">The addon is now exchanging the authorization code for an
-access token in the background. Status will appear in Blender's panel
+<p class="next">Redirecting to <a href="{redirect_to}">blender.bet</a> in
+3 seconds for the full welcome page. The addon is finishing the token
+exchange in the background — status will appear in Blender's panel
 within a second or two.</p>
 <table>
 <tr><th>Server</th><td>{server_url}</td></tr>
@@ -126,6 +128,38 @@ MCP-spec OAuth 2.1 + PKCE &middot; RFC 8252 native-app flow<br>
 Powered by Authentik via FastMCP <code>OIDCProxy</code>
 </div>
 </div></body></html>"""
+
+# Where to send the user after the loopback page renders. Hosted at the
+# docs site so we can iterate the welcome UX without addon redeploys.
+# Derived from server_url's host: mcp.blender.bet → blender.bet (the
+# apex), localhost → http://localhost:4321 (Astro dev server) if you're
+# running the docs site locally. None of the params are secrets.
+_DEFAULT_LANDING_HOST = "https://blender.bet"
+
+
+def _build_landing_url(ctx: dict) -> str:
+    """Construct the post-OAuth landing URL on the docs site.
+
+    Maps the addon's MCP server hostname to the docs site:
+      https://mcp.blender.bet → https://blender.bet
+      http://localhost:8000   → http://localhost:4321 (Astro dev port)
+      anything else           → https://blender.bet (sane default)
+    """
+    from urllib.parse import urlparse as _urlparse, urlencode as _urlencode
+
+    server_host = _urlparse(ctx.get("server_url", "")).hostname or ""
+    if server_host.startswith("localhost") or server_host.startswith("127."):
+        base = "http://localhost:4321"
+    else:
+        base = _DEFAULT_LANDING_HOST
+
+    params = {
+        "server": ctx.get("server_url", ""),
+        "client_id": ctx.get("client_id", ""),
+        "ver": ctx.get("addon_version", ""),
+        "ts": ctx.get("timestamp", ""),
+    }
+    return f"{base}/login-complete?{_urlencode(params)}"
 
 _ERROR_HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BlenderMCP Authorization Failed</title>
@@ -153,10 +187,15 @@ def _render_success(ctx: dict) -> bytes:
     redirect_uri. Tokens and codes are NEVER passed in — they exist only
     long enough for the next-step token exchange and don't belong in a
     tab the user might leave open.
+
+    The rendered page includes a 3-second meta-refresh to the docs site's
+    /login-complete landing (hosted at blender.bet). If that page is
+    down/unreachable, the inline content already conveyed the essentials.
     """
     return _SUCCESS_HTML_TEMPLATE.format(
         style=_SUCCESS_STYLE,
         ok="✓",  # heavy check mark — UTF-8, no extra font deps
+        redirect_to=_build_landing_url(ctx),
         **ctx,
     ).encode("utf-8")
 
