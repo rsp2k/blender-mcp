@@ -10,7 +10,7 @@ Demonstrates the full round-trip an LLM-side client implements:
 
 Usage:
     uv run python examples/llm_client_example.py \
-        --server http://localhost:8000/mcp \
+        --server http://localhost:8000 \
         --token "$TOKEN" \
         --target blender-demo01 \
         --script 'import bpy; print(len(bpy.data.objects))'
@@ -168,7 +168,7 @@ async def run(server: str, token: str, target: str, script: str, timeout: float)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--server", default="http://localhost:8000/mcp",
+    ap.add_argument("--server", default="http://localhost:8000",
                     help="MCP endpoint URL (default: %(default)s)")
     ap.add_argument("--token", required=True, help="JWT from POST /auth/login")
     ap.add_argument("--target", required=True,

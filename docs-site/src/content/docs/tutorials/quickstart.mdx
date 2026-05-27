@@ -12,7 +12,7 @@ End-to-end: auth → connect → call a dispatch tool. You don't need to run a s
 - Python 3.10+
 - `uv` installed
 - A browser (for the OAuth login step)
-- A target MCP server URL — `https://mcp.blender.bet/mcp/` for the reference deployment
+- A target MCP server URL — `https://mcp.blender.bet/` for the reference deployment
 
 ## Steps
 
@@ -32,7 +32,7 @@ End-to-end: auth → connect → call a dispatch tool. You don't need to run a s
    import asyncio, json
    from fastmcp import Client
 
-   SERVER = "https://mcp.blender.bet/mcp/"
+   SERVER = "https://mcp.blender.bet/"
 
    async def main():
        async with Client(SERVER) as client:
@@ -67,7 +67,7 @@ End-to-end: auth → connect → call a dispatch tool. You don't need to run a s
    <Tabs>
    <TabItem label="From the addon UI">
    - Install `addon.py` from this repo: Edit → Preferences → Add-ons → Install
-   - In the BlenderMCP panel (sidebar `N`): set Server URL to `https://mcp.blender.bet/mcp/`
+   - In the BlenderMCP panel (sidebar `N`): set Server URL to `https://mcp.blender.bet/`
    - Click **Login** — same browser-based PKCE flow
    - Click **Connect**
 
@@ -81,11 +81,11 @@ End-to-end: auth → connect → call a dispatch tool. You don't need to run a s
    uv run python -c "
    import asyncio
    from fastmcp import Client
-   asyncio.run(Client('https://mcp.blender.bet/mcp/').__aenter__())
+   asyncio.run(Client('https://mcp.blender.bet/').__aenter__())
    "
    # Then run the stub (reads cached token, registers as a fake blender)
    uv run python examples/fake_blender_peer.py \
-     --server https://mcp.blender.bet/mcp/ \
+     --server https://mcp.blender.bet/ \
      --uuid blender-demo01
    ```
 

@@ -8,7 +8,7 @@ to exercise the round-trip without a real Blender install.
 
 Usage:
     uv run python examples/fake_blender_peer.py \
-        --server http://localhost:8000/mcp \
+        --server http://localhost:8000 \
         --token "$TOKEN" \
         --uuid blender-demo01
 """
@@ -157,7 +157,7 @@ async def run(server: str, token: str, peer_uuid: str, duration: float):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--server", default="http://localhost:8000/mcp",
+    ap.add_argument("--server", default="http://localhost:8000",
                     help="MCP endpoint URL (default: %(default)s)")
     ap.add_argument("--token", required=True, help="JWT from POST /auth/login")
     ap.add_argument("--uuid", default="blender-demo01",

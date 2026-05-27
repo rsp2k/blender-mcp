@@ -12,20 +12,20 @@ BlenderMCP servers implement the MCP-spec authorization profile: OAuth 2.1 with 
 Every interaction starts with a 401 that points at the resource-metadata endpoint:
 
 ```bash
-$ curl -i https://mcp.blender.bet/mcp/
+$ curl -i https://mcp.blender.bet/
 HTTP/2 401
 www-authenticate: Bearer error="invalid_token",
   error_description="...",
-  resource_metadata="https://mcp.blender.bet/.well-known/oauth-protected-resource/mcp/"
+  resource_metadata="https://mcp.blender.bet/.well-known/oauth-protected-resource"
 ```
 
 Follow the `resource_metadata` URL to find the authorization server:
 
 ```bash
-$ curl https://mcp.blender.bet/.well-known/oauth-protected-resource/mcp/
+$ curl https://mcp.blender.bet/.well-known/oauth-protected-resource
 {
-  "resource": "https://mcp.blender.bet/mcp/",
-  "authorization_servers": ["https://mcp.blender.bet/mcp"],
+  "resource": "https://mcp.blender.bet/",
+  "authorization_servers": ["https://mcp.blender.bet"],
   "scopes_supported": [],
   "bearer_methods_supported": ["header"]
 }
@@ -34,13 +34,13 @@ $ curl https://mcp.blender.bet/.well-known/oauth-protected-resource/mcp/
 Follow the `authorization_servers[0]` URL to find the endpoints:
 
 ```bash
-$ curl https://mcp.blender.bet/.well-known/oauth-authorization-server/mcp
+$ curl https://mcp.blender.bet/.well-known/oauth-authorization-server
 {
-  "issuer": "https://mcp.blender.bet/mcp",
-  "authorization_endpoint": "https://mcp.blender.bet/mcp/authorize",
-  "token_endpoint":         "https://mcp.blender.bet/mcp/token",
-  "registration_endpoint":  "https://mcp.blender.bet/mcp/register",
-  "revocation_endpoint":    "https://mcp.blender.bet/mcp/revoke",
+  "issuer": "https://mcp.blender.bet",
+  "authorization_endpoint": "https://mcp.blender.bet/authorize",
+  "token_endpoint":         "https://mcp.blender.bet/token",
+  "registration_endpoint":  "https://mcp.blender.bet/register",
+  "revocation_endpoint":    "https://mcp.blender.bet/revoke",
   "scopes_supported": [],
   "response_types_supported": ["code"],
   "grant_types_supported": ["authorization_code", "refresh_token"],
@@ -54,7 +54,7 @@ $ curl https://mcp.blender.bet/.well-known/oauth-authorization-server/mcp
 Three endpoints matter to a client: `registration_endpoint`, `authorization_endpoint`, `token_endpoint`.
 
 <Aside type="note">
-Discovery URLs use the **full MCP path** in the metadata key (`oauth-protected-resource/mcp/`, `oauth-authorization-server/mcp`). Don't strip the trailing path component — that's how the server distinguishes multiple resources mounted on the same host.
+The OAuth metadata endpoints are mounted at root (`/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`), and the resource itself is the server origin (`https://mcp.blender.bet/`). Clients should follow the URLs in the metadata documents verbatim rather than hardcoding paths — the server may add or rename mount points without changing the discovery contract.
 </Aside>
 
 ## Step 1 — Dynamic Client Registration (DCR)
@@ -62,7 +62,7 @@ Discovery URLs use the **full MCP path** in the metadata key (`oauth-protected-r
 Public clients register themselves at runtime. No advance coordination with the operator needed:
 
 ```bash
-$ curl -X POST https://mcp.blender.bet/mcp/register \
+$ curl -X POST https://mcp.blender.bet/register \
   -H 'content-type: application/json' \
   -d '{
     "client_name": "my-llm-agent",
@@ -104,7 +104,7 @@ state = secrets.token_urlsafe(16)  # CSRF protection
 Open the user's browser to:
 
 ```
-https://mcp.blender.bet/mcp/authorize?
+https://mcp.blender.bet/authorize?
   response_type=code&
   client_id=mcp-xxxxxxxx&
   redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&
@@ -124,7 +124,7 @@ Verify `state` matches what you sent. The `code` is single-use and short-lived (
 ## Step 3 — Exchange code for tokens
 
 ```bash
-$ curl -X POST https://mcp.blender.bet/mcp/token \
+$ curl -X POST https://mcp.blender.bet/token \
   -H 'content-type: application/x-www-form-urlencoded' \
   -d 'grant_type=authorization_code' \
   -d 'code=<authorization_code>' \
@@ -145,14 +145,14 @@ Returns:
 }
 ```
 
-Use `access_token` as `Authorization: Bearer <access_token>` on every request to `/mcp/`.
+Use `access_token` as `Authorization: Bearer <access_token>` on every request to the MCP endpoint (`https://mcp.blender.bet/`).
 
 ## Step 4 — Refresh before expiry
 
 When `expires_in` is close to elapsed, exchange the refresh token:
 
 ```bash
-$ curl -X POST https://mcp.blender.bet/mcp/token \
+$ curl -X POST https://mcp.blender.bet/token \
   -H 'content-type: application/x-www-form-urlencoded' \
   -d 'grant_type=refresh_token' \
   -d 'refresh_token=<refresh_token>' \

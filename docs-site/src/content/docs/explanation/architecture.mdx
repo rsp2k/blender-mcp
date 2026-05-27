@@ -24,7 +24,7 @@ Every connection is a standard MCP transport. The server doesn't speak any custo
 
 ### LLM clients
 
-Any process that speaks MCP can be a client. The reference client (`examples/llm_client_example.py`) uses `fastmcp.Client`, which discovers the server's [OAuth endpoints](/reference/auth/) via `/.well-known/oauth-protected-resource/mcp/`, runs a DCR + PKCE flow, and sets the resulting access token as `Authorization: Bearer …` on every subsequent request.
+Any process that speaks MCP can be a client. The reference client (`examples/llm_client_example.py`) uses `fastmcp.Client`, which discovers the server's [OAuth endpoints](/reference/auth/) via `/.well-known/oauth-protected-resource`, runs a DCR + PKCE flow, and sets the resulting access token as `Authorization: Bearer …` on every subsequent request.
 
 LLM clients are typically **ephemeral** — `is_persistent=False`. They join the bus, dispatch some jobs, await replies, leave.
 
@@ -32,9 +32,9 @@ LLM clients are typically **ephemeral** — `is_persistent=False`. They join the
 
 A FastAPI app that mounts:
 
-- `/.well-known/oauth-protected-resource/mcp/` and `/.well-known/oauth-authorization-server/mcp` — discovery
-- `/mcp/{register,authorize,token,revoke}` — the MCP-spec OAuth endpoints (proxied to Authentik in prod, served by an in-memory provider in dev)
-- `/mcp/` — the Streamable HTTP MCP endpoint produced by `build_http_mcp()`
+- `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server` — discovery
+- `/{register,authorize,token,revoke}` — the MCP-spec OAuth endpoints (proxied to Authentik in prod, served by an in-memory provider in dev)
+- `/` — the Streamable HTTP MCP endpoint produced by `build_http_mcp()`
 
 FastMCP's auth pipeline:
 

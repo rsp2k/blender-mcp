@@ -27,12 +27,12 @@ The minimal happy path. Three things: connect, call, parse.
 
 ### Stage 1 — Connect
 
-`fastmcp.Client` discovers `/.well-known/oauth-protected-resource/mcp/`, registers via DCR, runs the PKCE flow in your browser, and caches the token to `~/.config/fastmcp/`. Subsequent runs reuse the cached token until it expires.
+`fastmcp.Client` discovers `/.well-known/oauth-protected-resource`, registers via DCR, runs the PKCE flow in your browser, and caches the token to `~/.config/fastmcp/`. Subsequent runs reuse the cached token until it expires.
 
 ```python
 from fastmcp import Client
 
-SERVER = "https://mcp.blender.bet/mcp/"
+SERVER = "https://mcp.blender.bet/"
 
 async with Client(SERVER) as client:
     # First call pops your browser. Subsequent calls are silent.
@@ -47,7 +47,7 @@ If you want to drive the OAuth wire yourself, see the [Authentication reference]
 import asyncio, json
 from fastmcp import Client
 
-SERVER = "https://mcp.blender.bet/mcp/"
+SERVER = "https://mcp.blender.bet/"
 
 async def main():
     async with Client(SERVER) as client:
