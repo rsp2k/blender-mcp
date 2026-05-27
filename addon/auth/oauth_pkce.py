@@ -1,24 +1,24 @@
 """RFC 8252 OAuth 2.1 Authorization Code + PKCE flow with loopback callback.
 
-For Blender addon login against the MCP-spec OAuth endpoints (`/mcp/register`,
-`/mcp/authorize`, `/mcp/token`) which our server exposes via FastMCP's
+For Blender addon login against the MCP-spec OAuth endpoints (`/register`,
+`/authorize`, `/token`) which our server exposes via FastMCP's
 OAuthProxy → Authentik bridge.
 
 The flow:
 
-1. **DCR**: POST /mcp/register to dynamically register this addon instance as
+1. **DCR**: POST /register to dynamically register this addon instance as
    an OAuth public client (no client_secret, PKCE only).
 2. **PKCE**: generate a 256-bit verifier + SHA-256 S256 challenge + random
    ``state`` for CSRF protection.
 3. **Loopback server**: bind a localhost socket to an OS-assigned random port.
    Multiple Blender instances on the same machine don't collide. Server is
    single-shot — handles ONE request then exits.
-4. **Browser**: open the user's default browser to /mcp/authorize?... The
+4. **Browser**: open the user's default browser to /authorize?... The
    user authenticates against Authentik in their browser.
-5. **Callback**: Authentik → our server (`/mcp/auth/callback`) → MCP proxy
+5. **Callback**: Authentik → our server (`/auth/callback`) → MCP proxy
    issues its own auth code → browser redirected to localhost:PORT/callback
    with `code` query param. Loopback server captures it.
-6. **Token exchange**: POST /mcp/token with grant_type=authorization_code +
+6. **Token exchange**: POST /token with grant_type=authorization_code +
    verifier. Receive access_token + refresh_token.
 
 All HTTP calls use the stdlib (urllib.request) + ``requests`` (already a
@@ -27,7 +27,7 @@ required.
 
 Usage from the Blender operator:
 
-    payload = oauth_login("https://mcp.blender.bet/mcp/", timeout=300)
+    payload = oauth_login("https://mcp.blender.bet/", timeout=300)
     # payload contains access_token, refresh_token, expires_in, client_id
     prefs.jwt_token = payload["access_token"]
     prefs.refresh_token = payload["refresh_token"]
@@ -155,14 +155,20 @@ class OAuthError(Exception):
 
 
 def _normalize_server_url(server_url: str) -> str:
-    """Strip trailing /mcp or /mcp/ — the OAuth endpoints live ABOVE /mcp/.
+    """Strip trailing slashes and a trailing ``/mcp`` suffix.
 
-    Our server is at https://mcp.blender.bet/mcp/ but the OAuth surface
-    is at https://mcp.blender.bet/mcp/{register,authorize,token,...}.
-    So the OAuth base URL is the same as the MCP base URL in our case.
+    The server now serves MCP + OAuth at root: the hostname (mcp.*) carries
+    the semantic, no path prefix needed. So the OAuth base URL is the
+    same as the MCP base URL with no path component.
+
+    Stripping a stored ``/mcp`` suffix is backwards-compat plumbing: users
+    who configured ``https://mcp.blender.bet/mcp/`` against the old server
+    layout get auto-normalized to ``https://mcp.blender.bet``, and the
+    construction ``<base>/register`` lands on the new endpoints correctly.
     """
-    if server_url.endswith("/"):
-        server_url = server_url.rstrip("/")
+    server_url = server_url.rstrip("/")
+    if server_url.endswith("/mcp"):
+        server_url = server_url[: -len("/mcp")]
     return server_url
 
 
@@ -217,7 +223,8 @@ def oauth_login(
 
     Args:
         server_url: Base URL of the MCP server, e.g.
-            ``https://mcp.blender.bet/mcp/``.
+            ``https://mcp.blender.bet/``. A trailing ``/mcp`` segment is
+            stripped automatically (backwards compat for stored prefs).
         timeout: Max seconds to wait for the browser callback. Default 5min.
         open_browser: If True (default), opens the user's system browser to
             the authorize URL. Set False to print the URL and let the
@@ -333,7 +340,7 @@ def refresh_oauth_token(
 
     Used by the bus client's existing ``_refresh_watcher`` /
     ``_do_refresh_once`` once it's been migrated from the legacy
-    ``/auth/refresh`` endpoint to the OAuth ``/mcp/token`` endpoint.
+    ``/auth/refresh`` endpoint to the OAuth ``/token`` endpoint.
 
     Args:
         server_url: Base URL of the MCP server (same as oauth_login).

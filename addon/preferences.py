@@ -52,7 +52,7 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
     server_url: StringProperty(
         name="Server URL",
         description="BlenderMCP server's Streamable HTTP endpoint",
-        default="http://localhost:8000/mcp",
+        default="http://localhost:8000",
     )
     username: StringProperty(
         name="Username",
@@ -193,7 +193,7 @@ _LEGACY_SCENE_PROP_MAP = {
 # prefs default in place). Also serves as the "is this a real user value?"
 # check we use to decide whether to log a migration notice.
 _PREFS_DEFAULTS = {
-    "server_url": "http://localhost:8000/mcp",
+    "server_url": "http://localhost:8000",
     "username": "",
     "jwt_token": "",
     "use_polyhaven": False,

@@ -48,11 +48,11 @@ def _build_auth_provider() -> AuthProvider | None:
         config_url = os.environ["AUTHENTIK_CONFIG_URL"]
         client_id = os.environ["AUTHENTIK_CLIENT_ID"]
         client_secret = os.environ["AUTHENTIK_CLIENT_SECRET"]
-        # ``base_url`` is the public URL where OAuth endpoints live, INCLUDING
-        # any mount path. We mount FastMCP at /mcp in oauth_server.py, so
-        # OAuth endpoints land at /mcp/.well-known/* etc.
-        public_base = os.environ["PUBLIC_BASE_URL"].rstrip("/")
-        base_url = f"{public_base}/mcp"
+        # ``base_url`` is the public URL where OAuth endpoints live.
+        # MCP is mounted at root (the mcp.* hostname carries the semantic —
+        # no need for a redundant /mcp path prefix), so OAuth endpoints land
+        # at /register, /authorize, /token, /auth/callback directly.
+        base_url = os.environ["PUBLIC_BASE_URL"].rstrip("/")
 
         logger.info("Auth: OIDCProxy → Authentik (%s)", config_url)
         return OIDCProxy(
@@ -124,8 +124,8 @@ def _build_auth_provider() -> AuthProvider | None:
         return BlenderMCPOAuthProvider(
             users=users,
             verify_password=_verify,
-            base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-            + "/mcp",
+            # MCP mounted at root — see the authentik branch above for rationale.
+            base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
         )
 
     raise ValueError(

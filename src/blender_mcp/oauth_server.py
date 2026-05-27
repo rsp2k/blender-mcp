@@ -214,7 +214,7 @@ def build_app() -> FastAPI:
         return await call_next(request)
 
     # ---- DCR-capture middleware (phase H — role attribution) ----
-    # Intercept POST /mcp/register to record (client_id → role) from the
+    # Intercept POST /register to record (client_id → role) from the
     # client's declared ``software_id``. We DON'T modify the request or the
     # response — just snoop the body in flight.
     #
@@ -224,7 +224,7 @@ def build_app() -> FastAPI:
     # client still gets the JSON it expects).
     @app.middleware("http")
     async def dcr_role_middleware(request: Request, call_next):
-        if not (request.url.path == "/mcp/register" and request.method == "POST"):
+        if not (request.url.path == "/register" and request.method == "POST"):
             return await call_next(request)
 
         # 1. Snoop the request body, then re-attach for downstream consumers.
@@ -396,20 +396,23 @@ def build_app() -> FastAPI:
     # header advertises a URL that 404s, and DCR-capable clients (Claude Code,
     # etc.) can't bootstrap. The addon's hard-coded /mcp/register flow works
     # either way; this fixes the spec-compliant discovery path.
-    # `mcp_path="/"` (NOT "/mcp") matches what FastMCP advertises in its own
-    # WWW-Authenticate `resource_metadata=…/oauth-protected-resource/mcp/`
-    # header. The auth provider thinks of the resource as living at "/" inside
-    # the http_app (since we built it with path="/"); the outer FastAPI mount
-    # at "/mcp" stacks the prefix on the OUTSIDE. Passing "/mcp" here double-
-    # prefixes and yields /oauth-protected-resource/mcp/mcp — confirmed by
-    # probing get_well_known_routes() with several arg values.
+    # `mcp_path="/"` matches what FastMCP advertises in its own
+    # WWW-Authenticate header. With MCP mounted at root, this produces the
+    # discovery URL `/.well-known/oauth-protected-resource/mcp/` (the "mcp"
+    # segment is FastMCP's internal resource-name, not the mount path) and
+    # the discovery body advertises `resource: https://<host>/mcp/`.
     auth_provider = getattr(mcp, "auth", None)
     if auth_provider is not None and hasattr(auth_provider, "get_well_known_routes"):
         for route in auth_provider.get_well_known_routes(mcp_path="/"):
             app.router.routes.append(route)
 
-    # Mount FastMCP last so middleware ordering is correct.
-    app.mount("/mcp", mcp_asgi)
+    # Mount FastMCP at root. FastAPI's registered routes (/auth/login,
+    # /health, /openapi.json, the .well-known/* routes added above) match
+    # FIRST in registration order — only paths NOT claimed by FastAPI fall
+    # through to the mount. So /register, /authorize, /token, /auth/callback
+    # (FastMCP's own paths) land at FastMCP correctly, while /auth/login etc.
+    # stay with FastAPI.
+    app.mount("/", mcp_asgi)
 
     return app
 
