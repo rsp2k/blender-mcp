@@ -37,7 +37,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 3, 0),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 4, 0),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -52,20 +52,20 @@ bl_info = {
 # runtime state, not user config:
 #   blendermcp_server_running — is the bus client connected right now?
 #   blendermcp_client_id      — display the sticky UUID in the panel
-#   blendermcp_password_tmp   — the in-flight password before Login runs;
-#                              cleared by the operator on success
 _TRANSIENT_SCENE_PROPS = (
     "blendermcp_server_running",
     "blendermcp_client_id",
-    "blendermcp_password_tmp",
 )
 
 # Legacy Scene props from pre-Phase-8 installs. Removed in register()
 # after migration so they stop riding along in saved .blend files.
+# blendermcp_username + blendermcp_password_tmp are listed here so any
+# old .blend files that still carry them get them stripped on load.
 _LEGACY_SCENE_PROPS = (
     "blendermcp_server_url",
     "blendermcp_jwt_token",
     "blendermcp_username",
+    "blendermcp_password_tmp",
     "blendermcp_use_polyhaven",
     "blendermcp_use_hyper3d",
     "blendermcp_hyper3d_mode",
@@ -98,12 +98,6 @@ def register():
     )
     bpy.types.Scene.blendermcp_client_id = bpy.props.StringProperty(
         name="Client ID", default="",
-    )
-    bpy.types.Scene.blendermcp_password_tmp = bpy.props.StringProperty(
-        name="Password",
-        description="In-flight password; cleared on successful login. Never persisted.",
-        subtype="PASSWORD",
-        default="",
     )
 
     # Register the UI classes (panel + operators).
