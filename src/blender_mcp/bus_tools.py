@@ -613,6 +613,89 @@ class BlenderBusComponent(MCPMixin):
             return json.dumps({"status": "error", "error": "not_a_member"})
         return json.dumps({"status": "ok", "bus_id": str(bus_uuid)})
 
+    # ---- Phase I6: LLM session visibility ---------------------------------
+
+    @mcp_tool()
+    @require_role("llm-client")
+    async def register_session(
+        self,
+        session_uuid: str,
+        label: Optional[str] = None,
+        bus_id: Optional[str] = None,
+        capabilities: Optional[list[str]] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Opt-in: make THIS LLM session visible to other clients on the bus.
+
+        Gated to ``llm-client`` role (mirror of ``bus_register_client``
+        which is addon-only). Registers a ClientInfo with
+        ``client_type="llm"`` and ``is_persistent=False`` (LLM sessions
+        are ephemeral by nature — they live for the duration of the MCP
+        connection).
+
+        Use cases:
+        - You want OTHER LLM sessions on the same bus to see you exist
+          (collaboration awareness — "Ryan's Claude session is also working
+          on this scene").
+        - You want to receive ``bus_send_message`` broadcasts targeted at
+          ``client_type="llm"``.
+
+        Without calling this, you can still dispatch (``blender_*``) and
+        send messages, but you remain invisible in
+        ``bus_list_available_clients``. Most ad-hoc dispatch sessions
+        don't need to opt in.
+
+        Args:
+            session_uuid: stable UUID for your session (generate once
+                per long-lived MCP client; reuse across reconnects so
+                you appear as the same entity).
+            label: human-readable name shown in ``bus_list_available_clients``
+                (e.g. ``"Claude Code · Ryan's terminal"``).
+            bus_id: optional; defaults to personal bus.
+            capabilities: optional list of capability tags
+                (e.g. ``["script-generation", "asset-discovery"]``).
+        """
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+
+        info = ClientInfo(
+            uuid=session_uuid,
+            client_type="llm",
+            label=label,
+            is_persistent=False,
+            capabilities=list(capabilities or []),
+            session=_session_from_ctx(ctx),
+        )
+        registered = resolved["bus"].register(info)
+        return json.dumps({
+            "status": "ok",
+            "bus_id": str(resolved["bus_id"]),
+            "client": registered.to_dict(),
+        })
+
+    @mcp_tool()
+    @require_role("llm-client")
+    async def unregister_session(
+        self,
+        session_uuid: str,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Remove THIS LLM session from the bus's visible client list."""
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        ok = resolved["bus"].unregister(session_uuid)
+        return json.dumps({"status": "ok" if ok else "not_found",
+                           "session_uuid": session_uuid})
+
     @mcp_tool()
     async def revoke_member(
         self,
