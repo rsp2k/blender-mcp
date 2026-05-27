@@ -298,6 +298,255 @@ class BlenderBusComponent(MCPMixin):
             "pending_jobs_for_user": pending,
         })
 
+    # ---- Phase I3: bus membership management ------------------------------
+
+    @mcp_tool()
+    async def list_buses(self, ctx: Context = None) -> str:
+        """List every bus the caller is a member of.
+
+        Returns ``{"status": "ok", "buses": [{bus_id, name, role,
+        is_personal, owner_user_id, created_at}, ...]}``. Personal bus
+        auto-provisions on first call so every authenticated user sees
+        at least one entry.
+
+        Note: ``role`` is the CALLER'S role on each bus (owner /
+        member / guest). The bus itself has a fixed ``owner_user_id``
+        but each member sees their own role.
+        """
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+
+        from .storage import bus_repo, get_session
+        async with get_session() as s:
+            # Auto-provision personal bus on first contact.
+            await bus_repo.ensure_personal_bus(s, user_id)
+        async with get_session() as s:
+            rows = await bus_repo.list_buses_for_user(s, user_id)
+
+        return json.dumps({
+            "status": "ok",
+            "user_id": user_id,
+            "buses": [
+                {
+                    "bus_id": str(bus.bus_id),
+                    "name": bus.name,
+                    "description": bus.description,
+                    "role": role.value,
+                    "is_personal": bus.is_personal,
+                    "owner_user_id": bus.owner_user_id,
+                    "is_owned_by_me": bus.owner_user_id == user_id,
+                    "created_at": bus.created_at.isoformat(),
+                }
+                for bus, role in rows
+            ],
+        })
+
+    @mcp_tool()
+    async def create_bus(
+        self,
+        name: str,
+        description: str = "",
+        ctx: Context = None,
+    ) -> str:
+        """Create a new shared bus owned by the caller. Returns the new bus_id.
+
+        ``name`` is required (max 128 chars). The caller becomes the
+        sole initial member with role ``owner``. To add others, call
+        ``bus_invite_user(bus_id=...)`` and share the returned code
+        out-of-band.
+
+        For the user's private workspace, no need to create anything —
+        a personal bus auto-provisions on first ``list_buses`` call.
+        """
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        name = (name or "").strip()
+        if not name:
+            return json.dumps({"status": "error", "error": "name_required"})
+        if len(name) > 128:
+            return json.dumps({"status": "error", "error": "name_too_long", "max": 128})
+
+        from .storage import bus_repo, get_session
+        async with get_session() as s:
+            bus = await bus_repo.create_shared_bus(
+                s, owner_user_id=user_id, name=name, description=description
+            )
+        return json.dumps({
+            "status": "ok",
+            "bus_id": str(bus.bus_id),
+            "name": bus.name,
+            "description": bus.description,
+        })
+
+    # ---- Phase I4: invitations + membership ops ---------------------------
+
+    @mcp_tool()
+    async def invite_user(
+        self,
+        bus_id: str,
+        role: str = "member",
+        ctx: Context = None,
+    ) -> str:
+        """Issue a single-use invitation code for ``bus_id``.
+
+        Caller must be a member (any role) of the bus. Returns the code
+        as ``{"status": "ok", "code": "BMI-XXXXXXXXXX", "expires_at":
+        "...", "role": "member"}``. Share the code out-of-band; recipient
+        calls ``bus_join(code)``.
+
+        Personal buses cannot be invited to — they're permanent
+        single-member buses by definition. Returns ``cannot_invite_to_personal``
+        if you try.
+
+        ``role`` is the role the joiner will get; valid: ``member``
+        (default) or ``guest`` (read-only). Cannot invite as ``owner``
+        — bus owners are immutable.
+        """
+        import uuid as _u
+        from .storage import BusRole, bus_repo, get_session
+
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            return json.dumps({"status": "error", "error": "invalid_bus_id"})
+        if role not in ("member", "guest"):
+            return json.dumps({"status": "error", "error": "invalid_role",
+                               "allowed": ["member", "guest"]})
+
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                return json.dumps({"status": "error", "error": "bus_not_found"})
+            if bus.is_personal:
+                return json.dumps({"status": "error", "error": "cannot_invite_to_personal"})
+            membership = await bus_repo.get_membership(s, bus_uuid, user_id)
+            if membership is None:
+                return json.dumps({"status": "error", "error": "not_a_member"})
+            inv = await bus_repo.create_invitation(
+                s, bus_id=bus_uuid, invited_by=user_id, role=BusRole(role),
+            )
+
+        return json.dumps({
+            "status": "ok",
+            "code": inv.code,
+            "bus_id": str(inv.bus_id),
+            "role": inv.role.value,
+            "expires_at": inv.expires_at.isoformat(),
+        })
+
+    @mcp_tool()
+    async def join_bus(self, code: str, ctx: Context = None) -> str:
+        """Accept an invitation code. Returns the joined bus_id + name.
+
+        On success the caller becomes a member of the bus with the
+        role the invitation specified. The code is single-use — second
+        claim returns ``already_consumed``.
+
+        Failure statuses: ``not_found``, ``expired``, ``already_consumed``,
+        ``wrong_invitee`` (if the invitation was targeted at a specific
+        user_id and you're not them), ``already_member`` (you were
+        already a member; the invitation still gets consumed to prevent
+        replay).
+        """
+        from .storage import bus_repo, get_session
+
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        code = (code or "").strip().upper()
+        if not code:
+            return json.dumps({"status": "error", "error": "code_required"})
+
+        async with get_session() as s:
+            bus, status = await bus_repo.consume_invitation(
+                s, code=code, joining_user_id=user_id,
+            )
+
+        if bus is None:
+            return json.dumps({"status": status})
+        return json.dumps({
+            "status": status,
+            "bus_id": str(bus.bus_id),
+            "name": bus.name,
+            "description": bus.description,
+        })
+
+    @mcp_tool()
+    async def leave_bus(self, bus_id: str, ctx: Context = None) -> str:
+        """Leave a bus you're a member of.
+
+        Personal buses cannot be left (returns ``cannot_leave_personal``).
+        Bus owners cannot leave their own bus — they'd be orphaning it
+        (returns ``cannot_leave_as_owner``); to retire a bus, use
+        ``bus_revoke_bus`` (not yet implemented — future phase).
+        """
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            return json.dumps({"status": "error", "error": "invalid_bus_id"})
+
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                return json.dumps({"status": "error", "error": "bus_not_found"})
+            if bus.is_personal:
+                return json.dumps({"status": "error", "error": "cannot_leave_personal"})
+            if bus.owner_user_id == user_id:
+                return json.dumps({"status": "error", "error": "cannot_leave_as_owner"})
+            ok = await bus_repo.revoke_member(s, bus_id=bus_uuid, user_id=user_id)
+        if not ok:
+            return json.dumps({"status": "error", "error": "not_a_member"})
+        return json.dumps({"status": "ok", "bus_id": str(bus_uuid)})
+
+    @mcp_tool()
+    async def revoke_member(
+        self,
+        bus_id: str,
+        target_user_id: str,
+        ctx: Context = None,
+    ) -> str:
+        """Kick a member off a bus (owner-only).
+
+        Owners can revoke any non-owner member. Owners cannot revoke
+        themselves (returns ``cannot_revoke_owner``). Use to clean up
+        memberships from shared invitation codes that landed with
+        unintended recipients.
+        """
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return json.dumps({"status": "error", "error": "unauthenticated"})
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            return json.dumps({"status": "error", "error": "invalid_bus_id"})
+        if target_user_id == user_id:
+            return json.dumps({"status": "error", "error": "cannot_revoke_owner"})
+
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                return json.dumps({"status": "error", "error": "bus_not_found"})
+            if bus.owner_user_id != user_id:
+                return json.dumps({"status": "error", "error": "not_owner"})
+            ok = await bus_repo.revoke_member(s, bus_id=bus_uuid, user_id=target_user_id)
+        if not ok:
+            return json.dumps({"status": "error", "error": "not_a_member"})
+        return json.dumps({"status": "ok"})
+
     @mcp_prompt()
     def dispatch_script(
         self,
