@@ -157,7 +157,7 @@ That target runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.
 
 ## Live reference deploy
 
-The branch's reference deployment runs at **`https://mcp.l.warehack.ing/mcp/`** (note the trailing slash — see [Quickstart](/tutorials/quickstart/) for why the addon auto-adds it). If you want to skip standing up your own server while exploring the API, you can authenticate against this deployment with the demo credentials and point clients at it directly.
+The branch's reference deployment runs at **`https://mcp.blender.bet/mcp/`** (note the trailing slash — see [Quickstart](/tutorials/quickstart/) for why the addon auto-adds it). If you want to skip standing up your own server while exploring the API, you can authenticate against this deployment with the demo credentials and point clients at it directly.
 
 ## Operational notes
 

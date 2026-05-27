@@ -27,7 +27,7 @@ required.
 
 Usage from the Blender operator:
 
-    payload = oauth_login("https://mcp.l.warehack.ing/mcp/", timeout=300)
+    payload = oauth_login("https://mcp.blender.bet/mcp/", timeout=300)
     # payload contains access_token, refresh_token, expires_in, client_id
     prefs.jwt_token = payload["access_token"]
     prefs.refresh_token = payload["refresh_token"]
@@ -157,8 +157,8 @@ class OAuthError(Exception):
 def _normalize_server_url(server_url: str) -> str:
     """Strip trailing /mcp or /mcp/ — the OAuth endpoints live ABOVE /mcp/.
 
-    Our server is at https://mcp.l.warehack.ing/mcp/ but the OAuth surface
-    is at https://mcp.l.warehack.ing/mcp/{register,authorize,token,...}.
+    Our server is at https://mcp.blender.bet/mcp/ but the OAuth surface
+    is at https://mcp.blender.bet/mcp/{register,authorize,token,...}.
     So the OAuth base URL is the same as the MCP base URL in our case.
     """
     if server_url.endswith("/"):
@@ -217,7 +217,7 @@ def oauth_login(
 
     Args:
         server_url: Base URL of the MCP server, e.g.
-            ``https://mcp.l.warehack.ing/mcp/``.
+            ``https://mcp.blender.bet/mcp/``.
         timeout: Max seconds to wait for the browser callback. Default 5min.
         open_browser: If True (default), opens the user's system browser to
             the authorize URL. Set False to print the URL and let the
