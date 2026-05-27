@@ -74,10 +74,16 @@ def get_server_base_url(prefs: Optional["BlenderMCPPreferences"] = None) -> str:
     return f"{scheme}://{host}"
 
 
-def _draw_login_section(self, layout):
-    """Login / Logout UI block — used by both prefs panel and (optionally) sidebar."""
-    has_jwt = bool(self.jwt_token)
-    is_oauth = bool(self.oauth_client_id)
+def draw_login_section(layout, prefs):
+    """Login / Logout UI block — shared by the prefs panel AND the View3D sidebar.
+
+    Factored out (not a method) so both call sites render identically. State
+    is read from ``prefs`` (the AddonPreferences instance); the operators
+    (``blendermcp.oauth_login`` / ``blendermcp.logout``) drive everything
+    write-side, so the UI stays purely declarative.
+    """
+    has_jwt = bool(prefs.jwt_token)
+    is_oauth = bool(prefs.oauth_client_id)
 
     box = layout.box()
     if has_jwt:
@@ -202,7 +208,7 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
 
         # --- Login / Logout ---
         col.separator()
-        _draw_login_section(self, layout)
+        draw_login_section(layout, self)
 
         # --- Asset integrations ---
         layout.separator()

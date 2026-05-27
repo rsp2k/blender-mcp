@@ -1,13 +1,13 @@
-"""BLENDERMCP_PT_Panel — View3D > Sidebar > BlenderMCP panel (minimal).
+"""BLENDERMCP_PT_Panel — View3D > Sidebar > BlenderMCP panel.
 
-Setup config (server URL, OAuth login) lives in Edit > Preferences >
-Add-ons > BlenderMCP. This sidebar carries the **runtime** view only:
-connection status while you work, a one-click Connect/Disconnect, and
-the asset-integration toggles you might want to flip mid-session.
+Setup config (server URL, asset API keys) lives in Edit > Preferences >
+Add-ons > BlenderMCP. The sidebar carries the actions you take *while
+working*: Login/Logout, Connect/Disconnect, asset-integration toggles,
+and live connection status.
 
-If you've never logged in, the sidebar surfaces a hint to open prefs
-rather than showing a login form here (login is a once-per-machine
-event, asset toggles are per-session).
+Login UI is shared with the prefs panel via
+:func:`preferences.draw_login_section` so both call sites stay
+identical without copy-paste drift.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import bpy
 
 from .. import state
 from ..client.bus_client import FASTMCP_AVAILABLE
-from ..preferences import get_prefs
+from ..preferences import draw_login_section, get_prefs
 
 
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
@@ -31,8 +31,7 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         scene = context.scene
         prefs = get_prefs(context)
 
-        # --- fastmcp install hint (this is the only hard dependency that
-        # can't be auto-fixed from the addon UI) ---
+        # --- fastmcp install hint (only hard dep that can't be auto-fixed) ---
         if not FASTMCP_AVAILABLE:
             box = layout.box()
             box.label(text="fastmcp not installed", icon='ERROR')
@@ -40,18 +39,16 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             box.label(text="  python -m pip install fastmcp")
             return  # Everything below depends on fastmcp.
 
-        has_jwt = bool(prefs.jwt_token)
+        # --- Login / Logout (shared widget with prefs panel) ---
+        draw_login_section(layout, prefs)
 
-        # --- Not logged in: point users to prefs ---
-        if not has_jwt:
-            box = layout.box()
-            box.label(text="Not logged in", icon='LOCKED')
-            box.label(text="Open Edit > Preferences >")
-            box.label(text="Add-ons > BlenderMCP")
-            box.label(text="and click 'Login with OAuth'.")
+        # If not logged in, stop here — Connect needs a JWT, asset toggles
+        # are pointless without a session.
+        if not prefs.jwt_token:
             return
 
         # --- Connection ---
+        layout.separator()
         col = layout.column(align=True)
         col.label(text="Connection", icon='NETWORK_DRIVE')
 
