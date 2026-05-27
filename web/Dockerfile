@@ -48,14 +48,12 @@ ENV ASTRO_TELEMETRY_DISABLED=1 \
     PORT=4321
 WORKDIR /app
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-
-# Non-root user — standalone server doesn't need root for port 4321.
-RUN addgroup -g 1000 app && adduser -u 1000 -G app -D app && \
-    chown -R app:app /app
-USER app
+# node:22-alpine ships with a built-in ``node`` user at uid/gid 1000;
+# reuse it rather than creating another at the same id (which fails).
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/package.json ./
+USER node
 
 EXPOSE 4321
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
