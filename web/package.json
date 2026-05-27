@@ -1,0 +1,27 @@
+{
+  "name": "blender-mcp-web",
+  "version": "2026.05.27",
+  "description": "User-facing web at blender.bet — SSO-protected landing + post-OAuth welcome page.",
+  "type": "module",
+  "private": true,
+  "author": {
+    "name": "Ryan Malloy",
+    "email": "ryan@supported.systems"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro build",
+    "start": "node ./dist/server/entry.mjs",
+    "check": "astro check",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/node": "^10.1.1",
+    "astro": "^6.3.7"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "typescript": "^5.6.3"
+  }
+}

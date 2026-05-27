@@ -1,0 +1,87 @@
+# BlenderMCP user-facing web — caddy-docker-proxy on the warehack.ing fabric.
+#
+# Serves blender.bet apex:
+#   /               — static landing (prerendered)
+#   /login-complete — SSR page, forward_auth gated (reads Authentik headers)
+#
+# Two services share the `caddy` external network:
+#   web      — default (prod), Node SSR via standalone Astro server
+#   web-dev  — profile `dev`, Astro HMR survived by Caddy
+#
+# Authentik forward_auth flow:
+#   1. Browser hits /login-complete*
+#   2. Caddy invokes forward_auth → Authentik embedded outpost
+#   3. Outpost checks .blender.bet session cookie:
+#      - present + valid → 200 + X-Authentik-* headers → Caddy forwards
+#        the request to Astro with those headers attached
+#      - missing → 302 to Authentik login → user authenticates → callback
+#        sets the cookie → user lands back at the original URL
+#   4. The Astro SSR page reads the headers via Astro.request.headers
+
+services:
+  web:
+    build:
+      context: .
+      target: prod
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-prod
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-prod
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
+      caddy.reverse_proxy: "{{upstreams 4321}}"
+      # Caddy verifies DNS-01 propagation against public resolvers (not
+      # Docker's embedded DNS, which doesn't know blender.bet).
+      caddy.tls.resolvers: "1.1.1.1 9.9.9.9"
+      caddy.tls.propagation_delay: 60s
+      caddy.tls.propagation_timeout: 600s
+      caddy.encode: zstd gzip
+
+      # ---- Authentik forward_auth on /login-complete* ----
+      # Path matcher: gate ONLY this route. Apex `/` + future public
+      # routes stay reachable without authentication.
+      caddy.@protected.path: /login-complete*
+      caddy.forward_auth: "@protected https://auth.supported.systems"
+      caddy.forward_auth.uri: /outpost.goauthentik.io/auth/caddy
+      caddy.forward_auth.copy_headers: X-Authentik-Username X-Authentik-Email X-Authentik-Name X-Authentik-Groups X-Authentik-Uid
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4321/", "-O", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Dev variant — `docker compose --profile dev up`
+  web-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-dev
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-dev
+    restart: unless-stopped
+    environment:
+      ASTRO_TELEMETRY_DISABLED: "1"
+      HMR_HOST: ${DOMAIN:?DOMAIN must be set in .env}
+      HMR_PROTOCOL: wss
+      HMR_CLIENT_PORT: "443"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 4321}}"
+      # HMR survival — Vite doesn't ping, so override Caddy's WS idle defaults.
+      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport: "http"
+      caddy.reverse_proxy.transport.read_timeout: "0"
+      caddy.reverse_proxy.transport.write_timeout: "0"
+      caddy.reverse_proxy.transport.keepalive: "5m"
+      caddy.reverse_proxy.stream_timeout: "24h"
+
+networks:
+  caddy:
+    external: true

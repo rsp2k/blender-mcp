@@ -1,0 +1,193 @@
+---
+/**
+ * /login-complete — landing page the Blender addon redirects to after a
+ * successful OAuth flow against the MCP server.
+ *
+ * SSR route (omitting prerender so it stays server-rendered). User
+ * identity comes from Authentik's proxy outpost via Caddy forward_auth:
+ * the outpost validates the user's .blender.bet session cookie and
+ * forwards X-Authentik-Username / -Email / -Name headers to this
+ * upstream when authenticated. Unauthenticated users get redirected
+ * to Authentik for SSO before they ever hit this page.
+ *
+ * Addon-side context (server URL, client_id, addon version, timestamp)
+ * arrives via query string — non-secret values, OK to render directly.
+ * No tokens or auth codes are passed through URLs anywhere.
+ */
+
+const headers = Astro.request.headers;
+const user = {
+  username: headers.get('x-authentik-username') ?? '',
+  email: headers.get('x-authentik-email') ?? '',
+  name: headers.get('x-authentik-name') ?? '',
+  greet:
+    headers.get('x-authentik-name') ||
+    headers.get('x-authentik-username') ||
+    'there',
+};
+
+const params = Astro.url.searchParams;
+const ctx = {
+  server: params.get('server') ?? '',
+  client_id: params.get('client_id') ?? '',
+  ver: params.get('ver') ?? '',
+  ts: params.get('ts') ?? '',
+};
+---
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BlenderMCP login complete</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      :root {
+        --bg: #0e1116; --surface: #161b22; --border: #2a313a;
+        --text: #d4d4d4; --muted: #8b949e; --dim: #6e7681;
+        --accent: #2bb3a4; --accent-glow: rgba(43, 179, 164, .15);
+        --success: #5fb878;
+        --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh;
+        font-family: system-ui, -apple-system, sans-serif;
+        background:
+          radial-gradient(circle at 20% 0%, var(--accent-glow), transparent 50%),
+          radial-gradient(circle at 80% 100%, var(--accent-glow), transparent 50%),
+          var(--bg);
+        color: var(--text);
+        display: grid; place-items: center; padding: 2em 1em;
+      }
+      main {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 14px; padding: 2.5em; max-width: 640px; width: 100%;
+        box-shadow: 0 20px 60px rgba(0,0,0,.4);
+      }
+      .check {
+        width: 64px; height: 64px; margin: 0 auto 1em;
+        display: grid; place-items: center;
+        background: var(--accent-glow); border: 2px solid var(--success);
+        border-radius: 50%; color: var(--success);
+      }
+      h1 {
+        margin: 0 0 .4em; font-size: 1.8em; font-weight: 600;
+        text-align: center; color: var(--success);
+      }
+      .lede {
+        text-align: center; margin: 0 0 2em; color: var(--muted);
+        font-size: 1.05em; line-height: 1.5;
+      }
+      dl.context {
+        margin: 0 0 2em; padding: 1.2em 1.5em;
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: 8px; font-family: var(--mono); font-size: .88em;
+        display: grid; grid-template-columns: max-content 1fr;
+        column-gap: 1.5em; row-gap: .5em; align-items: baseline;
+      }
+      dl.context dt { color: var(--muted); font-weight: 400; white-space: nowrap; }
+      dl.context dd { margin: 0; color: var(--text); word-break: break-all; }
+      .next-h {
+        margin: 0 0 .8em; font-size: 1em; font-weight: 600; color: var(--text);
+      }
+      .next-list {
+        list-style: none; padding: 0; margin: 0;
+        display: grid; gap: .6em;
+      }
+      .next-list a {
+        display: flex; align-items: center; gap: .8em;
+        padding: .9em 1.1em; background: var(--bg);
+        border: 1px solid var(--border); border-radius: 8px;
+        color: var(--text); text-decoration: none;
+        transition: border-color .15s, transform .1s;
+      }
+      .next-list a:hover { border-color: var(--accent); transform: translateX(2px); }
+      .next-list a svg { width: 20px; height: 20px; color: var(--accent); flex-shrink: 0; }
+      .next-list small { display: block; color: var(--muted); font-size: .85em; margin-top: .1em; }
+      footer {
+        margin-top: 2em; padding-top: 1.2em; border-top: 1px solid var(--border);
+        text-align: center; font-size: .8em; color: var(--dim); line-height: 1.6;
+      }
+      footer code {
+        background: var(--bg); color: var(--muted); padding: 1px 6px;
+        border-radius: 3px; font-family: var(--mono); font-size: .85em;
+      }
+      footer a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="check">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+          stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      </div>
+      <h1>Welcome, {user.greet}</h1>
+      <p class="lede">
+        Your BlenderMCP addon is authorized. You can close this tab and return to Blender.
+      </p>
+
+      <dl class="context">
+        {user.username && (
+          <>
+            <dt>Account</dt>
+            <dd>
+              {user.username}
+              {user.email && <span style="color:var(--muted)"> · {user.email}</span>}
+            </dd>
+          </>
+        )}
+        {ctx.server && (<><dt>Server</dt><dd>{ctx.server}</dd></>)}
+        {ctx.ver && (<><dt>Addon</dt><dd>BlenderMCP v{ctx.ver}</dd></>)}
+        {ctx.client_id && (<><dt>Client&nbsp;ID</dt><dd>{ctx.client_id}</dd></>)}
+        {ctx.ts && (<><dt>Issued at</dt><dd>{ctx.ts}</dd></>)}
+      </dl>
+
+      <p class="next-h">What's next?</p>
+      <ul class="next-list">
+        <li>
+          <a href="https://docs.blender.bet/tutorials/quickstart/">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" />
+              <circle cx="12" cy="12" r="10" />
+            </svg>
+            <div>Quickstart<small>Connect your first MCP client + dispatch a script</small></div>
+          </a>
+        </li>
+        <li>
+          <a href="https://docs.blender.bet/reference/dispatch-tools/">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 7v14" />
+              <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+            </svg>
+            <div>Tool reference<small>All 24+ blender_* tools, with examples</small></div>
+          </a>
+        </li>
+        <li>
+          <a href="https://docs.blender.bet/explanation/architecture/">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="8" height="8" x="3" y="3" rx="2" />
+              <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+              <rect width="8" height="8" x="13" y="13" rx="2" />
+            </svg>
+            <div>How it works<small>The bus, role attribution, OAuth flow</small></div>
+          </a>
+        </li>
+      </ul>
+
+      <footer>
+        MCP-spec OAuth 2.1 + PKCE &middot; RFC 8252 native-app flow<br />
+        Authenticated via <a href="https://auth.supported.systems">Authentik</a>
+        through FastMCP <code>OIDCProxy</code>
+      </footer>
+    </main>
+  </body>
+</html>
