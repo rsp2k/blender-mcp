@@ -84,6 +84,11 @@ WORKDIR /app
 COPY --from=build --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app addon/ ./addon/
+# Alembic config + entrypoint shim (Phase I — runs ``alembic upgrade head``
+# before handing off to the app process). The shim is bash so the slim
+# image's /bin/sh works without extra packages.
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app entrypoint.sh ./entrypoint.sh
 
 USER app
 
@@ -94,7 +99,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
 
-ENTRYPOINT ["tini", "--"]
+# tini wraps the entrypoint shim which runs migrations then exec's the app.
+ENTRYPOINT ["tini", "--", "/app/entrypoint.sh"]
 CMD ["blender-mcp"]
 
 # ---------------------------------------------------------------------------
@@ -116,6 +122,11 @@ WORKDIR /app
 
 # Venv only — compose mounts /app/src and /app/addon over the empty workdir.
 COPY --from=build --chown=app:app /app/.venv /app/.venv
+# Alembic config + entrypoint baked into image (NOT mounted — these
+# rarely change and shouldn't be subject to source-mount races). Source
+# changes that affect migrations land via the /app/src mount.
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app entrypoint.sh ./entrypoint.sh
 
 USER app
 
@@ -124,5 +135,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
 
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/app/entrypoint.sh"]
 CMD ["uvicorn", "blender_mcp.oauth_server:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]

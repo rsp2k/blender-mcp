@@ -30,6 +30,11 @@ dependencies = [
     "bcrypt>=5.0.0",
     "python-jose[cryptography]>=3.5.0",
     "psutil>=7.2.2",
+    # Phase I: shared-bus persistence (Postgres + SQLAlchemy + Alembic)
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",         # async driver for runtime
+    "psycopg[binary]>=3.2.3",  # sync driver used by alembic at migration time
+    "alembic>=1.14.0",
 ]
 
 [project.optional-dependencies]
