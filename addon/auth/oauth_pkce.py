@@ -159,7 +159,9 @@ def _build_landing_url(ctx: dict) -> str:
         "ver": ctx.get("addon_version", ""),
         "ts": ctx.get("timestamp", ""),
     }
-    return f"{base}/login-complete?{_urlencode(params)}"
+    # Trailing slash matches Astro's default route shape; without it the
+    # docs site 308-redirects, adding a round-trip the user doesn't need.
+    return f"{base}/login-complete/?{_urlencode(params)}"
 
 _ERROR_HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BlenderMCP Authorization Failed</title>
