@@ -25,6 +25,11 @@ class ClientInfo:
     """One client on a user's bus."""
     uuid: str
     client_type: str  # "blender" | "llm" | other
+    # Human-readable identity for multi-instance disambiguation.
+    # The addon defaults this to e.g. "Blender 5.1 on rpm-bullet"; an
+    # LLM session can register a label like "Claude Code · Ryan's
+    # terminal". Falls back to the uuid in displays when None.
+    label: Optional[str] = None
     is_persistent: bool = False
     capabilities: list[str] = field(default_factory=list)
     group_id: Optional[str] = None
@@ -41,6 +46,7 @@ class ClientInfo:
         return {
             "uuid": self.uuid,
             "client_type": self.client_type,
+            "label": self.label,
             "is_persistent": self.is_persistent,
             "capabilities": list(self.capabilities),
             "group_id": self.group_id,
@@ -57,11 +63,21 @@ class RouteResult:
     routing: dict[str, Any]
 
 
-class UserMessageBus:
-    """Per-user client registry. Routing emits log records, not direct sends."""
+class MessageBus:
+    """Per-bus client registry. Routing emits log records, not direct sends.
 
-    def __init__(self, user_id: str):
-        self.user_id = user_id
+    Phase I rename + re-key: was ``UserMessageBus`` keyed by ``user_id``.
+    Now keyed by ``bus_id`` (UUID from the DB) so the same bus can have
+    multiple users as members. The user identity for any given
+    *registration* still lives in ``ClientInfo`` and on the bearer
+    token; the bus itself is just a routing namespace.
+    """
+
+    def __init__(self, bus_id, name: str = ""):
+        # bus_id is a uuid.UUID; stored verbatim so log lines + record_extra
+        # carry the UUID type (callers can str() at the edge).
+        self.bus_id = bus_id
+        self.name = name
         self.persistent_clients: dict[str, ClientInfo] = {}
         self.ephemeral_clients: dict[str, ClientInfo] = {}
         self.created_at = time.time()
@@ -78,20 +94,28 @@ class UserMessageBus:
             existing.capabilities = client_info.capabilities
             existing.group_id = client_info.group_id
             existing.last_seen = time.time()
+            # Only overwrite label if a new one is supplied — None means
+            # "keep what's there." That way the addon can re-register on
+            # reconnect without having to recompute its label every time.
+            if client_info.label is not None:
+                existing.label = client_info.label
             if client_info.session is not None:
                 existing.session = client_info.session
             self.last_activity = time.time()
             return existing
         bucket[client_info.uuid] = client_info
         self.last_activity = time.time()
-        logger.info("Registered client %s (%s) on bus %s", client_info.uuid, client_info.client_type, self.user_id)
+        logger.info(
+            "Registered client %s (%s) on bus %s",
+            client_info.uuid, client_info.client_type, self.bus_id,
+        )
         return client_info
 
     def unregister(self, client_uuid: str) -> bool:
         removed = self.persistent_clients.pop(client_uuid, None) or self.ephemeral_clients.pop(client_uuid, None)
         if removed:
             self.last_activity = time.time()
-            logger.info("Unregistered client %s on bus %s", client_uuid, self.user_id)
+            logger.info("Unregistered client %s on bus %s", client_uuid, self.bus_id)
         return removed is not None
 
     def get(self, client_uuid: str) -> Optional[ClientInfo]:
@@ -148,7 +172,9 @@ class UserMessageBus:
 
         for client in targets:
             record_extra = {
-                "user_id": self.user_id,
+                # Phase I: was "user_id"; now bus_id (str-coerced for the
+                # log subscriber which expects JSON-serializable values).
+                "bus_id": str(self.bus_id),
                 "from_uuid": from_uuid,
                 "target_uuid": client.uuid,
                 "target_session": client.session,
@@ -165,23 +191,41 @@ class UserMessageBus:
 
 
 class BusManager:
-    """Holds one UserMessageBus per user_id."""
+    """Process-wide in-memory cache of MessageBus instances, keyed by bus_id.
+
+    The DB layer (storage/bus_repo.py) is the source of truth for
+    membership + invitations. This cache holds the live client
+    registrations and the per-bus message-routing state — none of
+    which survive a restart anyway, since sessions die with the
+    process. The cache populates lazily on first reference to a
+    given bus_id.
+    """
 
     def __init__(self):
-        self._buses: dict[str, UserMessageBus] = {}
+        # uuid.UUID → MessageBus. Stored UUID type (not str) so callers
+        # get a single source-of-truth identifier.
+        self._buses: dict[Any, MessageBus] = {}
 
-    def get_bus(self, user_id: str) -> UserMessageBus:
-        bus = self._buses.get(user_id)
+    def get_or_create(self, bus_id, name: str = "") -> MessageBus:
+        """Return the MessageBus for ``bus_id``, creating in-memory state
+        on first reference.
+
+        Caller MUST have already verified that ``bus_id`` is a real DB
+        row + that the user is a member (see ``resolve_bus`` in
+        bus_tools). This is a pure in-memory accessor — it does no DB
+        work.
+        """
+        bus = self._buses.get(bus_id)
         if bus is None:
-            bus = UserMessageBus(user_id)
-            self._buses[user_id] = bus
-            logger.info("Created bus for user %s", user_id)
+            bus = MessageBus(bus_id, name=name)
+            self._buses[bus_id] = bus
+            logger.info("In-memory bus state created for %s (%r)", bus_id, name)
         return bus
 
-    def remove_bus(self, user_id: str) -> None:
-        self._buses.pop(user_id, None)
+    def remove(self, bus_id) -> None:
+        self._buses.pop(bus_id, None)
 
-    def all_buses(self) -> dict[str, UserMessageBus]:
+    def all_buses(self) -> dict[Any, MessageBus]:
         return dict(self._buses)
 
 

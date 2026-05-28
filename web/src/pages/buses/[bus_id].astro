@@ -1,0 +1,268 @@
+---
+/**
+ * /buses/[bus_id] — bus detail with member list.
+ *
+ * Same identity story as /buses/index.astro: we get the authoritative
+ * user_id + the user's bus list from /api/buses (the MCP server does
+ * the JWT unwrap). The requested bus_id must be in that list — if it's
+ * not, return 404 (don't leak "this bus exists but you're not in it").
+ * Members are then loaded via direct SQL (membership already proven by
+ * the /api/buses round-trip, no auth needed for the read).
+ *
+ * Revoke happens here via the form (POST /api/buses/[id]/revoke) for
+ * owners; everything else routes back through the addon.
+ */
+
+export const prerender = false;
+
+import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
+import { serializeSession } from '../../lib/session';
+
+interface BusListItem {
+  bus_id: string;
+  name: string;
+  description: string | null;
+  role: 'owner' | 'member' | 'guest';
+  is_personal: boolean;
+  owner_user_id: string;
+  is_owned_by_me: boolean;
+  created_at: string;
+}
+
+interface MemberRow {
+  user_id: string;
+  role: 'owner' | 'member' | 'guest';
+  joined_at: string;
+  is_owner: boolean;
+}
+
+const username = Astro.request.headers.get('x-authentik-username') ?? '';
+if (!username) return Astro.redirect('/login-complete');
+
+const busId = Astro.params.bus_id ?? '';
+if (!/^[0-9a-f-]{36}$/i.test(busId)) {
+  return new Response('invalid bus_id', { status: 400 });
+}
+
+let userId: string;
+let bus: BusListItem;
+let members: MemberRow[] = [];
+
+try {
+  // Two API calls: /api/buses to find the bus + prove membership + resolve
+  // user_id, then /api/buses/{id}/members for the member list. Both go
+  // through mcpFetch so token refresh + 401-retry are handled uniformly.
+  const listCall = await mcpFetch(Astro.request, 'GET', '/api/buses');
+  if (listCall.refreshedSession) {
+    Astro.response.headers.append('Set-Cookie', serializeSession(listCall.refreshedSession));
+  }
+  if (!listCall.response.ok) {
+    return new Response(
+      `Upstream ${listCall.response.status}: ${(await listCall.response.text()).slice(0, 200)}`,
+      { status: 502 },
+    );
+  }
+  const data = await listCall.response.json() as { user_id: string; buses: BusListItem[] };
+  userId = data.user_id;
+  const found = data.buses.find((b) => b.bus_id === busId);
+  if (!found) {
+    return new Response('Not found', { status: 404 });
+  }
+  bus = found;
+
+  const memCall = await mcpFetch(
+    Astro.request, 'GET', `/api/buses/${busId}/members`,
+  );
+  if (memCall.refreshedSession) {
+    Astro.response.headers.append('Set-Cookie', serializeSession(memCall.refreshedSession));
+  }
+  if (memCall.response.ok) {
+    const memData = await memCall.response.json() as { members: MemberRow[] };
+    members = memData.members;
+  } else if (memCall.response.status === 404) {
+    // Shouldn't happen — we just proved membership via /api/buses.
+    // Treat as empty member list (degraded but not broken).
+    members = [];
+  } else {
+    return new Response(
+      `Members fetch failed: ${memCall.response.status}`,
+      { status: 502 },
+    );
+  }
+} catch (e: any) {
+  if (e instanceof NeedsAuthError) {
+    return Astro.redirect(
+      '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
+    );
+  }
+  return new Response(`Error: ${e?.message || e}`, { status: 500 });
+}
+---
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{bus.name} · BlenderMCP</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      :root {
+        --bg: #0e1116; --surface: #161b22; --border: #2a313a;
+        --text: #d4d4d4; --muted: #8b949e; --dim: #6e7681;
+        --accent: #2bb3a4; --success: #5fb878;
+        --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg); color: var(--text); line-height: 1.5;
+        padding: 2em 1em;
+      }
+      main { max-width: 800px; margin: 0 auto; }
+      .breadcrumb {
+        color: var(--muted); font-size: .85em; margin-bottom: 1em;
+      }
+      .breadcrumb a { color: var(--accent); text-decoration: none; }
+      .breadcrumb a:hover { text-decoration: underline; }
+      h1 { margin: 0 0 .2em; color: var(--text); font-size: 1.8em; }
+      .desc { color: var(--muted); margin: 0 0 1.5em; }
+      .meta {
+        font-family: var(--mono); font-size: .85em; color: var(--dim);
+        margin-bottom: 2em;
+      }
+      .badge {
+        display: inline-block; padding: .15em .55em;
+        border-radius: 4px; font-size: .7em; font-weight: 500;
+        text-transform: uppercase; letter-spacing: .03em;
+        vertical-align: middle; margin-left: .5em;
+      }
+      .badge.owner { background: rgba(43,179,164,.18); color: var(--accent); }
+      .badge.member { background: rgba(139,148,158,.18); color: var(--muted); }
+      .badge.guest { background: rgba(139,148,158,.12); color: var(--dim); }
+      h2 {
+        font-size: 1em; font-weight: 600; color: var(--text);
+        margin: 2em 0 .8em; padding-bottom: .4em;
+        border-bottom: 1px solid var(--border);
+      }
+      .member-list { list-style: none; padding: 0; margin: 0; }
+      .member-list li {
+        display: grid; grid-template-columns: 1fr auto auto auto; gap: 1em;
+        padding: .8em 1em; background: var(--surface);
+        border: 1px solid var(--border); border-radius: 8px;
+        margin-bottom: .5em; align-items: center;
+        font-family: var(--mono); font-size: .85em;
+      }
+      .member-list .you { color: var(--accent); }
+      .member-list time { color: var(--dim); font-size: .85em; }
+      /* Two-step revoke via <details> — no JS, no alert/confirm modals.
+         First click expands the disclosure to reveal the real button;
+         clicking outside collapses it (default <details> behavior). */
+      .revoke {
+        margin: 0; position: relative;
+      }
+      .revoke summary {
+        list-style: none; cursor: pointer;
+        background: transparent; border: 1px solid #f97583;
+        color: #f97583; padding: .25em .6em; border-radius: 4px;
+        font-size: .85em; transition: background .12s, color .12s;
+        display: inline-block; user-select: none;
+      }
+      .revoke summary::-webkit-details-marker { display: none; }
+      .revoke summary:hover { background: #f97583; color: var(--bg); }
+      .revoke[open] summary { background: #f97583; color: var(--bg); }
+      .revoke-confirm {
+        position: absolute; right: 0; top: calc(100% + 6px); z-index: 5;
+        background: var(--surface); border: 1px solid #f97583;
+        border-radius: 6px; padding: .6em .8em;
+        font-family: system-ui, sans-serif; font-size: .85em;
+        white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.4);
+      }
+      .revoke-confirm button {
+        background: #f97583; color: var(--bg); border: none;
+        padding: .35em .8em; border-radius: 4px; font-weight: 600;
+        cursor: pointer; margin-top: .5em;
+      }
+      .revoke-confirm button:hover { background: #fa8a97; }
+      .revoke .placeholder { display: inline-block; width: 4em; }
+      .actions {
+        margin-top: 2em; padding: 1.2em 1.5em;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; color: var(--muted); font-size: .9em;
+      }
+      .actions strong { color: var(--text); }
+      .actions code {
+        background: var(--bg); padding: 1px 5px; border-radius: 3px;
+        font-family: var(--mono); color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="breadcrumb">
+        <a href="/buses/">← All buses</a>
+      </p>
+      <h1>
+        {bus.name}
+        <span class={`badge ${bus.role}`}>{bus.role}</span>
+      </h1>
+      {bus.description && <p class="desc">{bus.description}</p>}
+      <p class="meta">
+        bus_id <code>{bus.bus_id}</code> · created {bus.created_at.slice(0, 10)} ·
+        owner <code>{bus.owner_user_id.slice(0, 16)}…</code>
+        {bus.is_owned_by_me && <span> (you)</span>}
+      </p>
+
+      <h2>Members ({members.length})</h2>
+      <ul class="member-list">
+        {members.map((m) => (
+          <li>
+            <span class={m.user_id === userId ? 'you' : ''}>
+              {m.user_id === userId ? 'You' : `${m.user_id.slice(0, 16)}…`}
+              <span class={`badge ${m.role}`}>{m.role}</span>
+            </span>
+            <span>{m.is_owner && 'owner'}</span>
+            <time>joined {m.joined_at.slice(0, 10)}</time>
+            {bus.is_owned_by_me && !m.is_owner && m.user_id !== userId ? (
+              <details class="revoke">
+                <summary>Revoke</summary>
+                <form
+                  method="POST"
+                  action={`/api/buses/${bus.bus_id}/revoke`}
+                  class="revoke-confirm"
+                >
+                  <input type="hidden" name="user_id" value={m.user_id} />
+                  Remove <code>{m.user_id.slice(0, 16)}…</code> from this bus?
+                  <br />
+                  <button type="submit">Yes, revoke</button>
+                </form>
+              </details>
+            ) : (
+              <span class="placeholder">&nbsp;</span>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <div class="actions">
+        {bus.is_owned_by_me ? (
+          <p>
+            You own this bus. Manage from the Blender addon — sidebar
+            → <strong>Bus</strong> section → select this bus →
+            <strong> Invite</strong> (copies code to clipboard) or
+            <strong> Leave</strong> handles for revoking access.
+          </p>
+        ) : (
+          <p>
+            You're a <strong>{bus.role}</strong> on this bus. To leave,
+            open the Blender addon, select this bus from the
+            <strong> Bus</strong> picker, then click
+            <strong> Leave</strong>.
+          </p>
+        )}
+      </div>
+    </main>
+  </body>
+</html>

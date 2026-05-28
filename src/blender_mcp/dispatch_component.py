@@ -46,10 +46,9 @@ from typing import Any, Optional
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_resource, mcp_tool
 
-from .bus_tools import _pending_jobs, _resolve_user_id
+from .bus_tools import _pending_jobs, _resolve_user_id, resolve_bus
 from .client_role import check_role_or_reject
 from .job_waiter import job_waiter
-from .message_bus import bus_manager
 from .message_router import Priority
 
 
@@ -68,15 +67,14 @@ def _new_job_id() -> str:
     return f"j-{_uuid_mod.uuid4().hex[:12]}"
 
 
-def _pick_blender_target(user_id: str, target_uuid: Optional[str]) -> dict:
-    """Resolve a target Blender client or return a structured error.
+def _pick_blender_target(bus, target_uuid: Optional[str]) -> dict:
+    """Resolve a target Blender client on ``bus`` or return a structured error.
 
     Returns ``{"ok": True, "uuid": ...}`` on success, or
     ``{"ok": False, "status": "...", ...}`` for the various failure modes
     so the caller can convert to JSON wire output without branching on
     multiple exception types.
     """
-    bus = bus_manager.get_bus(user_id)
     blender_clients = [
         c for c in bus.all_clients() if c.client_type == "blender"
     ]
@@ -89,7 +87,7 @@ def _pick_blender_target(user_id: str, target_uuid: Optional[str]) -> dict:
             "ok": False,
             "status": "unknown_target",
             "target_uuid": target_uuid,
-            "hint": "No registered Blender client has that UUID.",
+            "hint": "No registered Blender client has that UUID on this bus.",
         }
 
     if not blender_clients:
@@ -97,8 +95,9 @@ def _pick_blender_target(user_id: str, target_uuid: Optional[str]) -> dict:
             "ok": False,
             "status": "no_client",
             "hint": (
-                "No Blender client connected to your bus. Open Blender, "
-                "enable the BlenderMCP addon, click Login then Connect."
+                "No Blender client connected to this bus. Open Blender, "
+                "enable the BlenderMCP addon, click Login then Connect "
+                "(addon prefs let you pick which bus to register on)."
             ),
         }
 
@@ -106,7 +105,9 @@ def _pick_blender_target(user_id: str, target_uuid: Optional[str]) -> dict:
         return {
             "ok": False,
             "status": "ambiguous_target",
-            "candidates": [c.uuid for c in blender_clients],
+            "candidates": [
+                {"uuid": c.uuid, "label": c.label} for c in blender_clients
+            ],
             "hint": (
                 "Multiple Blender clients connected; pass target_uuid="
                 "<one of candidates> to disambiguate."
@@ -117,14 +118,15 @@ def _pick_blender_target(user_id: str, target_uuid: Optional[str]) -> dict:
 
 
 async def _dispatch(
-    user_id: str,
+    bus,
+    bus_id_str: str,
     command: str,
     params: dict,
     target_uuid: Optional[str],
     timeout: float,
 ) -> str:
     """Common send-then-await for every dispatch tool. Returns JSON string."""
-    pick = _pick_blender_target(user_id, target_uuid)
+    pick = _pick_blender_target(bus, target_uuid)
     if not pick["ok"]:
         return json.dumps(pick | {"ok": False, "command": command})
 
@@ -132,14 +134,15 @@ async def _dispatch(
     job_id = _new_job_id()
 
     # Register the Future BEFORE sending so we can't race the reply.
-    future = job_waiter.register(user_id, job_id)
+    # Phase I5: job_waiter is keyed by (bus_id, job_id).
+    future = job_waiter.register(bus_id_str, job_id)
 
     # Manually populate _pending_jobs so job_update's lookup finds us
     # without having to come back through send_message's tracking (the
     # server doesn't have a from_uuid here — we're the dispatcher itself).
-    _pending_jobs[job_id] = (user_id, f"server-dispatch:{user_id}")
+    # Phase I5: entry is keyed (bus_id_str, originator_uuid).
+    _pending_jobs[job_id] = (bus_id_str, f"server-dispatch:{bus_id_str}")
 
-    bus = bus_manager.get_bus(user_id)
     bus.route(
         payload={
             "message_type": "command_dispatch",
@@ -147,7 +150,7 @@ async def _dispatch(
             "command": command,
             "params": params,
         },
-        from_uuid=f"server-dispatch:{user_id}",
+        from_uuid=f"server-dispatch:{bus_id_str}",
         routing={"type": "direct", "target_uuid": chosen_uuid},
         priority=Priority.INFO,
         job_id=job_id,
@@ -156,7 +159,7 @@ async def _dispatch(
     try:
         result = await asyncio.wait_for(future, timeout=timeout)
     except asyncio.TimeoutError:
-        job_waiter.cancel(user_id, job_id)
+        job_waiter.cancel(bus_id_str, job_id)
         _pending_jobs.pop(job_id, None)
         return json.dumps({
             "status": "timeout",
@@ -202,13 +205,19 @@ class BlenderDispatchComponent(MCPMixin):
         params: dict,
         target_uuid: Optional[str],
         timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
     ) -> str:
-        """Auth-check + role-gate + dispatch. Returns a JSON-string wire body.
+        """Auth-check + role-gate + bus-resolve + dispatch. Returns JSON.
 
         Role gating happens here (phase H) because every dispatch tool +
         every dispatch-backed resource funnels through this method. The
         ``blender_<command>`` name (vs. the funnel's "_call") appears in
         rejection logs so audit trails identify the actual offending tool.
+
+        Bus resolution (phase I5): ``bus_id`` is optional; None defaults
+        to the caller's personal bus. ``resolve_bus`` also enforces
+        membership (returns ``not_a_member`` if the user isn't a member
+        of the explicitly requested bus).
         """
         rejection = check_role_or_reject(f"blender_{command}", ctx, "llm-client")
         if rejection:
@@ -216,7 +225,17 @@ class BlenderDispatchComponent(MCPMixin):
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
-        return await _dispatch(user_id, command, params, target_uuid, timeout)
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        return await _dispatch(
+            resolved["bus"],
+            str(resolved["bus_id"]),
+            command,
+            params,
+            target_uuid,
+            timeout,
+        )
 
     # ---- Tier 1: always-on core (7 commands) -----------------------
 
@@ -225,10 +244,11 @@ class BlenderDispatchComponent(MCPMixin):
         self,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Snapshot of the active Blender scene: name, object count, first N objects."""
-        return await self._call(ctx, "get_scene_info", {}, target_uuid, _timeout)
+        return await self._call(ctx, "get_scene_info", {}, target_uuid, _timeout, bus_id=bus_id)
 
     @mcp_tool()
     async def get_object_info(
@@ -236,11 +256,12 @@ class BlenderDispatchComponent(MCPMixin):
         name: str,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Detailed info for a specific Blender object by name."""
         return await self._call(
-            ctx, "get_object_info", {"name": name}, target_uuid, _timeout
+            ctx, "get_object_info", {"name": name}, target_uuid, _timeout, bus_id=bus_id
         )
 
     @mcp_tool()
@@ -253,6 +274,7 @@ class BlenderDispatchComponent(MCPMixin):
         detail_level: str = "summary",
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Browse ``bpy.data.*`` collections with pagination + detail levels."""
@@ -268,6 +290,7 @@ class BlenderDispatchComponent(MCPMixin):
             },
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -276,11 +299,12 @@ class BlenderDispatchComponent(MCPMixin):
         code: str,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_MEDIUM,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Execute arbitrary Python in the Blender main thread. Returns stdout."""
         return await self._call(
-            ctx, "execute_code", {"code": code}, target_uuid, _timeout
+            ctx, "execute_code", {"code": code}, target_uuid, _timeout, bus_id=bus_id
         )
 
     @mcp_tool()
@@ -291,6 +315,7 @@ class BlenderDispatchComponent(MCPMixin):
         format: str = "png",
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Save a 3D viewport screenshot to ``filepath`` (resized to ``max_size``)."""
@@ -300,6 +325,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"filepath": filepath, "max_size": max_size, "format": format},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -310,6 +336,7 @@ class BlenderDispatchComponent(MCPMixin):
         page_size: int = 50,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Paginated Blender console scrape; ``level`` in {all, info, warning, error, output}."""
@@ -319,6 +346,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"level": level, "page": page, "page_size": page_size},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -328,6 +356,7 @@ class BlenderDispatchComponent(MCPMixin):
         params: Optional[dict] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Invoke a ``bpy.ops.console.*`` operator. See addon's console_operations handler."""
@@ -337,6 +366,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"operation": operation, "params": params or {}},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     # ---- Tier 2: always-on integration status (3 commands) ---------
@@ -346,11 +376,12 @@ class BlenderDispatchComponent(MCPMixin):
         self,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Report whether PolyHaven integration is enabled in the addon prefs."""
         return await self._call(
-            ctx, "get_polyhaven_status", {}, target_uuid, _timeout
+            ctx, "get_polyhaven_status", {}, target_uuid, _timeout, bus_id=bus_id
         )
 
     @mcp_tool()
@@ -358,11 +389,12 @@ class BlenderDispatchComponent(MCPMixin):
         self,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Report Hyper3D Rodin integration status (enabled flag, mode, key type)."""
         return await self._call(
-            ctx, "get_hyper3d_status", {}, target_uuid, _timeout
+            ctx, "get_hyper3d_status", {}, target_uuid, _timeout, bus_id=bus_id
         )
 
     @mcp_tool()
@@ -370,11 +402,12 @@ class BlenderDispatchComponent(MCPMixin):
         self,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,  # talks to api.sketchfab.com
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Report Sketchfab integration status; also verifies the API key against /v3/me."""
         return await self._call(
-            ctx, "get_sketchfab_status", {}, target_uuid, _timeout
+            ctx, "get_sketchfab_status", {}, target_uuid, _timeout, bus_id=bus_id
         )
 
     # ---- Tier 3: gated by addon prefs ------------------------------
@@ -389,6 +422,7 @@ class BlenderDispatchComponent(MCPMixin):
         owner_id: str = "default",
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Drop all ``bpy.msgbus`` subscriptions owned by ``owner_id``."""
@@ -398,6 +432,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"owner_id": owner_id},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -406,6 +441,7 @@ class BlenderDispatchComponent(MCPMixin):
         data_path: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Publish an RNA-property change on the bus.
@@ -421,6 +457,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"data_path": data_path},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -432,6 +469,7 @@ class BlenderDispatchComponent(MCPMixin):
         persistent: bool = True,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Subscribe to RNA-property changes; notifications queue in the addon."""
@@ -446,6 +484,7 @@ class BlenderDispatchComponent(MCPMixin):
             },
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -455,6 +494,7 @@ class BlenderDispatchComponent(MCPMixin):
         clear: bool = False,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Drain the addon's RNA-change notification queue (optionally clearing)."""
@@ -464,6 +504,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"owner_id": owner_id, "clear": clear},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -472,6 +513,7 @@ class BlenderDispatchComponent(MCPMixin):
         owner_id: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """List active RNA subscriptions (filtered by owner if given)."""
@@ -481,6 +523,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"owner_id": owner_id},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     # ---- Tier 3b: PolyHaven (4 commands, gate: use_polyhaven) ------
@@ -491,6 +534,7 @@ class BlenderDispatchComponent(MCPMixin):
         asset_type: str,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """List PolyHaven categories for ``asset_type`` in {hdris, textures, models, all}."""
@@ -500,6 +544,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"asset_type": asset_type},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -509,6 +554,7 @@ class BlenderDispatchComponent(MCPMixin):
         categories: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Search PolyHaven for assets (response capped at 20 entries by the addon)."""
@@ -518,6 +564,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"asset_type": asset_type, "categories": categories},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -529,6 +576,7 @@ class BlenderDispatchComponent(MCPMixin):
         file_format: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_LONG,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Download + import a PolyHaven asset.
@@ -549,6 +597,7 @@ class BlenderDispatchComponent(MCPMixin):
             },
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -558,6 +607,7 @@ class BlenderDispatchComponent(MCPMixin):
         texture_id: str,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Apply a previously downloaded PolyHaven texture to ``object_name``.
@@ -571,6 +621,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"object_name": object_name, "texture_id": texture_id},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     # ---- Tier 3c: Hyper3D Rodin (3 commands, gate: use_hyper3d) ----
@@ -583,6 +634,7 @@ class BlenderDispatchComponent(MCPMixin):
         bbox_condition: Optional[Any] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_MEDIUM,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Start a Rodin 3D-from-text/image job. Backend is mode-dependent (MAIN_SITE / FAL_AI).
@@ -601,6 +653,7 @@ class BlenderDispatchComponent(MCPMixin):
             },
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -610,6 +663,7 @@ class BlenderDispatchComponent(MCPMixin):
         request_id: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Poll a Rodin job. Pass ``subscription_key`` for MAIN_SITE, ``request_id`` for FAL_AI."""
@@ -619,6 +673,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"subscription_key": subscription_key, "request_id": request_id},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -629,6 +684,7 @@ class BlenderDispatchComponent(MCPMixin):
         request_id: Optional[str] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_LONG,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Import a completed Rodin GLB into Blender as ``name``.
@@ -642,6 +698,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"task_uuid": task_uuid, "request_id": request_id, "name": name},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     # ---- Tier 3d: Sketchfab (2 commands, gate: use_sketchfab) ------
@@ -655,6 +712,7 @@ class BlenderDispatchComponent(MCPMixin):
         downloadable: bool = True,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Search Sketchfab models. Returns the raw Sketchfab v3 search response."""
@@ -669,6 +727,7 @@ class BlenderDispatchComponent(MCPMixin):
             },
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     @mcp_tool()
@@ -677,6 +736,7 @@ class BlenderDispatchComponent(MCPMixin):
         uid: str,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_LONG,
+        bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Download + import a Sketchfab model by its UID (zip-slip protected)."""
@@ -686,6 +746,7 @@ class BlenderDispatchComponent(MCPMixin):
             {"uid": uid},
             target_uuid,
             _timeout,
+            bus_id=bus_id,
         )
 
     # ---- Resources (live, dispatch-backed) -------------------------

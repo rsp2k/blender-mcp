@@ -22,7 +22,7 @@ from ..client.bus_client import FASTMCP_AVAILABLE
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
-from ..preferences import get_prefs, get_server_base_url
+from ..preferences import get_client_label, get_prefs, get_server_base_url
 
 
 class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
@@ -243,6 +243,8 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
                     executor=state._executor,
                     refresh_token=prefs.refresh_token,
                     jwt_expires_at=expires_at,
+                    label=get_client_label(prefs),
+                    bus_id=prefs.default_bus_id or None,
                 )
                 scene.blendermcp_client_id = state._client.client_uuid
 
@@ -275,4 +277,229 @@ class BLENDERMCP_OT_StopServer(bpy.types.Operator):
         except Exception as e:
             self.report({'ERROR'}, f"Error during disconnect: {e}")
             traceback.print_exc()
+        return {'FINISHED'}
+
+
+# ---- Phase I7: bus management operators ---------------------------------
+
+def _api_call(method: str, path: str, prefs, body: dict | None = None) -> dict:
+    """Synchronous wrapper for a server REST call. Returns parsed JSON or
+    raises a Python-side Exception with a readable message.
+
+    Uses prefs.jwt_token for Bearer auth. Builds the URL via
+    get_server_base_url so dev (http://localhost:8000) + prod
+    (https://mcp.blender.bet) both work without explicit scheme handling.
+    """
+    base = get_server_base_url(prefs).rstrip("/")
+    url = f"{base}{path}"
+    headers = {
+        "Authorization": f"Bearer {prefs.jwt_token}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    resp = requests.request(method, url, headers=headers, json=body, timeout=15.0)
+    if resp.status_code >= 400:
+        # Try to surface the server's structured error detail if present.
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise RuntimeError(f"HTTP {resp.status_code}: {detail}")
+    return resp.json()
+
+
+class BLENDERMCP_OT_RefreshBuses(bpy.types.Operator):
+    """Refresh the list of buses I'm a member of (Phase I7)."""
+
+    bl_idname = "blendermcp.refresh_buses"
+    bl_label = "Refresh Buses"
+    bl_description = (
+        "Fetch the list of buses you can connect to (your personal bus + "
+        "any shared buses you've joined). Required before the Bus dropdown "
+        "shows shared options."
+    )
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if not prefs.jwt_token:
+            self.report({'ERROR'}, "Login first (no JWT token)")
+            return {'CANCELLED'}
+        try:
+            r = _api_call("GET", "/api/buses", prefs)
+            state._buses = r.get("buses", [])
+        except Exception as e:
+            self.report({'ERROR'}, f"Refresh failed: {e}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Found {len(state._buses)} bus(es)")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_CreateBus(bpy.types.Operator):
+    """Create a new shared bus owned by me. Prompts for name."""
+
+    bl_idname = "blendermcp.create_bus"
+    bl_label = "Create Bus"
+    bl_description = "Create a new shared bus you own; invite others via Join code"
+
+    name: bpy.props.StringProperty(name="Bus name", default="")
+    description: bpy.props.StringProperty(name="Description", default="")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, context):
+        self.layout.prop(self, "name")
+        self.layout.prop(self, "description")
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        name = (self.name or "").strip()
+        if not name:
+            self.report({'ERROR'}, "Name required")
+            return {'CANCELLED'}
+        try:
+            r = _api_call("POST", "/api/buses", prefs,
+                          {"name": name, "description": self.description or ""})
+        except Exception as e:
+            self.report({'ERROR'}, f"Create failed: {e}")
+            return {'CANCELLED'}
+        # Refresh the cached list so the new bus shows up in the dropdown.
+        try:
+            r2 = _api_call("GET", "/api/buses", prefs)
+            state._buses = r2.get("buses", [])
+        except Exception:
+            pass
+        self.report({'INFO'}, f"Created bus: {r['name']} ({r['bus_id'][:8]}...)")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_JoinBus(bpy.types.Operator):
+    """Join a bus using an invitation code. Prompts for the code."""
+
+    bl_idname = "blendermcp.join_bus"
+    bl_label = "Join Bus"
+    bl_description = "Paste an invitation code (BMI-XXXXXXXXXX) to join a shared bus"
+
+    code: bpy.props.StringProperty(name="Invitation code", default="BMI-")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, context):
+        self.layout.label(text="Paste invitation code (BMI-XXXXXXXXXX):")
+        self.layout.prop(self, "code", text="")
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        code = (self.code or "").strip().upper()
+        if not code or not code.startswith("BMI-"):
+            self.report({'ERROR'}, "Code must start with BMI-")
+            return {'CANCELLED'}
+        try:
+            r = _api_call("POST", "/api/buses/join", prefs, {"code": code})
+        except Exception as e:
+            self.report({'ERROR'}, f"Join failed: {e}")
+            return {'CANCELLED'}
+        try:
+            r2 = _api_call("GET", "/api/buses", prefs)
+            state._buses = r2.get("buses", [])
+        except Exception:
+            pass
+        self.report({'INFO'}, f"Joined: {r.get('name', '?')} ({r.get('status')})")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_LeaveBus(bpy.types.Operator):
+    """Leave the currently-selected bus."""
+
+    bl_idname = "blendermcp.leave_bus"
+    bl_label = "Leave Bus"
+    bl_description = "Leave the currently selected bus (cannot leave personal or own bus)"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        bus_id = prefs.default_bus_id
+        if not bus_id:
+            self.report({'ERROR'}, "No bus selected (default_bus_id is empty)")
+            return {'CANCELLED'}
+        try:
+            _api_call("POST", f"/api/buses/{bus_id}/leave", prefs)
+        except Exception as e:
+            self.report({'ERROR'}, f"Leave failed: {e}")
+            return {'CANCELLED'}
+        prefs.default_bus_id = ""  # back to personal
+        try:
+            r2 = _api_call("GET", "/api/buses", prefs)
+            state._buses = r2.get("buses", [])
+        except Exception:
+            pass
+        self.report({'INFO'}, "Left bus; selection reset to personal")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_InviteToBus(bpy.types.Operator):
+    """Generate an invitation code for the selected bus + copy to clipboard."""
+
+    bl_idname = "blendermcp.invite_to_bus"
+    bl_label = "Invite to Bus"
+    bl_description = "Generate an invitation code for the selected bus + copy it to the clipboard"
+
+    role: bpy.props.EnumProperty(
+        name="Role",
+        items=[
+            ("member", "Member", "Full dispatch + read access"),
+            ("guest", "Guest", "Read-only — can list clients but not dispatch"),
+        ],
+        default="member",
+    )
+
+    def invoke(self, context, event):
+        prefs = get_prefs(context)
+        if not prefs.default_bus_id:
+            self.report({'ERROR'}, "Select a non-personal bus first")
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self, width=300)
+
+    def draw(self, context):
+        self.layout.prop(self, "role")
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        try:
+            r = _api_call("POST", f"/api/buses/{prefs.default_bus_id}/invite",
+                          prefs, {"role": self.role})
+        except Exception as e:
+            self.report({'ERROR'}, f"Invite failed: {e}")
+            return {'CANCELLED'}
+        code = r["code"]
+        context.window_manager.clipboard = code
+        self.report({'INFO'}, f"Code {code} copied to clipboard (24h, single-use, role={r['role']})")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_CopyClientUUID(bpy.types.Operator):
+    """Copy this Blender's client UUID (and label) to the system clipboard.
+
+    The combined "label · uuid" string is what an LLM operator needs when
+    disambiguating between multiple Blenders connected to the same bus:
+    pasted into a chat it gives the model both the human name and the
+    exact target_uuid for blender_* dispatch tool calls.
+    """
+
+    bl_idname = "blendermcp.copy_client_uuid"
+    bl_label = "Copy Client UUID"
+    bl_description = "Copy this Blender's label + UUID to clipboard for LLM disambiguation"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        client = state._client
+        uuid = client.client_uuid if client else (context.scene.blendermcp_client_id or "")
+        if not uuid:
+            self.report({'ERROR'}, "No client UUID yet — click Connect once to mint one")
+            return {'CANCELLED'}
+        label = get_client_label(prefs)
+        payload = f"{label} · {uuid}"
+        context.window_manager.clipboard = payload
+        self.report({'INFO'}, f"Copied: {payload}")
         return {'FINISHED'}

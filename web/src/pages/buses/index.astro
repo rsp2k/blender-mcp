@@ -1,0 +1,211 @@
+---
+/**
+ * /buses — list every bus the user is a member of.
+ *
+ * SSR route, doubly gated:
+ *   1. Caddy forward_auth proves the visitor is Authentik-authed
+ *      (X-Authentik-Username is set).
+ *   2. The BFF session cookie holds an mcp.blender.bet bearer token
+ *      that we exchange for /api/buses (the server unwraps the JWT
+ *      via JTI → upstream Authentik → sub claim, and returns the
+ *      authoritative user_id + bus list in the response body).
+ *
+ * Why we DON'T read DB direct here anymore: FastMCP's JWT is a pure
+ * reference token (no sub at the top level, no upstream_claims either
+ * unless the proxy is configured to embed them — which OIDCProxy
+ * doesn't by default). The MCP server is the only thing that knows
+ * how to unwrap a bearer token to a user identity, so we ask it.
+ *
+ * Read-only on this page — create/join/leave still happens from the
+ * Blender addon (bus picker in the sidebar, since 1.5.0).
+ */
+
+export const prerender = false;
+
+import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
+import { serializeSession } from '../../lib/session';
+
+interface BusListItem {
+  bus_id: string;
+  name: string;
+  description: string | null;
+  role: 'owner' | 'member' | 'guest';
+  is_personal: boolean;
+  owner_user_id: string;
+  is_owned_by_me: boolean;
+  created_at: string;
+}
+
+const username = Astro.request.headers.get('x-authentik-username') ?? '';
+const displayName = Astro.request.headers.get('x-authentik-name') || username || 'there';
+
+if (!username) {
+  return Astro.redirect('/login-complete');
+}
+
+let buses: BusListItem[] = [];
+let loadError: string | null = null;
+let refreshedCookie: string | null = null;
+
+try {
+  const { response, refreshedSession } = await mcpFetch(
+    Astro.request, 'GET', '/api/buses',
+  );
+  if (refreshedSession) refreshedCookie = serializeSession(refreshedSession);
+  if (!response.ok) {
+    loadError = `Upstream ${response.status}: ${(await response.text()).slice(0, 200)}`;
+  } else {
+    const data = await response.json() as { user_id: string; buses: BusListItem[] };
+    buses = data.buses;
+  }
+} catch (e: any) {
+  if (e instanceof NeedsAuthError) {
+    return Astro.redirect(
+      '/oauth/start?return_to=' + encodeURIComponent('/buses/'),
+    );
+  }
+  loadError = String(e?.message || e);
+}
+
+if (refreshedCookie) Astro.response.headers.append('Set-Cookie', refreshedCookie);
+---
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Buses · BlenderMCP</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      :root {
+        --bg: #0e1116; --surface: #161b22; --border: #2a313a;
+        --text: #d4d4d4; --muted: #8b949e; --dim: #6e7681;
+        --accent: #2bb3a4; --accent-glow: rgba(43, 179, 164, .15);
+        --success: #5fb878;
+        --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg); color: var(--text); line-height: 1.5;
+        padding: 2em 1em;
+      }
+      main { max-width: 880px; margin: 0 auto; }
+      header { margin-bottom: 2em; }
+      header h1 { margin: 0 0 .2em; color: var(--accent); font-size: 1.8em; }
+      header p { margin: 0; color: var(--muted); }
+      .bus-list {
+        list-style: none; padding: 0; margin: 0;
+        display: grid; gap: .8em;
+      }
+      .bus {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 1.2em 1.4em;
+        display: grid; grid-template-columns: 1fr auto; gap: 1em; align-items: center;
+      }
+      .bus.personal { border-color: rgba(43,179,164,.4); }
+      .bus h2 {
+        margin: 0; font-size: 1.15em; font-weight: 600; color: var(--text);
+      }
+      .bus .meta {
+        margin: .25em 0 0; color: var(--muted); font-size: .9em;
+        font-family: var(--mono);
+      }
+      .badge {
+        display: inline-block; padding: .15em .55em;
+        border-radius: 4px; font-size: .75em; font-weight: 500;
+        text-transform: uppercase; letter-spacing: .03em;
+        margin-left: .5em; vertical-align: middle;
+      }
+      .badge.owner { background: rgba(43,179,164,.18); color: var(--accent); }
+      .badge.member { background: rgba(139,148,158,.18); color: var(--muted); }
+      .badge.guest { background: rgba(139,148,158,.12); color: var(--dim); }
+      .badge.personal { background: rgba(95,184,120,.15); color: var(--success); }
+      .actions a {
+        display: inline-block; padding: .4em .9em;
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: 6px; color: var(--text); text-decoration: none;
+        font-size: .85em; transition: border-color .15s;
+      }
+      .actions a:hover { border-color: var(--accent); }
+      .empty {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 2em; text-align: center;
+        color: var(--muted);
+      }
+      .err {
+        background: rgba(249,117,131,.1); border: 1px solid #f97583;
+        border-radius: 8px; padding: 1em; color: #f97583;
+        font-family: var(--mono); font-size: .85em;
+      }
+      .manage-note {
+        margin-top: 2em; padding: 1.2em 1.5em;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; color: var(--muted); font-size: .9em;
+      }
+      .manage-note a { color: var(--accent); text-decoration: none; }
+      .manage-note a:hover { text-decoration: underline; }
+      .manage-note code {
+        background: var(--bg); padding: 1px 5px; border-radius: 3px;
+        font-family: var(--mono); font-size: .9em; color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Your buses</h1>
+        <p>Signed in as <strong>{displayName}</strong> ({username})</p>
+      </header>
+
+      {loadError && (
+        <div class="err">Could not load buses: {loadError}</div>
+      )}
+
+      {!loadError && buses.length === 0 && (
+        <div class="empty">
+          You have no buses yet. Open the Blender addon and click
+          <strong> Refresh Buses</strong> to auto-create your personal bus.
+        </div>
+      )}
+
+      {buses.length > 0 && (
+        <ul class="bus-list">
+          {buses.map((b) => (
+            <li class={`bus ${b.is_personal ? 'personal' : ''}`}>
+              <div>
+                <h2>
+                  {b.name}
+                  {b.is_personal && <span class="badge personal">personal</span>}
+                  <span class={`badge ${b.role}`}>{b.role}</span>
+                </h2>
+                {b.description && <p class="meta">{b.description}</p>}
+                <p class="meta">
+                  bus_id {b.bus_id.slice(0, 8)}… · created {b.created_at.slice(0, 10)}
+                </p>
+              </div>
+              <div class="actions">
+                {!b.is_personal && (
+                  <a href={`/buses/${b.bus_id}/`}>Members</a>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div class="manage-note">
+        Create / join / leave / invite happens from the Blender addon
+        (v1.5.0+): <strong>View3D → Sidebar → BlenderMCP → Bus section</strong>.
+        Click <strong>Refresh Buses</strong> to populate the picker, then
+        use the <strong>Create</strong>, <strong>Join</strong>, or
+        <strong>Invite</strong> buttons. The Invite button copies a
+        <code>BMI-XXXXXXXXXX</code> code to your clipboard; share it
+        out-of-band with the user you want to add.
+      </div>
+    </main>
+  </body>
+</html>

@@ -22,6 +22,30 @@
 #   Proxy" — the same pattern applies to any long-lived stream behind Caddy.
 
 services:
+  # ---- Postgres (Phase I shared-bus persistence) ------------------------
+  # UNIQUE container name + dedicated `internal` network per CLAUDE.md
+  # "Use UNIQUE service names" — generic `postgres` on the shared caddy
+  # fabric collides with other stacks' DBs. NOT on the caddy network;
+  # the DB should never be reverse-proxied.
+  blender-mcp-postgres:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-blender_mcp}
+      POSTGRES_DB: ${POSTGRES_DB:-blender_mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - blender-mcp-pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-blender_mcp} -d $${POSTGRES_DB:-blender_mcp}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
   blender-mcp:
     build:
       context: .
@@ -29,7 +53,12 @@ services:
     image: ${COMPOSE_PROJECT_NAME:-blender-mcp}-prod
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-prod
     restart: unless-stopped
+    depends_on:
+      blender-mcp-postgres:
+        condition: service_healthy
     environment:
+      # Phase I: shared-bus DB. asyncpg scheme — see storage/__init__.py.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-blender_mcp}:${POSTGRES_PASSWORD}@blender-mcp-postgres:5432/${POSTGRES_DB:-blender_mcp}
       # Legacy AUTH_BACKEND=inmemory vars. Not required for the OAuth path
       # (AUTH_BACKEND=authentik) — server will fall back to ephemeral values
       # at startup with a WARNING if these are missing AND inmemory is selected.
@@ -54,6 +83,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
     networks:
       - caddy
+      - internal
     labels:
       # Primary hostname + optional alias list (for graceful URL renames).
       # ``${VAR:+,suffix}`` expands to ",suffix" only if VAR is set, so
@@ -92,6 +122,9 @@ services:
     image: ${COMPOSE_PROJECT_NAME:-blender-mcp}-dev
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-dev
     restart: unless-stopped
+    depends_on:
+      blender-mcp-postgres:
+        condition: service_healthy
     # Override the image CMD — uvicorn with --reload picks up source changes
     # from the mounted volumes below. The ASGI app lives at
     # ``blender_mcp.oauth_server:app`` (FastAPI + mounted FastMCP), NOT at
@@ -124,6 +157,7 @@ services:
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-blender_mcp}:${POSTGRES_PASSWORD}@blender-mcp-postgres:5432/${POSTGRES_DB:-blender_mcp}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -132,6 +166,7 @@ services:
       - ./addon:/app/addon
     networks:
       - caddy
+      - internal
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       caddy.reverse_proxy: "{{upstreams 8000}}"
@@ -145,3 +180,10 @@ services:
 networks:
   caddy:
     external: true
+  # Private network for blender-mcp ↔ blender-mcp-postgres only. Not on
+  # the shared caddy fabric so the DB never gets accidentally proxied.
+  internal:
+    driver: bridge
+
+volumes:
+  blender-mcp-pgdata:

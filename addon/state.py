@@ -25,3 +25,10 @@ if TYPE_CHECKING:
 
 _client: Optional["BlenderMCPClient"] = None
 _executor: Optional["BlenderCommandExecutor"] = None
+
+# Phase I7: cached list of buses the user is a member of (populated by
+# BLENDERMCP_OT_RefreshBuses, read by the sidebar panel to render the bus
+# picker dropdown). Each entry is the dict shape returned by the
+# bus_list_buses MCP tool: {bus_id, name, role, is_personal, owner_user_id,
+# is_owned_by_me, created_at, description}.
+_buses: list = []

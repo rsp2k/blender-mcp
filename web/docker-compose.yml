@@ -26,6 +26,16 @@ services:
     image: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-prod
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-prod
     restart: unless-stopped
+    environment:
+      # Web BFF OAuth — web/ is an OAuth client of MCP_SERVER_URL and
+      # talks to it over HTTPS. No direct DB access — every /buses page
+      # round-trips through the MCP server's REST API for both bus +
+      # member data. SESSION_COOKIE_KEY must be 64 hex chars; rotating
+      # invalidates all sessions. ${VAR:?} fails compose-up loudly if
+      # unset rather than silently producing an unusable container.
+      SESSION_COOKIE_KEY: ${SESSION_COOKIE_KEY:?SESSION_COOKIE_KEY must be set (openssl rand -hex 32)}
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-https://mcp.blender.bet}
+      SITE_URL: ${SITE_URL:-https://blender.bet}
     networks:
       - caddy
     labels:
@@ -48,9 +58,16 @@ services:
       caddy.0_reverse_proxy: "@outpost https://auth.supported.systems"
       caddy.0_reverse_proxy.header_up: "Host {upstream_hostport}"
 
-      # Path matcher: gate ONLY /login-complete* with forward_auth.
+      # Path matcher: gate authenticated routes with forward_auth.
       # Apex `/` + future public routes stay reachable without auth.
-      caddy.@protected.path: /login-complete*
+      # Phase I8 added /buses + /buses/[id] — both SSR pages that read
+      # X-Authentik-Username from the forwarded headers. The /oauth/*
+      # and /api/* paths are gated too — they're part of the BFF flow
+      # for browser-side writes (revoke member, etc.). Gating /oauth/*
+      # in particular means the user is ALREADY Authentik-authed when
+      # we send them to mcp.blender.bet/authorize, so they only see
+      # the OAuth consent screen, not a full Authentik login.
+      caddy.@protected.path: /login-complete* /buses /buses/* /oauth/* /api/*
       caddy.forward_auth: "@protected https://auth.supported.systems"
       caddy.forward_auth.uri: /outpost.goauthentik.io/auth/caddy
       caddy.forward_auth.copy_headers: X-Authentik-Username X-Authentik-Email X-Authentik-Name X-Authentik-Groups X-Authentik-Uid
