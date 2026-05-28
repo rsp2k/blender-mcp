@@ -25,7 +25,6 @@ if (!bus) {
   return new Response('Not found', { status: 404 });
 }
 const members = await listMembers(busId);
-const displayName = Astro.request.headers.get('x-authentik-name') || username;
 ---
 
 <!DOCTYPE html>
@@ -78,7 +77,7 @@ const displayName = Astro.request.headers.get('x-authentik-name') || username;
       }
       .member-list { list-style: none; padding: 0; margin: 0; }
       .member-list li {
-        display: grid; grid-template-columns: 1fr auto auto; gap: 1em;
+        display: grid; grid-template-columns: 1fr auto auto auto; gap: 1em;
         padding: .8em 1em; background: var(--surface);
         border: 1px solid var(--border); border-radius: 8px;
         margin-bottom: .5em; align-items: center;
@@ -86,6 +85,36 @@ const displayName = Astro.request.headers.get('x-authentik-name') || username;
       }
       .member-list .you { color: var(--accent); }
       .member-list time { color: var(--dim); font-size: .85em; }
+      /* Two-step revoke via <details> — no JS, no alert/confirm modals.
+         First click expands the disclosure to reveal the real button;
+         clicking outside collapses it (default <details> behavior). */
+      .revoke {
+        margin: 0; position: relative;
+      }
+      .revoke summary {
+        list-style: none; cursor: pointer;
+        background: transparent; border: 1px solid #f97583;
+        color: #f97583; padding: .25em .6em; border-radius: 4px;
+        font-size: .85em; transition: background .12s, color .12s;
+        display: inline-block; user-select: none;
+      }
+      .revoke summary::-webkit-details-marker { display: none; }
+      .revoke summary:hover { background: #f97583; color: var(--bg); }
+      .revoke[open] summary { background: #f97583; color: var(--bg); }
+      .revoke-confirm {
+        position: absolute; right: 0; top: calc(100% + 6px); z-index: 5;
+        background: var(--surface); border: 1px solid #f97583;
+        border-radius: 6px; padding: .6em .8em;
+        font-family: system-ui, sans-serif; font-size: .85em;
+        white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.4);
+      }
+      .revoke-confirm button {
+        background: #f97583; color: var(--bg); border: none;
+        padding: .35em .8em; border-radius: 4px; font-weight: 600;
+        cursor: pointer; margin-top: .5em;
+      }
+      .revoke-confirm button:hover { background: #fa8a97; }
+      .revoke .placeholder { display: inline-block; width: 4em; }
       .actions {
         margin-top: 2em; padding: 1.2em 1.5em;
         background: var(--surface); border: 1px solid var(--border);
@@ -124,6 +153,23 @@ const displayName = Astro.request.headers.get('x-authentik-name') || username;
             </span>
             <span>{m.is_owner && 'owner'}</span>
             <time>joined {m.joined_at.slice(0, 10)}</time>
+            {bus.is_owned_by_me && !m.is_owner && m.user_id !== username ? (
+              <details class="revoke">
+                <summary>Revoke</summary>
+                <form
+                  method="POST"
+                  action={`/api/buses/${bus.bus_id}/revoke`}
+                  class="revoke-confirm"
+                >
+                  <input type="hidden" name="user_id" value={m.user_id} />
+                  Remove <code>{m.user_id.slice(0, 16)}…</code> from this bus?
+                  <br />
+                  <button type="submit">Yes, revoke</button>
+                </form>
+              </details>
+            ) : (
+              <span class="placeholder">&nbsp;</span>
+            )}
           </li>
         ))}
       </ul>
