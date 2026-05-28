@@ -26,7 +26,6 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
-from .bus_tools import current_user_id
 from .client_role import record_client_role
 from .message_bus import bus_manager
 from .message_router import _message_bus, PRIORITY_TO_MCP_LEVEL, Priority
@@ -434,7 +433,6 @@ def build_app() -> FastAPI:
     @app.get("/api/buses")
     async def api_list_buses(request: Request):
         """List all buses the bearer's user is a member of."""
-        import uuid as _u
         from .storage import bus_repo, get_session
 
         uid = await _api_user_id(request.headers.get("authorization"))
@@ -460,6 +458,45 @@ def build_app() -> FastAPI:
                     "created_at": bus.created_at.isoformat(),
                 }
                 for bus, role in rows
+            ],
+        }
+
+    @app.get("/api/buses/{bus_id}/members")
+    async def api_list_members(request: Request, bus_id: str):
+        """List active members of a bus. Caller must be a member themselves.
+
+        Returns 404 (NOT 403) for non-member callers to avoid leaking the
+        existence of buses the user isn't in. Owner is always returned first,
+        then everyone else by join order.
+        """
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            raise HTTPException(400, "invalid bus_id")
+
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None or not await bus_repo.is_member(s, bus_uuid, uid):
+                raise HTTPException(404, "bus not found")
+            members = await bus_repo.list_members_for_bus(s, bus_uuid)
+
+        return {
+            "bus_id": str(bus_uuid),
+            "owner_user_id": bus.owner_user_id,
+            "members": [
+                {
+                    "user_id": m.user_id,
+                    "role": m.role.value,
+                    "joined_at": m.joined_at.isoformat(),
+                    "is_owner": m.user_id == bus.owner_user_id,
+                }
+                for m in members
             ],
         }
 

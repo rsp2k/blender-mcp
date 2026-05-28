@@ -15,7 +15,6 @@
 
 export const prerender = false;
 
-import { listMembers } from '../../lib/buses';
 import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
 import { serializeSession } from '../../lib/session';
 
@@ -30,6 +29,13 @@ interface BusListItem {
   created_at: string;
 }
 
+interface MemberRow {
+  user_id: string;
+  role: 'owner' | 'member' | 'guest';
+  joined_at: string;
+  is_owner: boolean;
+}
+
 const username = Astro.request.headers.get('x-authentik-username') ?? '';
 if (!username) return Astro.redirect('/login-complete');
 
@@ -40,26 +46,49 @@ if (!/^[0-9a-f-]{36}$/i.test(busId)) {
 
 let userId: string;
 let bus: BusListItem;
+let members: MemberRow[] = [];
+
 try {
-  const { response, refreshedSession } = await mcpFetch(
-    Astro.request, 'GET', '/api/buses',
-  );
-  if (refreshedSession) {
-    Astro.response.headers.append('Set-Cookie', serializeSession(refreshedSession));
+  // Two API calls: /api/buses to find the bus + prove membership + resolve
+  // user_id, then /api/buses/{id}/members for the member list. Both go
+  // through mcpFetch so token refresh + 401-retry are handled uniformly.
+  const listCall = await mcpFetch(Astro.request, 'GET', '/api/buses');
+  if (listCall.refreshedSession) {
+    Astro.response.headers.append('Set-Cookie', serializeSession(listCall.refreshedSession));
   }
-  if (!response.ok) {
+  if (!listCall.response.ok) {
     return new Response(
-      `Upstream ${response.status}: ${(await response.text()).slice(0, 200)}`,
+      `Upstream ${listCall.response.status}: ${(await listCall.response.text()).slice(0, 200)}`,
       { status: 502 },
     );
   }
-  const data = await response.json() as { user_id: string; buses: BusListItem[] };
+  const data = await listCall.response.json() as { user_id: string; buses: BusListItem[] };
   userId = data.user_id;
   const found = data.buses.find((b) => b.bus_id === busId);
   if (!found) {
     return new Response('Not found', { status: 404 });
   }
   bus = found;
+
+  const memCall = await mcpFetch(
+    Astro.request, 'GET', `/api/buses/${busId}/members`,
+  );
+  if (memCall.refreshedSession) {
+    Astro.response.headers.append('Set-Cookie', serializeSession(memCall.refreshedSession));
+  }
+  if (memCall.response.ok) {
+    const memData = await memCall.response.json() as { members: MemberRow[] };
+    members = memData.members;
+  } else if (memCall.response.status === 404) {
+    // Shouldn't happen — we just proved membership via /api/buses.
+    // Treat as empty member list (degraded but not broken).
+    members = [];
+  } else {
+    return new Response(
+      `Members fetch failed: ${memCall.response.status}`,
+      { status: 502 },
+    );
+  }
 } catch (e: any) {
   if (e instanceof NeedsAuthError) {
     return Astro.redirect(
@@ -68,8 +97,6 @@ try {
   }
   return new Response(`Error: ${e?.message || e}`, { status: 500 });
 }
-
-const members = await listMembers(busId);
 ---
 
 <!DOCTYPE html>

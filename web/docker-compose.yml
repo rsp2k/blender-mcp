@@ -27,29 +27,17 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp-web}-prod
     restart: unless-stopped
     environment:
-      # Phase I8: read-only access to the MCP server's bus state for
-      # the /buses and /buses/[id] SSR pages. Shares the same database
-      # as blender-mcp-server-prod (NOT a separate logical DB) — the
-      # web/ container joins the blender-mcp internal network below.
-      # If unset, /buses pages will surface a "DATABASE_URL not set"
-      # error rather than silently 500.
-      DATABASE_URL: ${DATABASE_URL:-}
-      # Web BFF OAuth — web/ is an OAuth client of MCP_SERVER_URL.
-      # SESSION_COOKIE_KEY must be 64 hex chars; rotating invalidates
-      # all sessions. ${VAR:?} fails compose-up loudly if either is unset
-      # rather than silently producing an unusable container.
+      # Web BFF OAuth — web/ is an OAuth client of MCP_SERVER_URL and
+      # talks to it over HTTPS. No direct DB access — every /buses page
+      # round-trips through the MCP server's REST API for both bus +
+      # member data. SESSION_COOKIE_KEY must be 64 hex chars; rotating
+      # invalidates all sessions. ${VAR:?} fails compose-up loudly if
+      # unset rather than silently producing an unusable container.
       SESSION_COOKIE_KEY: ${SESSION_COOKIE_KEY:?SESSION_COOKIE_KEY must be set (openssl rand -hex 32)}
       MCP_SERVER_URL: ${MCP_SERVER_URL:-https://mcp.blender.bet}
       SITE_URL: ${SITE_URL:-https://blender.bet}
     networks:
       - caddy
-      # External network owned by the blender-mcp compose stack —
-      # joined here so this container can reach the postgres on the
-      # other stack's internal network. The blender-mcp compose must
-      # be running first. Named via the alias below so the env-driven
-      # ``blender-mcp-server_internal`` name (whatever the prod
-      # COMPOSE_PROJECT_NAME is) resolves to a stable in-compose name.
-      - mcp_internal
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       # Caddy verifies DNS-01 propagation against public resolvers (not
@@ -127,16 +115,3 @@ services:
 networks:
   caddy:
     external: true
-  # The blender-mcp compose stack's internal network (postgres lives
-  # there). Phase I8: web/ joins so /buses pages can query the
-  # shared Postgres directly. blender-mcp compose must be up first
-  # so the network exists.
-  #
-  # The external network name is ``<MCP_COMPOSE_PROJECT>_internal``
-  # — defaults to ``blender-mcp-server_internal`` to match the
-  # prod stack's COMPOSE_PROJECT_NAME. Override by setting
-  # MCP_INTERNAL_NETWORK in this .env if your MCP stack uses a
-  # different compose-project name.
-  mcp_internal:
-    external: true
-    name: ${MCP_INTERNAL_NETWORK:-blender-mcp-server_internal}

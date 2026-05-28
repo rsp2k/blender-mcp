@@ -23,7 +23,7 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,6 +146,31 @@ async def get_membership(
 async def is_member(session: AsyncSession, bus_id: _uuid.UUID, user_id: str) -> bool:
     """Convenience predicate — used by dispatch tools to gate by membership."""
     return (await get_membership(session, bus_id, user_id)) is not None
+
+
+async def list_members_for_bus(
+    session: AsyncSession, bus_id: _uuid.UUID
+) -> Sequence[BusMembership]:
+    """Return active memberships for a bus, owner first then chronologically.
+
+    Caller is responsible for verifying the requester is *in* the bus before
+    exposing this list — membership is the only authorization needed
+    (every member can see every other member, no role gate).
+    """
+    stmt = (
+        select(BusMembership)
+        .join(Bus, Bus.bus_id == BusMembership.bus_id)
+        .where(
+            BusMembership.bus_id == bus_id,
+            BusMembership.revoked_at.is_(None),
+        )
+        # Owner first; everyone else by join time.
+        .order_by(
+            (BusMembership.user_id == Bus.owner_user_id).desc(),
+            BusMembership.joined_at.asc(),
+        )
+    )
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def revoke_member(
