@@ -47,6 +47,7 @@ class BlenderMCPClient:
         refresh_token: str = "",
         jwt_expires_at: int = 0,
         label: Optional[str] = None,
+        bus_id: Optional[str] = None,
     ) -> None:
         # Canonicalize: FastAPI mounts the FastMCP ASGI app at /mcp, which
         # 307-redirects /mcp -> /mcp/. httpx (under fastmcp.Client) strips
@@ -60,6 +61,10 @@ class BlenderMCPClient:
         self.jwt_token = jwt_token
         self.client_uuid = client_uuid
         self.label = label
+        # Phase I7: empty string / None → server defaults to user's personal
+        # bus. Non-empty string targets a specific (shared) bus_id from
+        # bus_list_buses. Set via prefs.default_bus_id.
+        self.bus_id = bus_id or None
         # Reference to the BlenderCommandExecutor instance so dispatched
         # scripts can call into the polyhaven/hyper3d/etc. helpers as
         # `executor.search_polyhaven_assets(...)`.
@@ -341,6 +346,8 @@ class BlenderMCPClient:
                             # existing label."
                             if self.label:
                                 reg_args["label"] = self.label
+                            if self.bus_id:
+                                reg_args["bus_id"] = self.bus_id
                             await client.call_tool("blender_register_client", reg_args)
                             self.connected = True
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")

@@ -389,6 +389,214 @@ def build_app() -> FastAPI:
             "clients_per_bus": {str(bid): len(b.all_clients()) for bid, b in buses.items()},
         }
 
+    # ---- Phase I7/I8: REST API for bus management ----
+    # Wraps the same bus tools that MCP clients see, but as plain HTTP +
+    # Bearer auth so the Blender addon (and any web UI) can call them
+    # without the JSON-RPC initialize/handshake dance MCP requires.
+    # All routes validate the JWT through the SAME provider FastMCP uses
+    # (OIDCProxy → Authentik or BlenderMCPOAuthProvider) — so a token
+    # that works for MCP works for /api/* and vice versa.
+
+    async def _api_user_id(authorization: Optional[str]) -> Optional[str]:
+        """Resolve a Bearer-Authorization header to a user_id via the
+        configured auth provider. Returns None on missing/invalid token."""
+        if not authorization or not authorization.lower().startswith("bearer "):
+            return None
+        token = authorization.split(None, 1)[1].strip()
+        # Try the configured provider's verify path. For OIDCProxy this
+        # validates against Authentik's JWKS + audience. For
+        # BlenderMCPOAuthProvider it does a JTI-store lookup.
+        try:
+            from .mcp_oauth_provider import BlenderMCPOAuthProvider
+            provider = mcp.auth
+            if isinstance(provider, BlenderMCPOAuthProvider):
+                uid = provider.get_user_for_token(token)
+                return uid
+            # OIDCProxy / JWT path — decode without verifying signature since
+            # the provider already enforces validation via verify_token. For
+            # safety in non-MCP paths we DO want signature validation —
+            # ``token_validator`` exposes verify_token (async).
+            tv = getattr(provider, "_token_validator", None)
+            if tv is not None:
+                result = await tv.verify_token(token)
+                if result is None:
+                    return None
+                claims = getattr(result, "claims", {}) or {}
+                return claims.get("sub") or claims.get("preferred_username")
+        except Exception as e:
+            logger.warning("API auth lookup failed: %s", e)
+            return None
+        return None
+
+    @app.get("/api/buses")
+    async def api_list_buses(request: Request):
+        """List all buses the bearer's user is a member of."""
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+
+        async with get_session() as s:
+            await bus_repo.ensure_personal_bus(s, uid)
+        async with get_session() as s:
+            rows = await bus_repo.list_buses_for_user(s, uid)
+
+        return {
+            "user_id": uid,
+            "buses": [
+                {
+                    "bus_id": str(bus.bus_id),
+                    "name": bus.name,
+                    "description": bus.description,
+                    "role": role.value,
+                    "is_personal": bus.is_personal,
+                    "owner_user_id": bus.owner_user_id,
+                    "is_owned_by_me": bus.owner_user_id == uid,
+                    "created_at": bus.created_at.isoformat(),
+                }
+                for bus, role in rows
+            ],
+        }
+
+    @app.post("/api/buses")
+    async def api_create_bus(request: Request, body: dict):
+        """Create a shared bus. Body: {name, description?}. Caller becomes owner."""
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name required")
+        if len(name) > 128:
+            raise HTTPException(400, "name too long (max 128)")
+        async with get_session() as s:
+            bus = await bus_repo.create_shared_bus(
+                s, owner_user_id=uid, name=name,
+                description=body.get("description", ""),
+            )
+        return {
+            "bus_id": str(bus.bus_id),
+            "name": bus.name,
+            "description": bus.description,
+        }
+
+    @app.post("/api/buses/{bus_id}/invite")
+    async def api_invite_user(request: Request, bus_id: str, body: dict):
+        """Owner/member issues an invitation code. Body: {role?: member|guest}."""
+        import uuid as _u
+        from .storage import BusRole, bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            raise HTTPException(400, "invalid bus_id")
+        role = body.get("role", "member")
+        if role not in ("member", "guest"):
+            raise HTTPException(400, "role must be 'member' or 'guest'")
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                raise HTTPException(404, "bus not found")
+            if bus.is_personal:
+                raise HTTPException(409, "cannot invite to personal bus")
+            if await bus_repo.get_membership(s, bus_uuid, uid) is None:
+                raise HTTPException(403, "not a member")
+            inv = await bus_repo.create_invitation(
+                s, bus_id=bus_uuid, invited_by=uid, role=BusRole(role),
+            )
+        return {
+            "code": inv.code,
+            "bus_id": str(inv.bus_id),
+            "role": inv.role.value,
+            "expires_at": inv.expires_at.isoformat(),
+        }
+
+    @app.post("/api/buses/join")
+    async def api_join_bus(request: Request, body: dict):
+        """Consume an invitation code. Body: {code}."""
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        code = (body.get("code") or "").strip().upper()
+        if not code:
+            raise HTTPException(400, "code required")
+        async with get_session() as s:
+            bus, status = await bus_repo.consume_invitation(
+                s, code=code, joining_user_id=uid,
+            )
+        if bus is None:
+            raise HTTPException(404, status)  # not_found, expired, already_consumed, wrong_invitee
+        return {
+            "status": status,
+            "bus_id": str(bus.bus_id),
+            "name": bus.name,
+            "description": bus.description,
+        }
+
+    @app.post("/api/buses/{bus_id}/leave")
+    async def api_leave_bus(request: Request, bus_id: str):
+        """Leave a bus you're a member of. Personal + owner buses refused."""
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            raise HTTPException(400, "invalid bus_id")
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                raise HTTPException(404, "bus not found")
+            if bus.is_personal:
+                raise HTTPException(409, "cannot leave personal bus")
+            if bus.owner_user_id == uid:
+                raise HTTPException(409, "owner cannot leave own bus")
+            ok = await bus_repo.revoke_member(s, bus_id=bus_uuid, user_id=uid)
+        if not ok:
+            raise HTTPException(404, "not a member")
+        return {"status": "ok"}
+
+    @app.post("/api/buses/{bus_id}/revoke")
+    async def api_revoke_member(request: Request, bus_id: str, body: dict):
+        """Owner kicks a member. Body: {user_id}."""
+        import uuid as _u
+        from .storage import bus_repo, get_session
+
+        uid = await _api_user_id(request.headers.get("authorization"))
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        target = body.get("user_id")
+        if not target:
+            raise HTTPException(400, "user_id required")
+        if target == uid:
+            raise HTTPException(409, "cannot revoke owner")
+        try:
+            bus_uuid = _u.UUID(bus_id)
+        except ValueError:
+            raise HTTPException(400, "invalid bus_id")
+        async with get_session() as s:
+            bus = await bus_repo.get_bus(s, bus_uuid)
+            if bus is None:
+                raise HTTPException(404, "bus not found")
+            if bus.owner_user_id != uid:
+                raise HTTPException(403, "not owner")
+            ok = await bus_repo.revoke_member(s, bus_id=bus_uuid, user_id=target)
+        if not ok:
+            raise HTTPException(404, "target not a member")
+        return {"status": "ok"}
+
     # OAuth discovery (RFC 8414 + RFC 9728) — FastMCP's auth provider knows
     # the right path-aware shapes for its mounted MCP resource. Mount those
     # routes at the FastAPI root so a fresh MCP client can follow the 401 →

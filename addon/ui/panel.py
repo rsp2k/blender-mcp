@@ -47,6 +47,63 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         if not prefs.jwt_token:
             return
 
+        # --- Bus selection (Phase I7) ---
+        layout.separator()
+        bus_col = layout.column(align=True)
+        bus_col.label(text="Bus", icon='OUTLINER_COLLECTION')
+
+        # Surface the chosen bus + the refresh affordance.
+        chosen_name = "Personal (default)"
+        for b in state._buses:
+            if b.get("bus_id") == prefs.default_bus_id:
+                tag = " (owner)" if b.get("is_owned_by_me") else f" ({b.get('role')})"
+                chosen_name = f"{b.get('name', '?')}{tag}"
+                break
+        row = bus_col.row(align=True)
+        row.label(text=f"Current: {chosen_name}")
+        row.operator("blendermcp.refresh_buses", text="", icon='FILE_REFRESH')
+
+        # Picker — populated from state._buses. Each button writes
+        # prefs.default_bus_id via wm.context_set_string (Personal = "").
+        if state._buses:
+            from ..preferences import ADDON_PACKAGE_NAME
+            data_path = (
+                f"preferences.addons[\"{ADDON_PACKAGE_NAME}\"]"
+                ".preferences.default_bus_id"
+            )
+            picker = bus_col.column(align=True)
+            picker.scale_y = 0.9
+            for b in state._buses:
+                if b.get("is_personal"):
+                    text = "Personal"
+                    icon = 'USER'
+                    value = ""
+                else:
+                    text = b.get("name", "?")
+                    icon = 'CHECKMARK' if b.get("is_owned_by_me") else 'COMMUNITY'
+                    value = b["bus_id"]
+                op = picker.operator(
+                    "wm.context_set_string",
+                    text=text,
+                    icon=icon,
+                    depress=(prefs.default_bus_id == value),
+                )
+                op.data_path = data_path
+                op.value = value
+        else:
+            bus_col.label(text="(click refresh to populate)", icon='INFO')
+
+        # Bus management buttons — only shown when the user has fetched buses
+        if state._buses:
+            mgmt = bus_col.row(align=True)
+            mgmt.operator("blendermcp.create_bus", text="Create", icon='ADD')
+            mgmt.operator("blendermcp.join_bus", text="Join", icon='LINKED')
+            if prefs.default_bus_id:
+                # leave/invite only meaningful on a non-personal bus
+                mgmt2 = bus_col.row(align=True)
+                mgmt2.operator("blendermcp.invite_to_bus", text="Invite", icon='COPYDOWN')
+                mgmt2.operator("blendermcp.leave_bus", text="Leave", icon='X')
+
         # --- Connection ---
         layout.separator()
         col = layout.column(align=True)

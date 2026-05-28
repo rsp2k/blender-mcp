@@ -129,6 +129,19 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         ),
         default="",
     )
+    # Phase I7: which bus to register on when Connect is clicked. Empty
+    # string = server-default = caller's personal bus. Non-empty = the
+    # bus_id (UUID) of a shared bus the user has joined. Populated via
+    # the sidebar's Bus dropdown after a Refresh Buses click.
+    default_bus_id: StringProperty(
+        name="Bus",
+        description=(
+            "Which bus this Blender registers on at Connect time. Blank "
+            "means your personal bus. Click 'Refresh Buses' in the sidebar "
+            "to see shared buses you're a member of."
+        ),
+        default="",
+    )
     jwt_token: StringProperty(
         name="JWT Token",
         description="Bearer token obtained via OAuth login. Populated by the Login operator.",
