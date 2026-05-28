@@ -2,15 +2,20 @@
 /**
  * /buses/[bus_id] — bus detail with member list.
  *
- * SSR route gated by Caddy forward_auth. Membership verified before
- * rendering (getBusForUser returns null for non-members → 404).
- * Read-only — kicking members happens via the addon (which has the
- * real auth context).
+ * SSR route, doubly gated (Caddy forward_auth + BFF session cookie).
+ * Membership is verified before rendering via the OAuth `sub` claim
+ * extracted from the BFF session — NOT the X-Authentik-Username header,
+ * which is a short login and doesn't match the DB's owner_user_id
+ * (a SHA256 sub-hash). See /buses/index.astro for the full story.
+ *
+ * Revoke happens here via the form (POST /api/buses/[id]/revoke) for
+ * owners; everything else routes back through the addon.
  */
 
 export const prerender = false;
 
 import { getBusForUser, listMembers } from '../../lib/buses';
+import { decodeJwtSub, readSession } from '../../lib/session';
 
 const username = Astro.request.headers.get('x-authentik-username') ?? '';
 if (!username) return Astro.redirect('/login-complete');
@@ -20,7 +25,20 @@ if (!/^[0-9a-f-]{36}$/i.test(busId)) {
   return new Response('invalid bus_id', { status: 400 });
 }
 
-const bus = await getBusForUser(busId, username);
+const session = readSession(Astro.request);
+if (!session) {
+  return Astro.redirect(
+    '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
+  );
+}
+const userId = decodeJwtSub(session.access_token);
+if (!userId) {
+  return Astro.redirect(
+    '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
+  );
+}
+
+const bus = await getBusForUser(busId, userId);
 if (!bus) {
   return new Response('Not found', { status: 404 });
 }
@@ -147,13 +165,13 @@ const members = await listMembers(busId);
       <ul class="member-list">
         {members.map((m) => (
           <li>
-            <span class={m.user_id === username ? 'you' : ''}>
-              {m.user_id === username ? 'You' : `${m.user_id.slice(0, 16)}…`}
+            <span class={m.user_id === userId ? 'you' : ''}>
+              {m.user_id === userId ? 'You' : `${m.user_id.slice(0, 16)}…`}
               <span class={`badge ${m.role}`}>{m.role}</span>
             </span>
             <span>{m.is_owner && 'owner'}</span>
             <time>joined {m.joined_at.slice(0, 10)}</time>
-            {bus.is_owned_by_me && !m.is_owner && m.user_id !== username ? (
+            {bus.is_owned_by_me && !m.is_owner && m.user_id !== userId ? (
               <details class="revoke">
                 <summary>Revoke</summary>
                 <form

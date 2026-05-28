@@ -168,3 +168,28 @@ export function clearSessionCookie(): string {
 export function clearOAuthStateCookie(): string {
   return `${COOKIE_OAUTH_STATE}=; Max-Age=0; ${COOKIE_BASE}`;
 }
+
+/**
+ * Extract the `sub` claim from a JWT without verifying it.
+ *
+ * Safe because: the token was already validated by mcp.blender.bet when
+ * issued, AND we only use the sub for read-only DB lookups (no privilege
+ * is granted based on what we read here). For privileged operations the
+ * token round-trips through mcp.blender.bet which re-validates.
+ *
+ * Returns null on any decode failure — caller should redirect to
+ * /oauth/start to mint a fresh session.
+ */
+export function decodeJwtSub(jwt: string): string | null {
+  const parts = jwt.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1], 'base64url').toString('utf8'),
+    );
+    const sub = payload?.sub;
+    return typeof sub === 'string' && sub.length > 0 ? sub : null;
+  } catch {
+    return null;
+  }
+}

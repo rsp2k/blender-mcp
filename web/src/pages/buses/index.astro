@@ -2,16 +2,26 @@
 /**
  * /buses — list every bus the user is a member of.
  *
- * SSR route gated by Caddy forward_auth: by the time we render, the
- * X-Authentik-Username header has been populated by the Authentik
- * proxy outpost (browser had to authenticate first). Read-only — for
- * create/join/leave use the Blender addon (bus picker in the sidebar,
- * since 1.5.0). Linking out is honest about where mutation auth lives.
+ * SSR route, doubly gated:
+ *   1. Caddy forward_auth proves the visitor is Authentik-authed
+ *      (X-Authentik-Username is set).
+ *   2. The BFF session cookie holds an mcp.blender.bet access token
+ *      whose `sub` claim is the user_id used as the DB query key.
+ *      Missing → kick the user through /oauth/start to mint one.
+ *
+ * Why TWO identity sources: X-Authentik-Username is the short login
+ * ("ryan"), but the DB stores owner_user_id as the OAuth `sub` (a 64-char
+ * SHA256 hash). They look like the same person but are textually
+ * distinct — only `sub` matches what the addon/REST writes.
+ *
+ * Read-only — create/join/leave still happens from the Blender addon
+ * (bus picker in the sidebar, since 1.5.0).
  */
 
 export const prerender = false;
 
 import { listBusesForUser } from '../../lib/buses';
+import { decodeJwtSub, readSession } from '../../lib/session';
 
 const username = Astro.request.headers.get('x-authentik-username') ?? '';
 const displayName = Astro.request.headers.get('x-authentik-name') || username || 'there';
@@ -20,10 +30,27 @@ if (!username) {
   return Astro.redirect('/login-complete');
 }
 
+// BFF session cookie carries the bearer token whose `sub` claim is the
+// canonical user_id used by every write (addon + REST API). Without it
+// the DB lookup would query against the wrong identity (preferred_username
+// vs sub-hash) and silently return zero rows.
+const session = readSession(Astro.request);
+if (!session) {
+  return Astro.redirect(
+    '/oauth/start?return_to=' + encodeURIComponent('/buses/'),
+  );
+}
+const userId = decodeJwtSub(session.access_token);
+if (!userId) {
+  return Astro.redirect(
+    '/oauth/start?return_to=' + encodeURIComponent('/buses/'),
+  );
+}
+
 let buses: Awaited<ReturnType<typeof listBusesForUser>> = [];
 let loadError: string | null = null;
 try {
-  buses = await listBusesForUser(username);
+  buses = await listBusesForUser(userId);
 } catch (e: any) {
   loadError = String(e?.message || e);
 }
