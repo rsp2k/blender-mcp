@@ -291,11 +291,14 @@ class BlenderMCPClient:
     async def _run(self) -> None:
         """Connect, register, subscribe to log notifications, await stop.
 
-        Outer loop reconnects on JWT rotation: ``_refresh_watcher`` sets
-        ``_rotate_requested`` after refreshing the access token, causing
-        the inner ``async with`` to exit cleanly and re-enter with the new
-        bearer. Each reconnect re-registers the same client UUID, which the
-        bus treats as an idempotent overwrite.
+        Outer loop reconnects on:
+          - JWT rotation (``_rotate_requested`` set by ``_refresh_watcher``)
+          - Transient connection failure (server restart, network blip)
+        with exponential backoff (1s → 30s cap), reset to 1s on every
+        successful registration. Auth-fatal errors (401/403/Unauthorized
+        in the exception text) skip the retry loop and exit so the user
+        knows to re-Login — burning CPU against a token that will never
+        be accepted is worse than failing visibly.
 
         Before the very first connect, if the stored JWT is past (or near)
         its expiry but a refresh_token is on hand, rotate proactively. This
@@ -311,6 +314,8 @@ class BlenderMCPClient:
                 if not await self._do_refresh_once():
                     return  # last_error already set + printed
 
+        backoff = 1.0
+        BACKOFF_MAX = 30.0
         refresh_task: Optional[asyncio.Task] = None
         try:
             while self.running:
@@ -350,11 +355,16 @@ class BlenderMCPClient:
                                 reg_args["bus_id"] = self.bus_id
                             await client.call_tool("blender_register_client", reg_args)
                             self.connected = True
+                            backoff = 1.0  # successful registration → reset backoff
+                            self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
                         except Exception as e:
+                            # Register failed but transport is up. Fall through
+                            # to the outer except via a raise — same backoff +
+                            # reconnect logic handles both.
                             self.last_error = f"register_client failed: {e}"
                             print(f"[BlenderMCP] {self.last_error}")
-                            return
+                            raise
 
                         # Start the refresh watcher (only one — it runs across
                         # the lifetime of the BlenderMCPClient, not per-reconnect).
@@ -379,10 +389,36 @@ class BlenderMCPClient:
                 except Exception as e:
                     self.last_error = f"Connection failed: {e}"
                     print(f"[BlenderMCP] {self.last_error}")
-                    return
+
+                    # Auth-fatal exceptions: don't retry, surface to user so
+                    # they re-Login. Heuristic — FastMCP/httpx exceptions
+                    # carry status codes as part of the message text.
+                    msg = str(e).lower()
+                    if any(s in msg for s in ("401", "403", "unauthorized", "invalid_token")):
+                        print("[BlenderMCP] Auth failure — stopping retries; please re-Login")
+                        self.running = False
+                        return
                 finally:
                     self.connected = False
                     self.client = None
+
+                if not self.running:
+                    break
+                # Reconnect path — sleep with exponential backoff, then loop.
+                # _rotate_requested takes precedence: if the watcher rotated
+                # the JWT mid-failure, skip the backoff and reconnect now.
+                if self._rotate_requested:
+                    print("[BlenderMCP] Reconnecting with rotated JWT")
+                else:
+                    print(f"[BlenderMCP] Reconnecting in {backoff:.0f}s")
+                    sleep_remaining = backoff
+                    # Sleep in 0.5s chunks so stop() takes effect promptly
+                    # without making the user wait for the full backoff.
+                    while sleep_remaining > 0 and self.running:
+                        chunk = min(0.5, sleep_remaining)
+                        await asyncio.sleep(chunk)
+                        sleep_remaining -= chunk
+                    backoff = min(backoff * 2, BACKOFF_MAX)
 
                 if self._rotate_requested and self.running:
                     print(f"[BlenderMCP] Reconnecting with rotated JWT (exp={self.jwt_expires_at})")
