@@ -170,12 +170,20 @@ export function clearOAuthStateCookie(): string {
 }
 
 /**
- * Extract the `sub` claim from a JWT without verifying it.
+ * Extract the user identity from a FastMCP-wrapped JWT without verifying it.
+ *
+ * FastMCP's access tokens are REFERENCE tokens — they carry iss/aud/
+ * client_id/scope/exp/iat/jti at the top level, and the actual user
+ * identity claims (sub, preferred_username, email, ...) are nested
+ * under `upstream_claims`. So `payload.sub` is always undefined; we
+ * have to look in `payload.upstream_claims.sub` to get the OAuth `sub`
+ * that the MCP server's REST API uses as user_id.
  *
  * Safe because: the token was already validated by mcp.blender.bet when
  * issued, AND we only use the sub for read-only DB lookups (no privilege
  * is granted based on what we read here). For privileged operations the
- * token round-trips through mcp.blender.bet which re-validates.
+ * token round-trips through mcp.blender.bet which re-validates via
+ * provider.verify_token() (JTI unwrap → upstream Authentik token).
  *
  * Returns null on any decode failure — caller should redirect to
  * /oauth/start to mint a fresh session.
@@ -187,7 +195,11 @@ export function decodeJwtSub(jwt: string): string | null {
     const payload = JSON.parse(
       Buffer.from(parts[1], 'base64url').toString('utf8'),
     );
-    const sub = payload?.sub;
+    // FastMCP nests upstream identity under upstream_claims; check there
+    // first, then fall back to top-level sub for non-proxy issuers.
+    const sub =
+      payload?.upstream_claims?.sub ??
+      payload?.sub;
     return typeof sub === 'string' && sub.length > 0 ? sub : null;
   } catch {
     return null;

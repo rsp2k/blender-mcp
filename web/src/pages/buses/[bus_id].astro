@@ -2,11 +2,12 @@
 /**
  * /buses/[bus_id] — bus detail with member list.
  *
- * SSR route, doubly gated (Caddy forward_auth + BFF session cookie).
- * Membership is verified before rendering via the OAuth `sub` claim
- * extracted from the BFF session — NOT the X-Authentik-Username header,
- * which is a short login and doesn't match the DB's owner_user_id
- * (a SHA256 sub-hash). See /buses/index.astro for the full story.
+ * Same identity story as /buses/index.astro: we get the authoritative
+ * user_id + the user's bus list from /api/buses (the MCP server does
+ * the JWT unwrap). The requested bus_id must be in that list — if it's
+ * not, return 404 (don't leak "this bus exists but you're not in it").
+ * Members are then loaded via direct SQL (membership already proven by
+ * the /api/buses round-trip, no auth needed for the read).
  *
  * Revoke happens here via the form (POST /api/buses/[id]/revoke) for
  * owners; everything else routes back through the addon.
@@ -14,8 +15,20 @@
 
 export const prerender = false;
 
-import { getBusForUser, listMembers } from '../../lib/buses';
-import { decodeJwtSub, readSession } from '../../lib/session';
+import { listMembers } from '../../lib/buses';
+import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
+import { serializeSession } from '../../lib/session';
+
+interface BusListItem {
+  bus_id: string;
+  name: string;
+  description: string | null;
+  role: 'owner' | 'member' | 'guest';
+  is_personal: boolean;
+  owner_user_id: string;
+  is_owned_by_me: boolean;
+  created_at: string;
+}
 
 const username = Astro.request.headers.get('x-authentik-username') ?? '';
 if (!username) return Astro.redirect('/login-complete');
@@ -25,23 +38,37 @@ if (!/^[0-9a-f-]{36}$/i.test(busId)) {
   return new Response('invalid bus_id', { status: 400 });
 }
 
-const session = readSession(Astro.request);
-if (!session) {
-  return Astro.redirect(
-    '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
+let userId: string;
+let bus: BusListItem;
+try {
+  const { response, refreshedSession } = await mcpFetch(
+    Astro.request, 'GET', '/api/buses',
   );
-}
-const userId = decodeJwtSub(session.access_token);
-if (!userId) {
-  return Astro.redirect(
-    '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
-  );
+  if (refreshedSession) {
+    Astro.response.headers.append('Set-Cookie', serializeSession(refreshedSession));
+  }
+  if (!response.ok) {
+    return new Response(
+      `Upstream ${response.status}: ${(await response.text()).slice(0, 200)}`,
+      { status: 502 },
+    );
+  }
+  const data = await response.json() as { user_id: string; buses: BusListItem[] };
+  userId = data.user_id;
+  const found = data.buses.find((b) => b.bus_id === busId);
+  if (!found) {
+    return new Response('Not found', { status: 404 });
+  }
+  bus = found;
+} catch (e: any) {
+  if (e instanceof NeedsAuthError) {
+    return Astro.redirect(
+      '/oauth/start?return_to=' + encodeURIComponent(`/buses/${busId}/`),
+    );
+  }
+  return new Response(`Error: ${e?.message || e}`, { status: 500 });
 }
 
-const bus = await getBusForUser(busId, userId);
-if (!bus) {
-  return new Response('Not found', { status: 404 });
-}
 const members = await listMembers(busId);
 ---
 
