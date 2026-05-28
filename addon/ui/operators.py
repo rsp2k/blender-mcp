@@ -476,3 +476,30 @@ class BLENDERMCP_OT_InviteToBus(bpy.types.Operator):
         context.window_manager.clipboard = code
         self.report({'INFO'}, f"Code {code} copied to clipboard (24h, single-use, role={r['role']})")
         return {'FINISHED'}
+
+
+class BLENDERMCP_OT_CopyClientUUID(bpy.types.Operator):
+    """Copy this Blender's client UUID (and label) to the system clipboard.
+
+    The combined "label · uuid" string is what an LLM operator needs when
+    disambiguating between multiple Blenders connected to the same bus:
+    pasted into a chat it gives the model both the human name and the
+    exact target_uuid for blender_* dispatch tool calls.
+    """
+
+    bl_idname = "blendermcp.copy_client_uuid"
+    bl_label = "Copy Client UUID"
+    bl_description = "Copy this Blender's label + UUID to clipboard for LLM disambiguation"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        client = state._client
+        uuid = client.client_uuid if client else (context.scene.blendermcp_client_id or "")
+        if not uuid:
+            self.report({'ERROR'}, "No client UUID yet — click Connect once to mint one")
+            return {'CANCELLED'}
+        label = get_client_label(prefs)
+        payload = f"{label} · {uuid}"
+        context.window_manager.clipboard = payload
+        self.report({'INFO'}, f"Copied: {payload}")
+        return {'FINISHED'}

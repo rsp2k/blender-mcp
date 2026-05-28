@@ -14,6 +14,7 @@ here and registers each with bpy.utils.register_class.
 from __future__ import annotations
 
 from .operators import (
+    BLENDERMCP_OT_CopyClientUUID,
     BLENDERMCP_OT_CreateBus,
     BLENDERMCP_OT_InviteToBus,
     BLENDERMCP_OT_JoinBus,
@@ -42,6 +43,7 @@ CLASSES = (
     BLENDERMCP_OT_JoinBus,
     BLENDERMCP_OT_LeaveBus,
     BLENDERMCP_OT_InviteToBus,
+    BLENDERMCP_OT_CopyClientUUID,
 )
 
 __all__ = [
@@ -58,4 +60,5 @@ __all__ = [
     "BLENDERMCP_OT_JoinBus",
     "BLENDERMCP_OT_LeaveBus",
     "BLENDERMCP_OT_InviteToBus",
+    "BLENDERMCP_OT_CopyClientUUID",
 ]
