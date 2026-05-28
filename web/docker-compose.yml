@@ -63,9 +63,11 @@ services:
       caddy.0_reverse_proxy: "@outpost https://auth.supported.systems"
       caddy.0_reverse_proxy.header_up: "Host {upstream_hostport}"
 
-      # Path matcher: gate ONLY /login-complete* with forward_auth.
+      # Path matcher: gate authenticated routes with forward_auth.
       # Apex `/` + future public routes stay reachable without auth.
-      caddy.@protected.path: /login-complete*
+      # Phase I8 added /buses + /buses/[id] — both SSR pages that read
+      # X-Authentik-Username from the forwarded headers.
+      caddy.@protected.path: /login-complete* /buses /buses/*
       caddy.forward_auth: "@protected https://auth.supported.systems"
       caddy.forward_auth.uri: /outpost.goauthentik.io/auth/caddy
       caddy.forward_auth.copy_headers: X-Authentik-Username X-Authentik-Email X-Authentik-Name X-Authentik-Groups X-Authentik-Uid
