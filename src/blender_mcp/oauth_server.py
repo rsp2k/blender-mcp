@@ -399,34 +399,37 @@ def build_app() -> FastAPI:
 
     async def _api_user_id(authorization: Optional[str]) -> Optional[str]:
         """Resolve a Bearer-Authorization header to a user_id via the
-        configured auth provider. Returns None on missing/invalid token."""
+        configured auth provider. Returns None on missing/invalid token.
+
+        IMPORTANT: tokens issued by the OAuthProxy /token endpoint are
+        **FastMCP-wrapped JWTs** — they're NOT the upstream Authentik
+        tokens directly. They contain a JTI that maps to the upstream
+        token inside OAuthProxy's _jti_mapping_store. Calling the inner
+        JWTVerifier directly (the ``_token_validator`` attribute) will
+        fail because the kid in the FastMCP JWT isn't in Authentik's
+        JWKS. We MUST call the OAuthProxy's own ``verify_token`` to do
+        the JTI → upstream-token unwrap.
+        """
         if not authorization or not authorization.lower().startswith("bearer "):
             return None
         token = authorization.split(None, 1)[1].strip()
-        # Try the configured provider's verify path. For OIDCProxy this
-        # validates against Authentik's JWKS + audience. For
-        # BlenderMCPOAuthProvider it does a JTI-store lookup.
         try:
             from .mcp_oauth_provider import BlenderMCPOAuthProvider
             provider = mcp.auth
             if isinstance(provider, BlenderMCPOAuthProvider):
-                uid = provider.get_user_for_token(token)
-                return uid
-            # OIDCProxy / JWT path — decode without verifying signature since
-            # the provider already enforces validation via verify_token. For
-            # safety in non-MCP paths we DO want signature validation —
-            # ``token_validator`` exposes verify_token (async).
-            tv = getattr(provider, "_token_validator", None)
-            if tv is not None:
-                result = await tv.verify_token(token)
-                if result is None:
-                    return None
-                claims = getattr(result, "claims", {}) or {}
-                return claims.get("sub") or claims.get("preferred_username")
+                # Inmemory backend has its own (token → user) mapping.
+                return provider.get_user_for_token(token)
+            # OAuthProxy / OIDCProxy path. provider.verify_token unwraps
+            # the FastMCP JWT via JTI → upstream Authentik token → then
+            # validates the upstream against its JWKS.
+            result = await provider.verify_token(token)
+            if result is None:
+                return None
+            claims = getattr(result, "claims", {}) or {}
+            return claims.get("sub") or claims.get("preferred_username")
         except Exception as e:
             logger.warning("API auth lookup failed: %s", e)
             return None
-        return None
 
     @app.get("/api/buses")
     async def api_list_buses(request: Request):
