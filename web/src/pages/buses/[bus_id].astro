@@ -1,0 +1,150 @@
+---
+/**
+ * /buses/[bus_id] — bus detail with member list.
+ *
+ * SSR route gated by Caddy forward_auth. Membership verified before
+ * rendering (getBusForUser returns null for non-members → 404).
+ * Read-only — kicking members happens via the addon (which has the
+ * real auth context).
+ */
+
+export const prerender = false;
+
+import { getBusForUser, listMembers } from '../../lib/buses';
+
+const username = Astro.request.headers.get('x-authentik-username') ?? '';
+if (!username) return Astro.redirect('/login-complete');
+
+const busId = Astro.params.bus_id ?? '';
+if (!/^[0-9a-f-]{36}$/i.test(busId)) {
+  return new Response('invalid bus_id', { status: 400 });
+}
+
+const bus = await getBusForUser(busId, username);
+if (!bus) {
+  return new Response('Not found', { status: 404 });
+}
+const members = await listMembers(busId);
+const displayName = Astro.request.headers.get('x-authentik-name') || username;
+---
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{bus.name} · BlenderMCP</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      :root {
+        --bg: #0e1116; --surface: #161b22; --border: #2a313a;
+        --text: #d4d4d4; --muted: #8b949e; --dim: #6e7681;
+        --accent: #2bb3a4; --success: #5fb878;
+        --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg); color: var(--text); line-height: 1.5;
+        padding: 2em 1em;
+      }
+      main { max-width: 800px; margin: 0 auto; }
+      .breadcrumb {
+        color: var(--muted); font-size: .85em; margin-bottom: 1em;
+      }
+      .breadcrumb a { color: var(--accent); text-decoration: none; }
+      .breadcrumb a:hover { text-decoration: underline; }
+      h1 { margin: 0 0 .2em; color: var(--text); font-size: 1.8em; }
+      .desc { color: var(--muted); margin: 0 0 1.5em; }
+      .meta {
+        font-family: var(--mono); font-size: .85em; color: var(--dim);
+        margin-bottom: 2em;
+      }
+      .badge {
+        display: inline-block; padding: .15em .55em;
+        border-radius: 4px; font-size: .7em; font-weight: 500;
+        text-transform: uppercase; letter-spacing: .03em;
+        vertical-align: middle; margin-left: .5em;
+      }
+      .badge.owner { background: rgba(43,179,164,.18); color: var(--accent); }
+      .badge.member { background: rgba(139,148,158,.18); color: var(--muted); }
+      .badge.guest { background: rgba(139,148,158,.12); color: var(--dim); }
+      h2 {
+        font-size: 1em; font-weight: 600; color: var(--text);
+        margin: 2em 0 .8em; padding-bottom: .4em;
+        border-bottom: 1px solid var(--border);
+      }
+      .member-list { list-style: none; padding: 0; margin: 0; }
+      .member-list li {
+        display: grid; grid-template-columns: 1fr auto auto; gap: 1em;
+        padding: .8em 1em; background: var(--surface);
+        border: 1px solid var(--border); border-radius: 8px;
+        margin-bottom: .5em; align-items: center;
+        font-family: var(--mono); font-size: .85em;
+      }
+      .member-list .you { color: var(--accent); }
+      .member-list time { color: var(--dim); font-size: .85em; }
+      .actions {
+        margin-top: 2em; padding: 1.2em 1.5em;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; color: var(--muted); font-size: .9em;
+      }
+      .actions strong { color: var(--text); }
+      .actions code {
+        background: var(--bg); padding: 1px 5px; border-radius: 3px;
+        font-family: var(--mono); color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="breadcrumb">
+        <a href="/buses/">← All buses</a>
+      </p>
+      <h1>
+        {bus.name}
+        <span class={`badge ${bus.role}`}>{bus.role}</span>
+      </h1>
+      {bus.description && <p class="desc">{bus.description}</p>}
+      <p class="meta">
+        bus_id <code>{bus.bus_id}</code> · created {bus.created_at.slice(0, 10)} ·
+        owner <code>{bus.owner_user_id.slice(0, 16)}…</code>
+        {bus.is_owned_by_me && <span> (you)</span>}
+      </p>
+
+      <h2>Members ({members.length})</h2>
+      <ul class="member-list">
+        {members.map((m) => (
+          <li>
+            <span class={m.user_id === username ? 'you' : ''}>
+              {m.user_id === username ? 'You' : `${m.user_id.slice(0, 16)}…`}
+              <span class={`badge ${m.role}`}>{m.role}</span>
+            </span>
+            <span>{m.is_owner && 'owner'}</span>
+            <time>joined {m.joined_at.slice(0, 10)}</time>
+          </li>
+        ))}
+      </ul>
+
+      <div class="actions">
+        {bus.is_owned_by_me ? (
+          <p>
+            You own this bus. Manage from the Blender addon — sidebar
+            → <strong>Bus</strong> section → select this bus →
+            <strong> Invite</strong> (copies code to clipboard) or
+            <strong> Leave</strong> handles for revoking access.
+          </p>
+        ) : (
+          <p>
+            You're a <strong>{bus.role}</strong> on this bus. To leave,
+            open the Blender addon, select this bus from the
+            <strong> Bus</strong> picker, then click
+            <strong> Leave</strong>.
+          </p>
+        )}
+      </div>
+    </main>
+  </body>
+</html>
