@@ -39,8 +39,10 @@ services:
       # External network owned by the blender-mcp compose stack —
       # joined here so this container can reach the postgres on the
       # other stack's internal network. The blender-mcp compose must
-      # be running first.
-      - blender-mcp_internal
+      # be running first. Named via the alias below so the env-driven
+      # ``blender-mcp-server_internal`` name (whatever the prod
+      # COMPOSE_PROJECT_NAME is) resolves to a stable in-compose name.
+      - mcp_internal
     labels:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       # Caddy verifies DNS-01 propagation against public resolvers (not
@@ -115,5 +117,12 @@ networks:
   # there). Phase I8: web/ joins so /buses pages can query the
   # shared Postgres directly. blender-mcp compose must be up first
   # so the network exists.
-  blender-mcp_internal:
+  #
+  # The external network name is ``<MCP_COMPOSE_PROJECT>_internal``
+  # — defaults to ``blender-mcp-server_internal`` to match the
+  # prod stack's COMPOSE_PROJECT_NAME. Override by setting
+  # MCP_INTERNAL_NETWORK in this .env if your MCP stack uses a
+  # different compose-project name.
+  mcp_internal:
     external: true
+    name: ${MCP_INTERNAL_NETWORK:-blender-mcp-server_internal}
