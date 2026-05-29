@@ -111,22 +111,26 @@ def draw_login_section(layout, prefs):
             icon='URL',
         )
     elif has_jwt:
+        # Two-row layout (1.5.14) so the name doesn't compete with the
+        # Logout button for horizontal space. Sidebar widths are narrow
+        # and Blender's auto-layout truncated "Logged in as <name>"
+        # to "Logged in as ..." when both shared a row.
+        #
         # Prefer the display name from the OIDC id_token (1.5.11). Fall
         # back to email, then to the legacy "Logged in via OAuth" label
-        # if neither is set (no id_token returned, or pre-1.5.11 token
-        # still in prefs). Tooltip on hover shows the email when name is
-        # the visible label.
+        # if neither is set (no id_token returned, or pre-1.5.11 stored
+        # token).
         display = (
             (prefs.user_display_name or "").strip()
             or (prefs.user_email or "").strip()
         )
-        row = box.row(align=True)
+        col = box.column(align=True)
         if display:
-            row.label(text=f"Logged in as {display}", icon='CHECKMARK')
+            col.label(text=f"Logged in as {display}", icon='CHECKMARK')
         else:
             method = "OAuth (browser)" if is_oauth else "password (legacy)"
-            row.label(text=f"Logged in via {method}", icon='CHECKMARK')
-        row.operator("blendermcp.logout", text="Logout", icon='UNLOCKED')
+            col.label(text=f"Logged in via {method}", icon='CHECKMARK')
+        col.operator("blendermcp.logout", text="Logout", icon='UNLOCKED')
     else:
         col = box.column(align=True)
         col.label(text="Not logged in", icon='LOCKED')
