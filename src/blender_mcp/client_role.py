@@ -39,6 +39,22 @@ logger = logging.getLogger(__name__)
 # with FastMCP's own client storage.
 _role_by_client_id: dict[str, str] = {}
 
+# Tracks which client_ids have a confirmed-or-scheduled write to
+# oauth_client_role. Used by the lazy-backfill path in get_caller_role:
+# when a tool call hits a cache entry that isn't yet known to be in DB
+# (e.g. the entry was created BEFORE the commit-fix shipped, or before
+# this whole persistence subsystem existed), we schedule an UPSERT.
+# UPSERTs are idempotent so racing writes are harmless.
+#
+# Populated by:
+#   - record_client_role: optimistically marks the client_id (scheduling
+#     a write right after). If the write fails, the entry stays marked —
+#     we don't retry on every tool call. Trade-off accepts losing
+#     restart-survival for that specific client_id until they re-DCR.
+#   - rehydrate_from_db: marks every client_id loaded from the DB (they
+#     are by definition already persisted).
+_persisted_client_ids: set[str] = set()
+
 # Per-request DOWNSTREAM client_id, snooped from the raw FastMCP JWT by the
 # middleware in ``oauth_server.py`` BEFORE FastMCP unwraps the bearer.
 #
@@ -80,6 +96,12 @@ def record_client_role(client_id: str, software_id: Optional[str]) -> str:
         client_id, role, software_id,
     )
     _schedule_db_persist(client_id, role, software_id)
+    # Optimistically mark as persisted so the lazy-backfill in
+    # get_caller_role doesn't fire redundant UPSERTs for this client.
+    # If the DB write actually fails, we accept losing restart-survival
+    # for this specific client_id rather than spamming retries on every
+    # tool call.
+    _persisted_client_ids.add(client_id)
     return role
 
 
@@ -147,6 +169,8 @@ async def rehydrate_from_db() -> int:
             rows = (await s.execute(select(OAuthClientRole))).scalars().all()
         for row in rows:
             _role_by_client_id[row.client_id] = row.role
+            # These are already in DB — skip lazy backfill for them.
+            _persisted_client_ids.add(row.client_id)
         logger.info("Role registry rehydrated from DB: %d entries", len(rows))
         return len(rows)
     except Exception as e:
@@ -172,7 +196,9 @@ def get_caller_role(ctx: Any = None) -> str:
     # path that yields the per-installation DCR client_id under OIDCProxy.
     snooped = current_downstream_client_id.get()
     if snooped:
-        return _role_by_client_id.get(snooped, "llm-client")
+        role = _role_by_client_id.get(snooped, "llm-client")
+        _maybe_lazy_backfill(snooped, role)
+        return role
 
     # Fallback for code paths where the middleware didn't run (tests,
     # the inmemory BlenderMCPOAuthProvider where there's no upstream and
@@ -186,7 +212,37 @@ def get_caller_role(ctx: Any = None) -> str:
     client_id = getattr(token, "client_id", None)
     if not client_id:
         return "llm-client"
-    return _role_by_client_id.get(client_id, "llm-client")
+    role = _role_by_client_id.get(client_id, "llm-client")
+    _maybe_lazy_backfill(client_id, role)
+    return role
+
+
+def _maybe_lazy_backfill(client_id: str, role: str) -> None:
+    """Backfill oauth_client_role if this client_id is in cache but not DB.
+
+    Closes the gap between record_client_role (only fires on /register)
+    and tokens that were minted before the persistence subsystem shipped
+    (those tokens still validate fine via FastMCP's persisted JTI store,
+    but their role attribution exists only in the in-memory dict and
+    won't survive a restart).
+
+    Idempotency via ``_persisted_client_ids``: after the first lazy
+    write per process, subsequent tool calls skip the work. UPSERT
+    semantics on the DB side mean a write that races another writer
+    is still safe.
+
+    Skips if client_id is NOT in cache — that means the lookup defaulted
+    to llm-client and there's no original role to backfill.
+    """
+    if client_id not in _role_by_client_id:
+        return
+    if client_id in _persisted_client_ids:
+        return
+    _persisted_client_ids.add(client_id)  # mark BEFORE scheduling
+    # software_id is unknown by now (record_client_role had it as an arg
+    # but didn't preserve it in any cache). Backfill with None — the
+    # role column is what matters for gating; software_id is audit-only.
+    _schedule_db_persist(client_id, role, None)
 
 
 # ----- gating decorator -------------------------------------------------
