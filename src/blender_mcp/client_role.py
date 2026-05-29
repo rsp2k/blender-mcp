@@ -118,6 +118,12 @@ async def _db_persist(client_id: str, role: str, software_id: Optional[str]) -> 
         )
         async with get_session() as s:
             await s.execute(stmt)
+            # AsyncSession context manager closes the session but doesn't
+            # auto-commit. Without this, the UPSERT rolls back on context
+            # exit and nothing lands in oauth_client_role. Verified
+            # empirically (2026-05-28: ran the deploy, oauth_kv_store
+            # had 7 rows from JTI writes but oauth_client_role had 0).
+            await s.commit()
     except Exception as e:
         logger.warning(
             "Could not persist client role to DB (client_id=%s): %s",
