@@ -378,9 +378,38 @@ class BlenderMCPClient:
                         if refresh_task is None and self.refresh_token:
                             refresh_task = asyncio.create_task(self._refresh_watcher())
 
-                        # Wait until stop() flips `running` OR rotation is requested.
+                        # Wait until stop() flips `running` OR rotation is
+                        # requested OR our heartbeat detects a dead transport.
+                        #
+                        # Why the heartbeat: FastMCP's SSE stream can die
+                        # silently (server restart, network blip, TCP idle
+                        # timeout — typically ~2h on Linux, way too slow).
+                        # Without a probe, self.connected stays True from
+                        # the last register_client and the sidebar shows
+                        # "Connected" while the server has no record of us.
+                        # ping() is the spec-blessed MCP heartbeat — zero
+                        # side effects, returns bool, raises on transport
+                        # failure → out of the inner while, into the outer
+                        # reconnect path.
+                        import time as _time
+                        last_heartbeat = _time.monotonic()
+                        HEARTBEAT_INTERVAL = 30.0
                         while self.running and not self._rotate_requested:
                             await asyncio.sleep(0.2)
+                            now = _time.monotonic()
+                            if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                                try:
+                                    await client.ping()
+                                    last_heartbeat = now
+                                except Exception as hb_exc:
+                                    self.last_error = (
+                                        f"Heartbeat failed: {hb_exc}"
+                                    )
+                                    print(
+                                        f"[BlenderMCP] {self.last_error}"
+                                        f" — reconnecting"
+                                    )
+                                    raise  # exit inner while via outer except
 
                         # If we're rotating, don't unregister (we'll re-register
                         # under the new JWT in the next iteration). Only unregister
