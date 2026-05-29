@@ -110,8 +110,18 @@ def _build_auth_provider() -> AuthProvider | None:
             # required_scopes=["openid"], JWTVerifier extracts scopes=[] from
             # the access JWT and 401s every request. We're single-tenant +
             # single-app — scope-gated authorization isn't load-bearing.
-            # OIDCProxy auto-populates scopes_supported from Authentik's
-            # discovery doc, so DCR with scope=openid still works.
+            #
+            # valid_scopes: explicit allowlist for DCR. Without this,
+            # OAuthProxy.__init__ derives valid_scopes from
+            # token_verifier.required_scopes which defaults to [], and
+            # the MCP SDK's register handler then rejects ANY non-empty
+            # `scope` in the DCR body as "not in the valid list" — even
+            # standard OIDC scopes Authentik supports natively. Setting
+            # to the OIDC standard set lets clients request id_token
+            # (which carries human-readable user_display_name/email).
+            # Verified via Authentik's discovery doc: scopes_supported
+            # is ['openid', 'email', 'profile'].
+            valid_scopes=["openid", "email", "profile"],
         )
 
     if backend == "inmemory":
