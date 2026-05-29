@@ -28,7 +28,14 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from .models import Base, Bus, BusInvitation, BusMembership, BusRole
+from .models import (
+    Base,
+    Bus,
+    BusInvitation,
+    BusMembership,
+    BusRole,
+    OAuthClientRole,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +112,7 @@ __all__ = [
     "BusInvitation",
     "BusMembership",
     "BusRole",
+    "OAuthClientRole",
     "get_engine",
     "get_session",
     "get_database_url",
