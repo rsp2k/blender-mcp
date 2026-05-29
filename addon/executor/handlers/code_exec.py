@@ -49,6 +49,9 @@ def _truncate_middle(s: str, limit: int) -> str:
     return f"{head}\n... [{len(s) - limit} bytes truncated from middle] ...\n{tail}"
 
 
+_CARAT_LINE_RE = re.compile(r"^[ \t]*[~^]+[ \t]*$")
+
+
 def _strip_addon_frames(tb: str) -> str:
     """Hide the addon's executor frames from the traceback.
 
@@ -58,21 +61,38 @@ def _strip_addon_frames(tb: str) -> str:
     handler. Strip the leading frames that point inside
     ``addon/executor/handlers/code_exec.py`` so what's left starts at
     the user's ``<string>`` frame.
+
+    A traceback frame in Python 3.11+ is up to THREE lines:
+      1. ``  File "path", line N, in fn``
+      2. ``    source_line``                                (sometimes absent)
+      3. ``    ~~~~~^^^^^~~~~^^^``                          (3.11+ column marker)
+    We consume all three for any frame whose File line points at
+    code_exec.py. Without the third-line strip, the carat marker
+    orphans onto the next visible frame and produces noise like:
+
+        Traceback (most recent call last):
+            ~~~~^^^^^^^^^^^^^^^^^
+          File "<string>", line 16, in <module>
     """
     lines = tb.splitlines(keepends=True)
     out = []
-    skip = False
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         # Frame headers look like:  File "path/to/code_exec.py", line 33, in execute_code
         if re.match(r'\s*File "[^"]*code_exec\.py"', line):
-            skip = True
-            continue
-        if skip:
-            # The next line is the source-line snippet for the frame we're
-            # skipping; swallow it too. Then resume.
-            skip = False
+            i += 1  # drop the File line itself
+            # Drop the source-snippet line (if present). It's the next
+            # line and is typically indented.
+            if i < len(lines) and not lines[i].startswith("Traceback") \
+                    and not re.match(r'\s*File "', lines[i]):
+                i += 1
+                # Drop the 3.11+ column-marker line if it's there too.
+                if i < len(lines) and _CARAT_LINE_RE.match(lines[i].rstrip("\n")):
+                    i += 1
             continue
         out.append(line)
+        i += 1
     return "".join(out)
 
 
