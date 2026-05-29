@@ -111,9 +111,21 @@ def draw_login_section(layout, prefs):
             icon='URL',
         )
     elif has_jwt:
-        method = "OAuth (browser)" if is_oauth else "password (legacy)"
+        # Prefer the display name from the OIDC id_token (1.5.11). Fall
+        # back to email, then to the legacy "Logged in via OAuth" label
+        # if neither is set (no id_token returned, or pre-1.5.11 token
+        # still in prefs). Tooltip on hover shows the email when name is
+        # the visible label.
+        display = (
+            (prefs.user_display_name or "").strip()
+            or (prefs.user_email or "").strip()
+        )
         row = box.row(align=True)
-        row.label(text=f"Logged in via {method}", icon='CHECKMARK')
+        if display:
+            row.label(text=f"Logged in as {display}", icon='CHECKMARK')
+        else:
+            method = "OAuth (browser)" if is_oauth else "password (legacy)"
+            row.label(text=f"Logged in via {method}", icon='CHECKMARK')
         row.operator("blendermcp.logout", text="Logout", icon='UNLOCKED')
     else:
         col = box.column(align=True)
@@ -197,6 +209,21 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
             "Unix epoch (seconds) when the current access token expires. "
             "The bus client watches this and refreshes ~60s before."
         ),
+        default="",
+    )
+    # User identity (captured from the OIDC id_token at Login time, only if
+    # Authentik returned one — requires the openid scope on /authorize).
+    # Display-only; bus dispatch identity still comes from the access
+    # token's sub claim. Cleared on Logout and on addon-register-time
+    # auth wipe (1.5.7).
+    user_display_name: StringProperty(
+        name="Display Name",
+        description="Human-readable name from the OIDC id_token (Login-populated).",
+        default="",
+    )
+    user_email: StringProperty(
+        name="Email",
+        description="Email from the OIDC id_token (Login-populated).",
         default="",
     )
 

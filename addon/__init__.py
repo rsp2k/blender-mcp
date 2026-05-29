@@ -48,7 +48,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 10),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 5, 11),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -151,6 +151,8 @@ def register():
             prefs_now.refresh_token = ""
             prefs_now.jwt_expires_at = ""
             prefs_now.oauth_client_id = ""
+            prefs_now.user_display_name = ""
+            prefs_now.user_email = ""
     except Exception as e:
         # Non-fatal: register() shouldn't fail because we couldn't clear
         # prefs. Worst case, the user sees stale auth and falls back to

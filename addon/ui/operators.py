@@ -162,9 +162,15 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             expires_in = int(tok.get("expires_in", 0))
             if expires_in:
                 prefs_now.jwt_expires_at = str(int(_time.time()) + expires_in)
+            # Capture user-display fields from the id_token (set by
+            # oauth_pkce.oauth_login when Authentik returned one). Missing
+            # → fall back to empty string, panel renders legacy label.
+            prefs_now.user_display_name = tok.get("user_display_name", "")
+            prefs_now.user_email = tok.get("user_email", "")
             print(
                 f"[BlenderMCP] OAuth login complete; access token expires in "
-                f"{expires_in}s, client_id={prefs_now.oauth_client_id}"
+                f"{expires_in}s, client_id={prefs_now.oauth_client_id}, "
+                f"user={prefs_now.user_display_name or prefs_now.user_email or '?'}"
             )
 
             # CRITICAL: tear down any existing client BEFORE auto-Connect.
@@ -239,11 +245,13 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
             except Exception:
                 pass
 
-        # 3. Clear local credentials.
+        # 3. Clear local credentials + display name/email.
         prefs.jwt_token = ""
         prefs.refresh_token = ""
         prefs.jwt_expires_at = ""
         prefs.oauth_client_id = ""
+        prefs.user_display_name = ""
+        prefs.user_email = ""
 
         self.report({'INFO'}, "Logged out")
         return {'FINISHED'}

@@ -43,6 +43,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.server
+import json
 import secrets
 import socketserver
 import sys
@@ -402,9 +403,13 @@ def oauth_login(
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "state": state,
-                # No scope requested — see _register_client docstring for why.
-                # Authentik still issues a JWT access_token with sub claim
-                # that our bus uses for user identity.
+                # Request OIDC scopes so the /token response includes an
+                # id_token with human-readable user info (preferred_username,
+                # email, name). Used by the addon's sidebar to display
+                # "Logged in as <name>" instead of "Logged in via OAuth".
+                # The access_token's role for bus dispatch is unaffected —
+                # it still carries sub for user identity.
+                "scope": "openid email profile",
             }
         )
     )
@@ -452,6 +457,33 @@ def oauth_login(
     # Stuff client_id into the response so the caller can persist it
     # (needed for the refresh flow).
     token["client_id"] = client_id
+
+    # Decode the id_token (if Authentik returned one) for human-readable
+    # user info. Safe to skip verification — the token was minted server-
+    # side by mcp.blender.bet, which already validated upstream identity
+    # before issuing it, AND we only use the claims for display purposes
+    # (no privilege is granted based on them). Failure here is non-fatal:
+    # caller renders without user info if the dict keys are missing.
+    id_token = token.get("id_token")
+    if id_token:
+        try:
+            parts = id_token.split(".")
+            if len(parts) == 3:
+                payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+                claims = json.loads(base64.urlsafe_b64decode(payload_b64))
+                # preferred_username is usually the short login; name is the
+                # display name; email is self-explanatory. Pick the best
+                # available per the OIDC spec's conventions.
+                token["user_display_name"] = (
+                    claims.get("name")
+                    or claims.get("preferred_username")
+                    or claims.get("email")
+                    or ""
+                )
+                token["user_email"] = claims.get("email") or ""
+                token["user_preferred_username"] = claims.get("preferred_username") or ""
+        except Exception as e:
+            print(f"[oauth_pkce] id_token decode failed (non-fatal): {e}")
     return token
 
 
