@@ -15,12 +15,17 @@ from __future__ import annotations
 import bpy
 
 from .. import state
+from .._version import __version__
 from ..client.bus_client import FASTMCP_AVAILABLE
 from ..preferences import draw_login_section, get_client_label, get_prefs
 
 
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
-    bl_label = "Blender MCP"
+    # Version in the header is set at class-definition time (which runs at
+    # addon register), so it tracks every install of a fresh build.
+    # Reads from ``__version__`` rather than re-derivation, so it stays
+    # in sync with bl_info via the bump script.
+    bl_label = f"Blender MCP {__version__}"
     bl_idname = "BLENDERMCP_PT_Panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
