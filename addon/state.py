@@ -32,3 +32,12 @@ _executor: Optional["BlenderCommandExecutor"] = None
 # bus_list_buses MCP tool: {bus_id, name, role, is_personal, owner_user_id,
 # is_owned_by_me, created_at, description}.
 _buses: list = []
+
+# 1.5.8: OAuth in-flight indicator. Set True when the Login worker starts;
+# flipped False by the poll() timer on completion (success OR error). The
+# panel reads it to render an "Authenticating..." spinner widget and to
+# disable the Login button (no double-click races). A simple monotonic
+# counter drives the animated dots — increments on every panel redraw
+# while in flight, modulo 3 picks 1/2/3 dots.
+_auth_in_progress: bool = False
+_auth_dots: int = 0

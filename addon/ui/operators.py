@@ -25,6 +25,23 @@ from ..identity import StickyUUIDManager
 from ..preferences import get_client_label, get_prefs, get_server_base_url
 
 
+def _tag_panel_redraw() -> None:
+    """Mark the BlenderMCP sidebar panel as needing a redraw.
+
+    Used to push state-flag updates (auth in-flight, dots animation)
+    onto the panel immediately rather than waiting for the user to
+    move the mouse over it. Safe to call from worker threads — bpy
+    .types.AREA.tag_redraw is thread-safe per Blender's docs.
+    """
+    try:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass  # Best-effort — Blender may not be fully bootstrapped.
+
+
 class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
     """Probe the configured server's /health endpoint and report status.
 
@@ -100,6 +117,11 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
         # Thread state — stored on the module so the timer callback can read.
         state._oauth_result = None
         state._oauth_error = None
+        # Spinner flag for the panel — flipped False below by _poll() on
+        # completion (success or error).
+        state._auth_in_progress = True
+        state._auth_dots = 0
+        _tag_panel_redraw()
 
         def _worker():
             try:
@@ -116,7 +138,15 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
 
         def _poll():
             if state._oauth_result is None and state._oauth_error is None:
+                # Animate dots while still polling. Cycle 1 → 2 → 3 → 1...
+                # Drives a panel redraw which re-reads state._auth_dots for
+                # the visible "Authenticating..." indicator.
+                state._auth_dots = (state._auth_dots + 1) % 3
+                _tag_panel_redraw()
                 return 0.5  # keep polling
+            # Terminal — clear in-flight flag so the spinner disappears.
+            state._auth_in_progress = False
+            _tag_panel_redraw()
             if state._oauth_error:
                 print(f"[BlenderMCP] OAuth login failed: {state._oauth_error}")
                 state._oauth_error = None
