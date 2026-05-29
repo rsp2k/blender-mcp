@@ -219,6 +219,45 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BLENDERMCP_OT_ReLogin(bpy.types.Operator):
+    """Explicit Logout-then-Login. The fatal-error banner's recovery path.
+
+    1.5.3's banner pointed Re-login directly at blendermcp.oauth_login. That
+    SHOULD have worked (oauth_login writes fresh tokens to prefs, then auto-
+    Connect creates a fresh BlenderMCPClient) but in practice users still
+    had to manually Logout + Login. Rather than debug why the optimized
+    path silently fails (race? operator-from-timer context? Blender redraw
+    timing?), this operator just does what the manual sequence does:
+    Logout, then Login. Slower by one server-side revoke roundtrip, but
+    matches the flow the user has already proven works.
+    """
+
+    bl_idname = "blendermcp.re_login"
+    bl_label = "Re-login"
+    bl_description = "Clear current credentials and start a fresh OAuth flow"
+
+    def execute(self, context):
+        # 1. Full Logout — disconnect, revoke server-side, clear prefs.
+        try:
+            bpy.ops.blendermcp.logout('EXEC_DEFAULT')
+        except RuntimeError as exc:
+            print(f"[BlenderMCP] Re-login: Logout step failed: {exc}")
+
+        # 2. Clear the fatal-error banner explicitly. Logout doesn't touch
+        # it (it's transient client state, not auth state) but a Re-login
+        # click is an unambiguous "I've acknowledged the error" signal.
+        if state._client is not None:
+            state._client.fatal_error = None
+
+        # 3. Fresh Login (which auto-Connects per 1.5.3).
+        try:
+            bpy.ops.blendermcp.oauth_login('EXEC_DEFAULT')
+        except RuntimeError as exc:
+            self.report({'ERROR'}, f"Login step failed: {exc}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 class BLENDERMCP_OT_DismissFatalError(bpy.types.Operator):
     """Clear the fatal-error banner from the sidebar.
 

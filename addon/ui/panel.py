@@ -51,7 +51,7 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             box.alert = True  # Blender's native red-tinted alert state
             box.label(text=client.fatal_error, icon='ERROR')
             row = box.row(align=True)
-            row.operator("blendermcp.oauth_login", text="Re-login", icon='URL')
+            row.operator("blendermcp.re_login", text="Re-login", icon='URL')
             # Dismiss clears the banner without taking action — useful when
             # the user has already moved on (e.g. tested a different server).
             row.operator(

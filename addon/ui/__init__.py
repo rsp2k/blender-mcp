@@ -23,6 +23,7 @@ from .operators import (
     BLENDERMCP_OT_Logout,
     BLENDERMCP_OT_OAuthLogin,
     BLENDERMCP_OT_RefreshBuses,
+    BLENDERMCP_OT_ReLogin,
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
@@ -46,6 +47,7 @@ CLASSES = (
     BLENDERMCP_OT_InviteToBus,
     BLENDERMCP_OT_CopyClientUUID,
     BLENDERMCP_OT_DismissFatalError,
+    BLENDERMCP_OT_ReLogin,
 )
 
 __all__ = [
@@ -64,4 +66,5 @@ __all__ = [
     "BLENDERMCP_OT_InviteToBus",
     "BLENDERMCP_OT_CopyClientUUID",
     "BLENDERMCP_OT_DismissFatalError",
+    "BLENDERMCP_OT_ReLogin",
 ]
