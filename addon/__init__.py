@@ -8,19 +8,24 @@ directly (zip the addon/ folder).
 
 The bl_info dict below is a literal (Blender parses it via AST without
 importing the module), so the version tuple is duplicated between
-``addon/_version.py`` and the manifest. Quick consistency check::
+``addon/_version.py`` and the manifest.
 
 (Note: any line starting with "bl_info" at column zero confuses
 Blender's _fake_module speedy line-extractor — it will think the line
 is the start of the manifest and try to ast.parse subsequent prose
 lines as Python. Keep that token off the left margin in this docstring.)
 
-::
+To bump the version across all three files atomically, use::
+
+    scripts/bump_addon_version.py patch    # 1.5.6 → 1.5.7
+    scripts/bump_addon_version.py minor    # 1.5.6 → 1.6.0
+    scripts/bump_addon_version.py 1.7.2    # exact
+
+The script verifies the three files agree before writing, so drift
+gets caught immediately. To audit by hand::
 
     grep -hE '"version": \\(' addon.py addon/__init__.py
     grep -E '__version__' addon/_version.py
-
-These three must agree.
 
 **Why register/unregister do their bpy imports lazily:** the addon
 package is imported in non-Blender contexts (tests, Gate E, Gate G
@@ -37,7 +42,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 5),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 5, 6),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
