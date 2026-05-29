@@ -79,6 +79,51 @@ def _build_auth_provider() -> AuthProvider | None:
     if backend == "authentik":
         from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
+        class _OIDCProxyWithUserClaims(OIDCProxy):
+            """OIDCProxy that embeds OIDC id_token claims in the FastMCP JWT.
+
+            The MCP SDK's OAuthToken response model has no id_token field, so
+            the upstream Authentik id_token gets stripped before reaching
+            downstream clients (verified by reading mcp/shared/auth.py:6).
+            Without an id_token, the addon can't display the user's name in
+            its sidebar — it sees only an opaque access_token.
+
+            FastMCP's _extract_upstream_claims hook is the documented escape:
+            return a dict; FastMCP embeds it under `upstream_claims` in the
+            FastMCP-issued JWT payload. The addon decodes its own JWT (no
+            signature verification needed — same trust chain as the id_token
+            decode) and reads upstream_claims to populate the sidebar.
+
+            Decode is signature-unverified intentionally: the id_token came
+            from inside ``_handle_idp_callback`` where FastMCP already
+            validated it against upstream JWKS; we're only extracting display
+            fields, not granting any privilege based on them.
+            """
+
+            async def _extract_upstream_claims(self, idp_tokens):
+                id_token = idp_tokens.get("id_token")
+                if not id_token:
+                    return None
+                try:
+                    import base64
+                    import json as _json
+                    parts = id_token.split(".")
+                    if len(parts) != 3:
+                        return None
+                    payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+                    payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                    # Pick the standard OIDC identity claims; drop bulky
+                    # internals (aud, iss, exp, etc.) to keep the FastMCP
+                    # JWT slim.
+                    return {
+                        k: payload[k]
+                        for k in ("sub", "preferred_username", "email", "name", "given_name", "family_name")
+                        if k in payload
+                    }
+                except Exception as e:
+                    logger.warning("id_token decode for upstream_claims failed: %s", e)
+                    return None
+
         config_url = os.environ["AUTHENTIK_CONFIG_URL"]
         client_id = os.environ["AUTHENTIK_CLIENT_ID"]
         client_secret = os.environ["AUTHENTIK_CLIENT_SECRET"]
@@ -89,7 +134,7 @@ def _build_auth_provider() -> AuthProvider | None:
         base_url = os.environ["PUBLIC_BASE_URL"].rstrip("/")
 
         logger.info("Auth: OIDCProxy → Authentik (%s)", config_url)
-        provider = OIDCProxy(
+        provider = _OIDCProxyWithUserClaims(
             config_url=config_url,
             client_id=client_id,
             client_secret=client_secret,
