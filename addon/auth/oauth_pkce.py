@@ -289,11 +289,17 @@ def _normalize_server_url(server_url: str) -> str:
 def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) -> dict:
     """Dynamic Client Registration. Returns the full registration response.
 
-    Note: we intentionally don't request specific scopes here. The MCP server
-    is single-tenant + single-app (one Authentik OAuth app, all clients
-    proxy through it), so scope-gated authorization isn't doing useful
-    work. Requesting scopes would force them into Authentik's
-    ``scopes_supported`` config which adds friction without benefit.
+    Declares ``openid email profile`` scope so the subsequent /authorize
+    request can ask for them (Authentik enforces "client was not
+    registered with scope X" if /authorize requests a scope the DCR
+    didn't declare — verified empirically 2026-05-28). The OIDC scopes
+    give us an ``id_token`` in the /token response, which the addon
+    decodes locally to populate user_display_name / user_email for the
+    "Logged in as <name>" sidebar label.
+
+    The access_token's role for bus dispatch is unaffected — sub still
+    identifies the user, scope-gated authorization isn't load-bearing
+    in our single-tenant model.
     """
     url = f"{server_url}/register"
     resp = requests.post(
@@ -304,6 +310,7 @@ def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) 
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
+            "scope": "openid email profile",
             # RFC 7591 software identity (phase H — role attribution). The
             # server records (client_id → role="addon") at DCR time and
             # uses it to gate addon-only tools (bus_register_client etc.)
