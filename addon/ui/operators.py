@@ -136,13 +136,31 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
                 f"[BlenderMCP] OAuth login complete; access token expires in "
                 f"{expires_in}s, client_id={prefs_now.oauth_client_id}"
             )
+
+            # CRITICAL: tear down any existing client BEFORE auto-Connect.
+            # BlenderMCPClient captures jwt_token as an instance attribute at
+            # construction time; an existing state._client carries the OLD
+            # token and start_server() reuses it (per ``if state._client is
+            # None``). So re-Login without nuking the client would attempt
+            # to connect with the stale JWT, hit 401, and bounce right back
+            # to the fatal-error banner — making the Re-login button look
+            # broken. Stop + None forces start_server to build a fresh
+            # BlenderMCPClient with the newly-persisted prefs.jwt_token.
+            if state._client is not None:
+                try:
+                    state._client.stop()
+                except Exception as exc:
+                    print(f"[BlenderMCP] Error stopping stale client pre-Connect: {exc}")
+                state._client = None
+            try:
+                bpy.context.scene.blendermcp_server_running = False
+            except Exception:
+                pass
+
             # Auto-Connect: nobody logs in WITHOUT wanting to connect, and the
             # two-click sequence (Login → wait → Connect) was just friction.
             # Use EXEC_DEFAULT (not INVOKE_DEFAULT) — no UI prompts needed,
             # the operator's execute() reads everything from prefs.
-            # If a session is somehow already running (re-login on top of an
-            # active session), start_server is idempotent at the client level
-            # via `if self.running: return` in BlenderMCPClient.start.
             try:
                 bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
             except RuntimeError as exc:

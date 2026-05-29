@@ -397,11 +397,34 @@ class BlenderMCPClient:
                     self.last_error = f"Connection failed: {e}"
                     print(f"[BlenderMCP] {self.last_error}")
 
-                    # Auth-fatal exceptions: don't retry, surface to user so
-                    # they re-Login. Heuristic — FastMCP/httpx exceptions
-                    # carry status codes as part of the message text.
+                    # 401 paths split into three cases:
+                    #   (a) JWT chronologically expired — _refresh_watcher
+                    #       missed the window. Refresh will succeed.
+                    #   (b) JTI mapping wiped by server restart — JWT is
+                    #       still time-valid but server has no record. Refresh
+                    #       will succeed (refresh_tokens are persisted differently).
+                    #   (c) Refresh token ALSO dead — user genuinely needs re-Login.
+                    # Strategy: try refresh first; only go fatal if refresh
+                    # also fails (case c). The chronological pre-connect check
+                    # at the top of _run() only catches case (a); this catches
+                    # (b) too, which is the common "I restarted Blender after
+                    # the prod server bounced" scenario.
                     msg = str(e).lower()
-                    if any(s in msg for s in ("401", "403", "unauthorized", "invalid_token")):
+                    is_auth_error = any(
+                        s in msg for s in ("401", "403", "unauthorized", "invalid_token")
+                    )
+                    if is_auth_error and self.refresh_token:
+                        print("[BlenderMCP] 401 on connect — trying refresh before giving up")
+                        if await self._do_refresh_once():
+                            print("[BlenderMCP] Refresh succeeded; reconnecting with new token")
+                            # Skip backoff sleep — we have a fresh token, retry now.
+                            backoff = 1.0
+                            self.last_error = None
+                            continue  # outer while: next iteration uses new self.jwt_token
+                        # Refresh failed → fall through to fatal path below.
+                        print("[BlenderMCP] Refresh also failed — going fatal")
+
+                    if is_auth_error:
                         print("[BlenderMCP] Auth failure — stopping retries; please re-Login")
                         self.fatal_error = (
                             "Authentication failed — your session is no longer valid. "
