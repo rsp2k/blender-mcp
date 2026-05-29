@@ -202,15 +202,53 @@ def build_app() -> FastAPI:
     )
 
     # ---- JWT middleware (LEGACY) ----
-    # Phase G3 removed the JWT validation logic; FastMCP's auth pipeline now
-    # handles token verification for /mcp/* via the configured provider
-    # (OIDCProxy or BlenderMCPOAuthProvider). The middleware function stays
-    # as a no-op pass-through for now in case future debugging needs an
-    # interception point; can be deleted entirely once the cutover is
-    # proven stable in production.
+    # JWT-snoop middleware — capture the DOWNSTREAM DCR client_id from the
+    # raw FastMCP bearer JWT before FastMCP unwraps it. FastMCP's auth pipeline
+    # validates the upstream Authentik token and returns an AccessToken whose
+    # ``client_id`` is the UPSTREAM Authentik app id (shared by every
+    # installation), losing the per-installation downstream id we need for
+    # role attribution. This middleware decodes the FastMCP JWT payload
+    # (signature already validated downstream by FastMCP — we only need the
+    # client_id claim, not trust) and stashes it in a ContextVar that
+    # ``get_caller_role`` reads.
+    #
+    # Defense in depth: tokens we can't decode (no Authorization header,
+    # malformed, etc.) leave the ContextVar unset → role defaults to
+    # llm-client → fail closed.
     @app.middleware("http")
     async def jwt_middleware(request: Request, call_next):
-        return await call_next(request)
+        from .client_role import current_downstream_client_id
+
+        token_str = None
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token_str = auth_header[7:].strip()
+
+        downstream_cid: Optional[str] = None
+        if token_str:
+            try:
+                # Three dot-separated base64url segments: header.payload.sig.
+                # Decode payload only — no signature check needed since we're
+                # just snooping for the client_id claim. If FastMCP rejects
+                # the token after us, the tool call never runs and the
+                # ContextVar value is moot.
+                import base64 as _b64
+                parts = token_str.split(".")
+                if len(parts) == 3:
+                    payload_b64 = parts[1]
+                    # Pad for base64 (JWT uses unpadded base64url).
+                    payload_b64 += "=" * (-len(payload_b64) % 4)
+                    payload_json = _b64.urlsafe_b64decode(payload_b64)
+                    payload = json.loads(payload_json)
+                    downstream_cid = payload.get("client_id")
+            except Exception:
+                pass  # Fail closed — leave ContextVar unset.
+
+        token_var = current_downstream_client_id.set(downstream_cid)
+        try:
+            return await call_next(request)
+        finally:
+            current_downstream_client_id.reset(token_var)
 
     # ---- DCR-capture middleware (phase H — role attribution) ----
     # Intercept POST /register to record (client_id → role) from the

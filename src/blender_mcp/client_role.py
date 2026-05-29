@@ -21,10 +21,11 @@ Roles are populated at DCR time by the FastAPI middleware in
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import json
 import logging
-from typing import Any, Awaitable, Callable, Iterable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from fastmcp.server.dependencies import get_access_token
 
@@ -37,6 +38,21 @@ logger = logging.getLogger(__name__)
 # DCR-capture middleware. In-memory only; rebuilds on server restart along
 # with FastMCP's own client storage.
 _role_by_client_id: dict[str, str] = {}
+
+# Per-request DOWNSTREAM client_id, snooped from the raw FastMCP JWT by the
+# middleware in ``oauth_server.py`` BEFORE FastMCP unwraps the bearer.
+#
+# Reason this ContextVar exists: by the time a tool runs, FastMCP's
+# ``get_access_token()`` returns the UPSTREAM Authentik AccessToken — its
+# ``client_id`` is the OIDCProxy's own Authentik app id, which is the same
+# value for every installation in the world. The DOWNSTREAM DCR-issued
+# client_id we need for role lookup lives only in the raw FastMCP JWT
+# payload's ``client_id`` claim. Snooping it at the middleware layer and
+# stashing it here is the only path to keep it in scope by the time a
+# tool's ``@require_role`` decorator runs.
+current_downstream_client_id: contextvars.ContextVar[Optional[str]] = (
+    contextvars.ContextVar("current_downstream_client_id", default=None)
+)
 
 # Recognized software_id values. Anything not in this map gets logged as
 # "unknown" and falls through to ``llm-client``.
@@ -74,6 +90,16 @@ def get_caller_role(ctx: Any = None) -> str:
     ``get_access_token`` reads the current request's auth state from a
     ContextVar that's set by the auth middleware.
     """
+    # Preferred: the JWT-snoop middleware captured the downstream client_id
+    # from the raw bearer BEFORE FastMCP unwrapped it. This is the only
+    # path that yields the per-installation DCR client_id under OIDCProxy.
+    snooped = current_downstream_client_id.get()
+    if snooped:
+        return _role_by_client_id.get(snooped, "llm-client")
+
+    # Fallback for code paths where the middleware didn't run (tests,
+    # the inmemory BlenderMCPOAuthProvider where there's no upstream and
+    # the access token's client_id IS the downstream DCR id).
     try:
         token = get_access_token()
     except Exception:
