@@ -136,6 +136,19 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
                 f"[BlenderMCP] OAuth login complete; access token expires in "
                 f"{expires_in}s, client_id={prefs_now.oauth_client_id}"
             )
+            # Auto-Connect: nobody logs in WITHOUT wanting to connect, and the
+            # two-click sequence (Login → wait → Connect) was just friction.
+            # Use EXEC_DEFAULT (not INVOKE_DEFAULT) — no UI prompts needed,
+            # the operator's execute() reads everything from prefs.
+            # If a session is somehow already running (re-login on top of an
+            # active session), start_server is idempotent at the client level
+            # via `if self.running: return` in BlenderMCPClient.start.
+            try:
+                bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+            except RuntimeError as exc:
+                # Operator poll() or context-mismatch failure — leave the
+                # user a manual Connect button as fallback.
+                print(f"[BlenderMCP] Auto-Connect failed: {exc} — click Connect manually")
             return None  # unregister timer
 
         bpy.app.timers.register(_poll, first_interval=0.5)
@@ -185,6 +198,26 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         prefs.oauth_client_id = ""
 
         self.report({'INFO'}, "Logged out")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DismissFatalError(bpy.types.Operator):
+    """Clear the fatal-error banner from the sidebar.
+
+    Doesn't change auth state — only hides the visual banner. Useful when
+    the user has acknowledged the error and wants to deal with it later.
+    Re-Login (which also sets `fatal_error = None` implicitly via the
+    re-Connect path) is the recommended action; this is the "I'll handle
+    it" escape hatch.
+    """
+
+    bl_idname = "blendermcp.dismiss_fatal_error"
+    bl_label = "Dismiss"
+    bl_description = "Hide the fatal-error banner (auth state unchanged)"
+
+    def execute(self, context):
+        if state._client is not None:
+            state._client.fatal_error = None
         return {'FINISHED'}
 
 

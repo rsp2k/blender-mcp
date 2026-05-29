@@ -81,7 +81,14 @@ class BlenderMCPClient:
         self.thread: Optional[threading.Thread] = None
         self.running = False
         self.connected = False
+        # last_error: transient error from the most recent attempt; cleared
+        # on successful registration. Surfaced as "Last error: ..." (truncated)
+        # in the panel — not actionable by itself.
+        # fatal_error: terminal failure that stopped the worker (auth-fatal,
+        # config mistake). Panel surfaces this prominently with a Login button.
+        # Cleared by the user clicking Login or Dismiss.
         self.last_error: Optional[str] = None
+        self.fatal_error: Optional[str] = None
         # Set by _refresh_watcher to signal that _run should tear down the
         # current FastMCP Client and reopen with the rotated JWT. Cleared
         # after reconnect completes.
@@ -396,6 +403,24 @@ class BlenderMCPClient:
                     msg = str(e).lower()
                     if any(s in msg for s in ("401", "403", "unauthorized", "invalid_token")):
                         print("[BlenderMCP] Auth failure — stopping retries; please re-Login")
+                        self.fatal_error = (
+                            "Authentication failed — your session is no longer valid. "
+                            "Click Login to re-authenticate."
+                        )
+                        # Clear stored JWT so the Login section flips back to
+                        # "Not logged in" and the user has an obvious next action.
+                        # Bus client worker thread — bpy property writes from
+                        # background threads work for AddonPreferences StringProperty
+                        # (no mesh/scene mutation), per the convention already used
+                        # by _persist_rotated_jwt_to_prefs above.
+                        try:
+                            from ..preferences import get_prefs
+                            prefs = get_prefs()
+                            prefs.jwt_token = ""
+                            prefs.refresh_token = ""
+                            prefs.jwt_expires_at = "0"
+                        except Exception as exc:
+                            print(f"[BlenderMCP] Could not clear stale JWT from prefs: {exc}")
                         self.running = False
                         return
                 finally:
