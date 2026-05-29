@@ -6,9 +6,15 @@ the authoritative entry point. The top-level `addon.py` survives as a
 works; users who prefer the directory layout install this package
 directly (zip the addon/ folder).
 
-The bl_info dict below is a literal (Blender parses it via AST without
-importing the module), so the version tuple is duplicated between
-``addon/_version.py`` and the manifest.
+The bl_info dict below MUST be a literal — Blender's addon enumeration
+uses ``ast.literal_eval`` on the right-hand side to populate the
+Preferences > Add-ons list WITHOUT importing the module (safety: don't
+run arbitrary code to list addons). ``literal_eval`` rejects imported
+names like ``tuple_version`` with ValueError, so the version tuple is
+duplicated across ``addon.py``, ``addon/__init__.py``, and
+``addon/_version.py``. Verified by experiment (5-line ast.literal_eval
+probe — see commit history). No DRY workaround exists short of code
+generation; the bump script below is the chosen mitigation.
 
 (Note: any line starting with "bl_info" at column zero confuses
 Blender's _fake_module speedy line-extractor — it will think the line
