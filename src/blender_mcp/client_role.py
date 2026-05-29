@@ -24,7 +24,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from typing import Any, Awaitable, Callable, Iterable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from fastmcp.server.dependencies import get_access_token
 
@@ -80,7 +80,22 @@ def get_caller_role(ctx: Any = None) -> str:
         return "llm-client"
     if token is None:
         return "llm-client"
-    client_id = getattr(token, "client_id", None)
+
+    # IMPORTANT: with OIDCProxy/OAuthProxy, ``token.client_id`` is the
+    # UPSTREAM Authentik app's client_id (the OIDCProxy's own client
+    # to Authentik), NOT the per-installation DOWNSTREAM DCR client_id.
+    # Every addon in the world shares the same upstream client_id, so
+    # role attribution by ``token.client_id`` is impossible — every
+    # lookup would miss the registry and default to llm-client.
+    #
+    # The raw JWT payload preserves the downstream client_id (it was
+    # written there at token-issue time by FastMCP's jwt_issuer with
+    # the value of transaction["client_id"] from the DCR record).
+    # Read it from ``token.claims["client_id"]`` first; fall back to
+    # ``token.client_id`` for non-proxy issuers like the inmemory
+    # BlenderMCPOAuthProvider where the two are the same value.
+    claims = getattr(token, "claims", None) or {}
+    client_id = claims.get("client_id") or getattr(token, "client_id", None)
     if not client_id:
         return "llm-client"
     return _role_by_client_id.get(client_id, "llm-client")
