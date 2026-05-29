@@ -465,33 +465,62 @@ def oauth_login(
     # (needed for the refresh flow).
     token["client_id"] = client_id
 
-    # Decode the id_token (if Authentik returned one) for human-readable
-    # user info. Safe to skip verification — the token was minted server-
-    # side by mcp.blender.bet, which already validated upstream identity
-    # before issuing it, AND we only use the claims for display purposes
-    # (no privilege is granted based on them). Failure here is non-fatal:
-    # caller renders without user info if the dict keys are missing.
-    id_token = token.get("id_token")
-    if id_token:
-        try:
-            parts = id_token.split(".")
-            if len(parts) == 3:
-                payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
-                claims = json.loads(base64.urlsafe_b64decode(payload_b64))
-                # preferred_username is usually the short login; name is the
-                # display name; email is self-explanatory. Pick the best
-                # available per the OIDC spec's conventions.
-                token["user_display_name"] = (
-                    claims.get("name")
-                    or claims.get("preferred_username")
-                    or claims.get("email")
-                    or ""
-                )
-                token["user_email"] = claims.get("email") or ""
-                token["user_preferred_username"] = claims.get("preferred_username") or ""
-        except Exception as e:
-            print(f"[oauth_pkce] id_token decode failed (non-fatal): {e}")
+    # Extract user-display claims. Try two sources in order:
+    #
+    #   1. id_token in the /token response (if the IdP returned one AND
+    #      the OAuth gateway didn't strip it — many OAuth-proxy gateways
+    #      including FastMCP's OAuthProxy use Pydantic models that drop
+    #      non-spec fields, so id_token gets eaten before reaching us).
+    #
+    #   2. access_token's `upstream_claims` payload field (if the gateway
+    #      embedded OIDC claims there — for FastMCP, this requires
+    #      OIDCProxy._extract_upstream_claims to be overridden server-side
+    #      to decode the upstream id_token and return its claims).
+    #
+    # Safe to skip signature verification — the access_token was minted by
+    # the OAuth server which already validated upstream identity, AND we
+    # only use the claims for display (no privilege granted from them).
+    # Failure here is non-fatal: caller renders the legacy "Logged in via
+    # OAuth" label when dict keys are missing.
+    claims = _decode_jwt_payload(token.get("id_token"))
+    if not claims:
+        # Fall back: look in access_token's upstream_claims (FastMCP path).
+        ac = _decode_jwt_payload(token.get("access_token"))
+        if ac:
+            claims = ac.get("upstream_claims") or {}
+    if claims:
+        # preferred_username is usually the short login; name is the
+        # display name; email is self-explanatory. Pick the best
+        # available per OIDC's conventions.
+        token["user_display_name"] = (
+            claims.get("name")
+            or claims.get("preferred_username")
+            or claims.get("email")
+            or ""
+        )
+        token["user_email"] = claims.get("email") or ""
+        token["user_preferred_username"] = claims.get("preferred_username") or ""
     return token
+
+
+def _decode_jwt_payload(jwt_str):
+    """Decode the payload segment of a JWT (no signature verification).
+
+    Returns the parsed dict or None on any failure. Used to read display
+    claims from id_tokens or wrapped access_tokens — no auth decisions
+    are made from the result.
+    """
+    if not jwt_str:
+        return None
+    try:
+        parts = jwt_str.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception as e:
+        print(f"[oauth_pkce] JWT payload decode failed (non-fatal): {e}")
+        return None
 
 
 def refresh_oauth_token(
