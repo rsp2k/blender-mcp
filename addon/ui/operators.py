@@ -25,6 +25,23 @@ from ..identity import StickyUUIDManager
 from ..preferences import get_client_label, get_prefs, get_server_base_url
 
 
+def _tag_panel_redraw() -> None:
+    """Mark the BlenderMCP sidebar panel as needing a redraw.
+
+    Used to push state-flag updates (auth in-flight, dots animation)
+    onto the panel immediately rather than waiting for the user to
+    move the mouse over it. Safe to call from worker threads — bpy
+    .types.AREA.tag_redraw is thread-safe per Blender's docs.
+    """
+    try:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass  # Best-effort — Blender may not be fully bootstrapped.
+
+
 class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
     """Probe the configured server's /health endpoint and report status.
 
@@ -100,6 +117,11 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
         # Thread state — stored on the module so the timer callback can read.
         state._oauth_result = None
         state._oauth_error = None
+        # Spinner flag for the panel — flipped False below by _poll() on
+        # completion (success or error).
+        state._auth_in_progress = True
+        state._auth_dots = 0
+        _tag_panel_redraw()
 
         def _worker():
             try:
@@ -116,7 +138,15 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
 
         def _poll():
             if state._oauth_result is None and state._oauth_error is None:
+                # Animate dots while still polling. Cycle 1 → 2 → 3 → 1...
+                # Drives a panel redraw which re-reads state._auth_dots for
+                # the visible "Authenticating..." indicator.
+                state._auth_dots = (state._auth_dots + 1) % 3
+                _tag_panel_redraw()
                 return 0.5  # keep polling
+            # Terminal — clear in-flight flag so the spinner disappears.
+            state._auth_in_progress = False
+            _tag_panel_redraw()
             if state._oauth_error:
                 print(f"[BlenderMCP] OAuth login failed: {state._oauth_error}")
                 state._oauth_error = None
@@ -136,6 +166,37 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
                 f"[BlenderMCP] OAuth login complete; access token expires in "
                 f"{expires_in}s, client_id={prefs_now.oauth_client_id}"
             )
+
+            # CRITICAL: tear down any existing client BEFORE auto-Connect.
+            # BlenderMCPClient captures jwt_token as an instance attribute at
+            # construction time; an existing state._client carries the OLD
+            # token and start_server() reuses it (per ``if state._client is
+            # None``). So re-Login without nuking the client would attempt
+            # to connect with the stale JWT, hit 401, and bounce right back
+            # to the fatal-error banner — making the Re-login button look
+            # broken. Stop + None forces start_server to build a fresh
+            # BlenderMCPClient with the newly-persisted prefs.jwt_token.
+            if state._client is not None:
+                try:
+                    state._client.stop()
+                except Exception as exc:
+                    print(f"[BlenderMCP] Error stopping stale client pre-Connect: {exc}")
+                state._client = None
+            try:
+                bpy.context.scene.blendermcp_server_running = False
+            except Exception:
+                pass
+
+            # Auto-Connect: nobody logs in WITHOUT wanting to connect, and the
+            # two-click sequence (Login → wait → Connect) was just friction.
+            # Use EXEC_DEFAULT (not INVOKE_DEFAULT) — no UI prompts needed,
+            # the operator's execute() reads everything from prefs.
+            try:
+                bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+            except RuntimeError as exc:
+                # Operator poll() or context-mismatch failure — leave the
+                # user a manual Connect button as fallback.
+                print(f"[BlenderMCP] Auto-Connect failed: {exc} — click Connect manually")
             return None  # unregister timer
 
         bpy.app.timers.register(_poll, first_interval=0.5)
@@ -185,6 +246,65 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         prefs.oauth_client_id = ""
 
         self.report({'INFO'}, "Logged out")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ReLogin(bpy.types.Operator):
+    """Explicit Logout-then-Login. The fatal-error banner's recovery path.
+
+    1.5.3's banner pointed Re-login directly at blendermcp.oauth_login. That
+    SHOULD have worked (oauth_login writes fresh tokens to prefs, then auto-
+    Connect creates a fresh BlenderMCPClient) but in practice users still
+    had to manually Logout + Login. Rather than debug why the optimized
+    path silently fails (race? operator-from-timer context? Blender redraw
+    timing?), this operator just does what the manual sequence does:
+    Logout, then Login. Slower by one server-side revoke roundtrip, but
+    matches the flow the user has already proven works.
+    """
+
+    bl_idname = "blendermcp.re_login"
+    bl_label = "Re-login"
+    bl_description = "Clear current credentials and start a fresh OAuth flow"
+
+    def execute(self, context):
+        # 1. Full Logout — disconnect, revoke server-side, clear prefs.
+        try:
+            bpy.ops.blendermcp.logout('EXEC_DEFAULT')
+        except RuntimeError as exc:
+            print(f"[BlenderMCP] Re-login: Logout step failed: {exc}")
+
+        # 2. Clear the fatal-error banner explicitly. Logout doesn't touch
+        # it (it's transient client state, not auth state) but a Re-login
+        # click is an unambiguous "I've acknowledged the error" signal.
+        if state._client is not None:
+            state._client.fatal_error = None
+
+        # 3. Fresh Login (which auto-Connects per 1.5.3).
+        try:
+            bpy.ops.blendermcp.oauth_login('EXEC_DEFAULT')
+        except RuntimeError as exc:
+            self.report({'ERROR'}, f"Login step failed: {exc}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DismissFatalError(bpy.types.Operator):
+    """Clear the fatal-error banner from the sidebar.
+
+    Doesn't change auth state — only hides the visual banner. Useful when
+    the user has acknowledged the error and wants to deal with it later.
+    Re-Login (which also sets `fatal_error = None` implicitly via the
+    re-Connect path) is the recommended action; this is the "I'll handle
+    it" escape hatch.
+    """
+
+    bl_idname = "blendermcp.dismiss_fatal_error"
+    bl_label = "Dismiss"
+    bl_description = "Hide the fatal-error banner (auth state unchanged)"
+
+    def execute(self, context):
+        if state._client is not None:
+            state._client.fatal_error = None
         return {'FINISHED'}
 
 

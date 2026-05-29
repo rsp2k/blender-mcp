@@ -81,12 +81,36 @@ def draw_login_section(layout, prefs):
     is read from ``prefs`` (the AddonPreferences instance); the operators
     (``blendermcp.oauth_login`` / ``blendermcp.logout``) drive everything
     write-side, so the UI stays purely declarative.
+
+    Auth-in-flight state (1.5.8): when ``state._auth_in_progress`` is True
+    (OAuth worker thread started, browser open, awaiting callback) we render
+    a spinner widget instead of the regular Login button. Disabling the
+    button while in flight prevents double-click races.
     """
+    # Lazy import to avoid a hot circular at module-load time
+    # (state ← bus_client ← preferences via get_client_label).
+    from . import state as _state
+
     has_jwt = bool(prefs.jwt_token)
     is_oauth = bool(prefs.oauth_client_id)
 
     box = layout.box()
-    if has_jwt:
+    if getattr(_state, "_auth_in_progress", False):
+        # In-flight spinner — animated dots are driven by the operator's
+        # poll() timer mutating state._auth_dots every 500ms.
+        dots = "." * (getattr(_state, "_auth_dots", 0) + 1)
+        col = box.column(align=True)
+        col.label(text=f"Authenticating{dots}", icon='TIME')
+        col.label(text="Complete sign-in in browser", icon='URL')
+        # Disabled button — visual cue that double-clicks are no-ops.
+        sub = col.row(align=True)
+        sub.enabled = False
+        sub.operator(
+            "blendermcp.oauth_login",
+            text="Login with OAuth (browser)",
+            icon='URL',
+        )
+    elif has_jwt:
         method = "OAuth (browser)" if is_oauth else "password (legacy)"
         row = box.row(align=True)
         row.label(text=f"Logged in via {method}", icon='CHECKMARK')

@@ -39,6 +39,25 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             box.label(text="  python -m pip install fastmcp")
             return  # Everything below depends on fastmcp.
 
+        # --- Fatal-error banner — surface auth-fatal failures prominently.
+        # The bus_client sets `fatal_error` when it gives up (e.g. 401 from
+        # the bus server, meaning the JWT is unrecoverable). It also clears
+        # prefs.jwt_token in that case, so the Login section below will show
+        # the un-authed state. The banner here gives the user the WHY and
+        # an obvious next action.
+        client = state._client
+        if client is not None and client.fatal_error:
+            box = layout.box()
+            box.alert = True  # Blender's native red-tinted alert state
+            box.label(text=client.fatal_error, icon='ERROR')
+            row = box.row(align=True)
+            row.operator("blendermcp.re_login", text="Re-login", icon='URL')
+            # Dismiss clears the banner without taking action — useful when
+            # the user has already moved on (e.g. tested a different server).
+            row.operator(
+                "blendermcp.dismiss_fatal_error", text="Dismiss", icon='X',
+            )
+
         # --- Login / Logout (shared widget with prefs panel) ---
         draw_login_section(layout, prefs)
 

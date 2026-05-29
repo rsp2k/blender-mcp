@@ -81,7 +81,14 @@ class BlenderMCPClient:
         self.thread: Optional[threading.Thread] = None
         self.running = False
         self.connected = False
+        # last_error: transient error from the most recent attempt; cleared
+        # on successful registration. Surfaced as "Last error: ..." (truncated)
+        # in the panel — not actionable by itself.
+        # fatal_error: terminal failure that stopped the worker (auth-fatal,
+        # config mistake). Panel surfaces this prominently with a Login button.
+        # Cleared by the user clicking Login or Dismiss.
         self.last_error: Optional[str] = None
+        self.fatal_error: Optional[str] = None
         # Set by _refresh_watcher to signal that _run should tear down the
         # current FastMCP Client and reopen with the rotated JWT. Cleared
         # after reconnect completes.
@@ -291,11 +298,14 @@ class BlenderMCPClient:
     async def _run(self) -> None:
         """Connect, register, subscribe to log notifications, await stop.
 
-        Outer loop reconnects on JWT rotation: ``_refresh_watcher`` sets
-        ``_rotate_requested`` after refreshing the access token, causing
-        the inner ``async with`` to exit cleanly and re-enter with the new
-        bearer. Each reconnect re-registers the same client UUID, which the
-        bus treats as an idempotent overwrite.
+        Outer loop reconnects on:
+          - JWT rotation (``_rotate_requested`` set by ``_refresh_watcher``)
+          - Transient connection failure (server restart, network blip)
+        with exponential backoff (1s → 30s cap), reset to 1s on every
+        successful registration. Auth-fatal errors (401/403/Unauthorized
+        in the exception text) skip the retry loop and exit so the user
+        knows to re-Login — burning CPU against a token that will never
+        be accepted is worse than failing visibly.
 
         Before the very first connect, if the stored JWT is past (or near)
         its expiry but a refresh_token is on hand, rotate proactively. This
@@ -311,6 +321,8 @@ class BlenderMCPClient:
                 if not await self._do_refresh_once():
                     return  # last_error already set + printed
 
+        backoff = 1.0
+        BACKOFF_MAX = 30.0
         refresh_task: Optional[asyncio.Task] = None
         try:
             while self.running:
@@ -350,11 +362,16 @@ class BlenderMCPClient:
                                 reg_args["bus_id"] = self.bus_id
                             await client.call_tool("blender_register_client", reg_args)
                             self.connected = True
+                            backoff = 1.0  # successful registration → reset backoff
+                            self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
                         except Exception as e:
+                            # Register failed but transport is up. Fall through
+                            # to the outer except via a raise — same backoff +
+                            # reconnect logic handles both.
                             self.last_error = f"register_client failed: {e}"
                             print(f"[BlenderMCP] {self.last_error}")
-                            return
+                            raise
 
                         # Start the refresh watcher (only one — it runs across
                         # the lifetime of the BlenderMCPClient, not per-reconnect).
@@ -379,10 +396,77 @@ class BlenderMCPClient:
                 except Exception as e:
                     self.last_error = f"Connection failed: {e}"
                     print(f"[BlenderMCP] {self.last_error}")
-                    return
+
+                    # 401 paths split into three cases:
+                    #   (a) JWT chronologically expired — _refresh_watcher
+                    #       missed the window. Refresh will succeed.
+                    #   (b) JTI mapping wiped by server restart — JWT is
+                    #       still time-valid but server has no record. Refresh
+                    #       will succeed (refresh_tokens are persisted differently).
+                    #   (c) Refresh token ALSO dead — user genuinely needs re-Login.
+                    # Strategy: try refresh first; only go fatal if refresh
+                    # also fails (case c). The chronological pre-connect check
+                    # at the top of _run() only catches case (a); this catches
+                    # (b) too, which is the common "I restarted Blender after
+                    # the prod server bounced" scenario.
+                    msg = str(e).lower()
+                    is_auth_error = any(
+                        s in msg for s in ("401", "403", "unauthorized", "invalid_token")
+                    )
+                    if is_auth_error and self.refresh_token:
+                        print("[BlenderMCP] 401 on connect — trying refresh before giving up")
+                        if await self._do_refresh_once():
+                            print("[BlenderMCP] Refresh succeeded; reconnecting with new token")
+                            # Skip backoff sleep — we have a fresh token, retry now.
+                            backoff = 1.0
+                            self.last_error = None
+                            continue  # outer while: next iteration uses new self.jwt_token
+                        # Refresh failed → fall through to fatal path below.
+                        print("[BlenderMCP] Refresh also failed — going fatal")
+
+                    if is_auth_error:
+                        print("[BlenderMCP] Auth failure — stopping retries; please re-Login")
+                        self.fatal_error = (
+                            "Authentication failed — your session is no longer valid. "
+                            "Click Login to re-authenticate."
+                        )
+                        # Clear stored JWT so the Login section flips back to
+                        # "Not logged in" and the user has an obvious next action.
+                        # Bus client worker thread — bpy property writes from
+                        # background threads work for AddonPreferences StringProperty
+                        # (no mesh/scene mutation), per the convention already used
+                        # by _persist_rotated_jwt_to_prefs above.
+                        try:
+                            from ..preferences import get_prefs
+                            prefs = get_prefs()
+                            prefs.jwt_token = ""
+                            prefs.refresh_token = ""
+                            prefs.jwt_expires_at = "0"
+                        except Exception as exc:
+                            print(f"[BlenderMCP] Could not clear stale JWT from prefs: {exc}")
+                        self.running = False
+                        return
                 finally:
                     self.connected = False
                     self.client = None
+
+                if not self.running:
+                    break
+                # Reconnect path — sleep with exponential backoff, then loop.
+                # _rotate_requested takes precedence: if the watcher rotated
+                # the JWT mid-failure, skip the backoff and reconnect now.
+                if self._rotate_requested:
+                    print("[BlenderMCP] Reconnecting with rotated JWT")
+                else:
+                    print(f"[BlenderMCP] Reconnecting in {backoff:.0f}s")
+                    sleep_remaining = backoff
+                    # Sleep in 0.5s chunks so stop() takes effect promptly
+                    # without making the user wait for the full backoff.
+                    while sleep_remaining > 0 and self.running:
+                        chunk = min(0.5, sleep_remaining)
+                        await asyncio.sleep(chunk)
+                        sleep_remaining -= chunk
+                    backoff = min(backoff * 2, BACKOFF_MAX)
 
                 if self._rotate_requested and self.running:
                     print(f"[BlenderMCP] Reconnecting with rotated JWT (exp={self.jwt_expires_at})")

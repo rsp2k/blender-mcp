@@ -6,21 +6,32 @@ the authoritative entry point. The top-level `addon.py` survives as a
 works; users who prefer the directory layout install this package
 directly (zip the addon/ folder).
 
-The bl_info dict below is a literal (Blender parses it via AST without
-importing the module), so the version tuple is duplicated between
-``addon/_version.py`` and the manifest. Quick consistency check::
+The bl_info dict below MUST be a literal — Blender's addon enumeration
+uses ``ast.literal_eval`` on the right-hand side to populate the
+Preferences > Add-ons list WITHOUT importing the module (safety: don't
+run arbitrary code to list addons). ``literal_eval`` rejects imported
+names like ``tuple_version`` with ValueError, so the version tuple is
+duplicated across ``addon.py``, ``addon/__init__.py``, and
+``addon/_version.py``. Verified by experiment (5-line ast.literal_eval
+probe — see commit history). No DRY workaround exists short of code
+generation; the bump script below is the chosen mitigation.
 
 (Note: any line starting with "bl_info" at column zero confuses
 Blender's _fake_module speedy line-extractor — it will think the line
 is the start of the manifest and try to ast.parse subsequent prose
 lines as Python. Keep that token off the left margin in this docstring.)
 
-::
+To bump the version across all three files atomically, use::
+
+    scripts/bump_addon_version.py patch    # 1.5.6 → 1.5.7
+    scripts/bump_addon_version.py minor    # 1.5.6 → 1.6.0
+    scripts/bump_addon_version.py 1.7.2    # exact
+
+The script verifies the three files agree before writing, so drift
+gets caught immediately. To audit by hand::
 
     grep -hE '"version": \\(' addon.py addon/__init__.py
     grep -E '__version__' addon/_version.py
-
-These three must agree.
 
 **Why register/unregister do their bpy imports lazily:** the addon
 package is imported in non-Blender contexts (tests, Gate E, Gate G
@@ -37,7 +48,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 1),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 5, 8),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -120,6 +131,31 @@ def register():
                     delattr(bpy.types.Scene, prop)
     except Exception as e:
         print(f"[BlenderMCP] Migration warning (non-fatal): {e}")
+
+    # Clear stored auth on every addon register. Trade-off: user clicks
+    # Login once per Blender session (browser consent + one Allow click)
+    # in exchange for never seeing the stale-JWT-after-restart confusion
+    # that the in-server JTI mapping can't survive a server restart of.
+    # The addon's reconnect/refresh logic can usually recover (since
+    # 1.5.4), but "Connect button does nothing visible" is a worse UX
+    # than "Click Login first." Predictable beats clever.
+    #
+    # Edge case: this also wipes auth when the user disables + re-enables
+    # the addon mid-session. Rare; acceptable trade.
+    try:
+        from .preferences import get_prefs
+        prefs_now = get_prefs()
+        if prefs_now.jwt_token:
+            print("[BlenderMCP] Clearing stored auth on addon load — click Login to re-authenticate")
+            prefs_now.jwt_token = ""
+            prefs_now.refresh_token = ""
+            prefs_now.jwt_expires_at = ""
+            prefs_now.oauth_client_id = ""
+    except Exception as e:
+        # Non-fatal: register() shouldn't fail because we couldn't clear
+        # prefs. Worst case, the user sees stale auth and falls back to
+        # the (now-working) Re-login flow.
+        print(f"[BlenderMCP] Auth clear at register failed (non-fatal): {e}")
 
     print(f"[BlenderMCP] Addon v{__version__} registered")
     if not FASTMCP_AVAILABLE:

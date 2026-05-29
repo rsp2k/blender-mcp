@@ -7,14 +7,21 @@
 # layout is documented in the project's git history (commit
 # 8651fdb..HEAD on branch refactor/addon-modularize).
 #
-# bl_info MUST be a literal dict at module scope (Blender parses it
-# without importing the module). It mirrors addon/__init__.py:bl_info;
-# the two are kept in sync manually + verified by a grep check.
+# bl_info MUST be a literal dict at module scope. Blender's addon
+# enumeration uses ast.literal_eval on the right-hand side of the
+# bl_info assignment to populate the Preferences > Add-ons list WITHOUT
+# importing the module (safety: don't run arbitrary code to list
+# addons). literal_eval only accepts pure data literals — imported
+# names like `tuple_version` raise ValueError. Verified by writing a
+# 5-line probe; see commit history for the experiment. Bottom line:
+# the version tuple has to be a literal here, mirrored from
+# addon/__init__.py and addon/_version.py. Use scripts/bump_addon_version.py
+# to bump all three atomically.
 
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 1),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 5, 8),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
