@@ -193,6 +193,16 @@ def build_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         # Chain to FastMCP's own lifespan (sets up its session manager).
         async with mcp_asgi.lifespan(app):
+            # Rehydrate the in-memory role registry from Postgres so
+            # client_id→role attributions survive server restarts.
+            # Best-effort: failure (e.g. DB unreachable at boot) is
+            # logged and skipped — the registry will rebuild on the
+            # next DCR event.
+            from .client_role import rehydrate_from_db
+            try:
+                await rehydrate_from_db()
+            except Exception as e:
+                logger.warning("Role rehydration at startup failed: %s", e)
             yield
 
     app = FastAPI(

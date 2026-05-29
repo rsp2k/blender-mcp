@@ -197,3 +197,36 @@ class BusInvitation(Base):
     __table_args__ = (
         Index("ix_bus_invitation_code", "code"),
     )
+
+
+class OAuthClientRole(Base):
+    """Persisted ``client_id → role`` map for role attribution.
+
+    Mirror of the in-memory ``client_role._role_by_client_id`` dict. The
+    DCR-capture middleware writes here at /register time; on server startup
+    a rehydration hook does ``SELECT * FROM oauth_client_role`` and primes
+    the in-memory cache.
+
+    Why both DB + cache: ``get_caller_role`` is called from sync code paths
+    inside @require_role and check_role_or_reject. Making it async would
+    cascade through every gated tool. Keeping the in-memory dict for the
+    fast path + rehydrating from DB on startup gives us restart-survives
+    without changing the call-site API.
+
+    No FK to anything — client_id is owned by FastMCP's OAuthProxy state
+    (which lives in the auto-created oauth_kv_store table, ALSO not in
+    Alembic's metadata). If a DCR record is deleted upstream the role row
+    becomes orphaned but harmless; cleanup is a future cron concern.
+    """
+
+    __tablename__ = "oauth_client_role"
+
+    client_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Captured from the DCR request for audit / debugging. Same value
+    # used to derive the role; stored separately so we can re-derive roles
+    # later if the software_id→role map changes.
+    software_id: Mapped[str | None] = mapped_column(String(128))
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )

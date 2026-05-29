@@ -36,6 +36,20 @@ if db_url:
 
 target_metadata = Base.metadata
 
+# Tables owned by external libraries that live in the same DB but aren't
+# part of our SQLAlchemy models. Autogenerate would otherwise try to drop
+# them on every revision (FastMCP's PostgreSQLStore auto-creates these).
+_EXTERNALLY_MANAGED_TABLES = {
+    "oauth_kv_store",  # FastMCP OIDCProxy persistence (JTI, refresh, DCR, ...)
+}
+
+
+def _include_object(obj, name, type_, reflected, compare_to):
+    """Exclude externally-managed tables from autogenerate."""
+    if type_ == "table" and name in _EXTERNALLY_MANAGED_TABLES:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     """Render SQL without an actual DB connection (for review/audit)."""
@@ -45,6 +59,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -58,7 +73,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=_include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

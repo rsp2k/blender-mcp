@@ -67,6 +67,11 @@ def record_client_role(client_id: str, software_id: Optional[str]) -> str:
     Returns the role that was recorded (for logging convenience). Unknown
     software_id values get recorded as ``llm-client`` so the registry is
     always consulted-once-and-done.
+
+    Writes through to Postgres (fire-and-forget) so attribution survives
+    server restarts. The in-memory dict is the authoritative fast path
+    during the running process; DB persistence is just for restart-
+    survival. DB write failures are logged and swallowed.
     """
     role = _SOFTWARE_ID_TO_ROLE.get(software_id or "", "llm-client")
     _role_by_client_id[client_id] = role
@@ -74,7 +79,73 @@ def record_client_role(client_id: str, software_id: Optional[str]) -> str:
         "DCR: client_id=%s registered as role=%s (software_id=%r)",
         client_id, role, software_id,
     )
+    _schedule_db_persist(client_id, role, software_id)
     return role
+
+
+# ----- Postgres persistence (restart-survival) --------------------------
+
+
+def _schedule_db_persist(client_id: str, role: str, software_id: Optional[str]) -> None:
+    """Fire-and-forget upsert into oauth_client_role.
+
+    Imports inside the function to avoid pulling storage at module-load
+    time (this module is imported during app build, before the storage
+    engine is necessarily initialized). DB unavailable → log + swallow;
+    the in-memory dict remains authoritative for the current process.
+    """
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Not inside an event loop (synchronous test path). Skip silently.
+        return
+    loop.create_task(_db_persist(client_id, role, software_id))
+
+
+async def _db_persist(client_id: str, role: str, software_id: Optional[str]) -> None:
+    try:
+        from sqlalchemy.dialects.postgresql import insert
+
+        from .storage import OAuthClientRole, get_session
+
+        stmt = insert(OAuthClientRole).values(
+            client_id=client_id, role=role, software_id=software_id,
+        ).on_conflict_do_update(
+            index_elements=["client_id"],
+            set_={"role": role, "software_id": software_id},
+        )
+        async with get_session() as s:
+            await s.execute(stmt)
+    except Exception as e:
+        logger.warning(
+            "Could not persist client role to DB (client_id=%s): %s",
+            client_id, e,
+        )
+
+
+async def rehydrate_from_db() -> int:
+    """Load all (client_id, role) rows from Postgres into the cache.
+
+    Called once at FastAPI lifespan startup. Returns the number of entries
+    loaded (for logging). Safe to call multiple times — overwrites the
+    cache idempotently.
+    """
+    try:
+        from sqlalchemy import select
+
+        from .storage import OAuthClientRole, get_session
+
+        async with get_session() as s:
+            rows = (await s.execute(select(OAuthClientRole))).scalars().all()
+        for row in rows:
+            _role_by_client_id[row.client_id] = row.role
+        logger.info("Role registry rehydrated from DB: %d entries", len(rows))
+        return len(rows)
+    except Exception as e:
+        logger.warning("Role registry rehydration skipped: %s", e)
+        return 0
 
 
 def get_caller_role(ctx: Any = None) -> str:

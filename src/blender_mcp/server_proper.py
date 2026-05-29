@@ -35,6 +35,40 @@ from .prompts_component import BlenderPromptsComponent
 logger = logging.getLogger(__name__)
 
 
+def _build_oauth_storage():
+    """Build a Postgres-backed AsyncKeyValue store for OIDCProxy state.
+
+    Replaces FastMCP's default encrypted FileTreeStore so that all of
+    OIDCProxy's internal state — client registrations, transactions,
+    auth codes, JTI→upstream mappings, refresh tokens, upstream tokens
+    — survives server restarts. Before this, every redeploy invalidated
+    every issued JWT (JTI mapping wipe), forcing every user to re-Login.
+
+    Returns None if DATABASE_URL is unset — fall back to FastMCP's default
+    file store, which is fine for stdio / local-dev / inmemory backends.
+
+    Lazy setup: the store creates its kv_store table on first read/write
+    via the BaseStore._setup hook, so we can construct it here without an
+    event loop. Auto-create coexists with our Alembic-managed schema by
+    living in a different table name; Alembic should be configured to
+    ignore kv_store via include_object in env.py.
+    """
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        logger.info("Auth storage: no DATABASE_URL — falling back to encrypted file store")
+        return None
+
+    # PostgreSQLStore uses asyncpg directly; strip any sqlalchemy driver
+    # suffix that bus_repo's engine config might have added.
+    pg_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
+    pg_url = pg_url.replace("postgresql+psycopg://", "postgresql://")
+
+    from key_value.aio.stores.postgresql import PostgreSQLStore
+
+    logger.info("Auth storage: PostgreSQLStore (kv_store table)")
+    return PostgreSQLStore(url=pg_url, table_name="oauth_kv_store", auto_create=True)
+
+
 def _build_auth_provider() -> AuthProvider | None:
     """Pick + construct the auth provider based on AUTH_BACKEND.
 
@@ -65,6 +99,11 @@ def _build_auth_provider() -> AuthProvider | None:
             require_authorization_consent="external",
             # Per-app issuer in Authentik
             audience=client_id,
+            # Persist OIDCProxy state (JTI mapping, refresh tokens, DCR
+            # client registrations, etc.) to Postgres so server restarts
+            # don't invalidate every issued JWT. Falls back to the default
+            # encrypted file store if DATABASE_URL isn't set (stdio/local).
+            client_storage=_build_oauth_storage(),
             # IMPORTANT: do NOT pass required_scopes. Authentik's access tokens
             # don't carry a `scope` or `scp` claim (those live on the ID token
             # per OIDC spec, not on the OAuth2 access token). If we set
