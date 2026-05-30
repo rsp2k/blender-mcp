@@ -73,11 +73,17 @@ class MessageBus:
     token; the bus itself is just a routing namespace.
     """
 
-    def __init__(self, bus_id, name: str = ""):
+    def __init__(self, bus_id, name: str = "", manager: Optional["BusManager"] = None):
         # bus_id is a uuid.UUID; stored verbatim so log lines + record_extra
         # carry the UUID type (callers can str() at the edge).
         self.bus_id = bus_id
         self.name = name
+        # Back-reference to the global BusManager so register/unregister
+        # can maintain BusManager._session_index — used by the activity
+        # middleware for O(1) session → client_uuid lookup at thousands-
+        # of-clients scale. Optional so MessageBus stays usable in tests
+        # / standalone construction without a manager.
+        self._manager = manager
         self.persistent_clients: dict[str, ClientInfo] = {}
         self.ephemeral_clients: dict[str, ClientInfo] = {}
         self.created_at = time.time()
@@ -100,10 +106,20 @@ class MessageBus:
             if client_info.label is not None:
                 existing.label = client_info.label
             if client_info.session is not None:
+                # Session changed → re-index. Drop the old session's entry
+                # (whatever it was pointing to is stale) and add the new
+                # one. Idempotent if the session is the same object.
+                if self._manager is not None and existing.session is not None and existing.session is not client_info.session:
+                    self._manager.forget_session(existing.session)
                 existing.session = client_info.session
+                if self._manager is not None:
+                    self._manager.index_session(client_info.session, self.bus_id, client_info.uuid)
             self.last_activity = time.time()
             return existing
         bucket[client_info.uuid] = client_info
+        # First-time registration: index the session.
+        if self._manager is not None:
+            self._manager.index_session(client_info.session, self.bus_id, client_info.uuid)
         self.last_activity = time.time()
         logger.info(
             "Registered client %s (%s) on bus %s",
@@ -114,6 +130,9 @@ class MessageBus:
     def unregister(self, client_uuid: str) -> bool:
         removed = self.persistent_clients.pop(client_uuid, None) or self.ephemeral_clients.pop(client_uuid, None)
         if removed:
+            # Drop the session→uuid index entry too.
+            if self._manager is not None and removed.session is not None:
+                self._manager.forget_session(removed.session)
             self.last_activity = time.time()
             logger.info("Unregistered client %s on bus %s", client_uuid, self.bus_id)
         return removed is not None
@@ -205,6 +224,15 @@ class BusManager:
         # uuid.UUID → MessageBus. Stored UUID type (not str) so callers
         # get a single source-of-truth identifier.
         self._buses: dict[Any, MessageBus] = {}
+        # session-identity → (bus_id, client_uuid). Maintained by
+        # MessageBus.register/unregister via the back-reference set in
+        # get_or_create. Lets BusActivityMiddleware do O(1) lookup
+        # instead of iterating all clients across all buses on every
+        # incoming message — critical at thousands-of-clients scale.
+        # Key is id(session) since FastMCP sessions don't expose a stable
+        # hashable id of their own and Python's object id is unique for
+        # the object's lifetime.
+        self._session_index: dict[int, tuple[Any, str]] = {}
 
     def get_or_create(self, bus_id, name: str = "") -> MessageBus:
         """Return the MessageBus for ``bus_id``, creating in-memory state
@@ -217,7 +245,7 @@ class BusManager:
         """
         bus = self._buses.get(bus_id)
         if bus is None:
-            bus = MessageBus(bus_id, name=name)
+            bus = MessageBus(bus_id, name=name, manager=self)
             self._buses[bus_id] = bus
             logger.info("In-memory bus state created for %s (%r)", bus_id, name)
         return bus
@@ -227,6 +255,26 @@ class BusManager:
 
     def all_buses(self) -> dict[Any, MessageBus]:
         return dict(self._buses)
+
+    # ---- session index (O(1) lookup for the middleware) ----
+
+    def index_session(self, session: Any, bus_id: Any, client_uuid: str) -> None:
+        """Record session → (bus_id, client_uuid). Idempotent."""
+        if session is None:
+            return
+        self._session_index[id(session)] = (bus_id, client_uuid)
+
+    def forget_session(self, session: Any) -> None:
+        """Remove a session's index entry. Idempotent."""
+        if session is None:
+            return
+        self._session_index.pop(id(session), None)
+
+    def lookup_session(self, session: Any) -> Optional[tuple[Any, str]]:
+        """Return (bus_id, client_uuid) for the given session, or None."""
+        if session is None:
+            return None
+        return self._session_index.get(id(session))
 
 
 # Module-level singleton.
