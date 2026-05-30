@@ -175,39 +175,30 @@ async def _dispatch(
         import time as _time
         client_info = bus.get(chosen_uuid)
         now = _time.time()
-        # Caveat: `last_seen` only updates on bus-tool activity
-        # (register, route, dispatch replies) — NOT on FastMCP transport-
-        # level pings. Addon's heartbeat keeps the transport alive but
-        # doesn't refresh this counter. So a stale value here doesn't
-        # mean the addon is disconnected — it just means no bus traffic
-        # in a while. 5min threshold is generous enough to tolerate
-        # quiet periods, tight enough to still catch "addon truly gone."
-        # (Follow-up: hook the server-side ping handler to bus.touch
-        # so the heartbeat actually refreshes liveness — see TODO.)
+        # IMPORTANT: ``last_seen`` reflects "last bus activity from this
+        # client" (tool call, dispatch reply, register), NOT transport-
+        # level heartbeat. MCP-SDK pings don't fire FastMCP middleware,
+        # so a stale value here does NOT mean the addon is disconnected
+        # — it just means no bus traffic in a while. Worth reporting
+        # the number for caller context, but the hint should not draw
+        # transport-liveness conclusions from it.
+        # (See bus_activity_middleware docstring for the model gap.)
         if client_info is not None:
             seen_ago = now - client_info.last_seen
-            heartbeat_healthy = seen_ago < 300
-            if heartbeat_healthy:
-                hint = (
-                    f"Bus shows the addon as registered (last bus activity "
-                    f"{seen_ago:.0f}s ago); the {command} call didn't finish "
-                    f"within {timeout:.0f}s. Most common cause: Blender's "
-                    f"main thread is busy with a long bpy operation (heavy "
-                    f"render, scene evaluation on a complex graph, modal "
-                    f"popup). Either wait and retry, raise _timeout, or "
-                    f"simplify the dispatched code. Use Disconnect→Connect "
-                    f"in the addon sidebar to reset if truly wedged."
-                )
-            else:
-                hint = (
-                    f"No bus activity from this client in {seen_ago:.0f}s "
-                    f"(>5min). Either the addon's bus_client disconnected "
-                    f"without unregistering OR there has just been a long "
-                    f"quiet period (the transport-level heartbeat doesn't "
-                    f"update bus.last_seen yet — known limitation). Verify "
-                    f"the addon sidebar Status before assuming disconnect."
-                )
+            hint = (
+                f"Dispatch sent but no reply within {timeout:.0f}s "
+                f"(last bus activity from this client: {seen_ago:.0f}s "
+                f"ago — note: this counter doesn't track transport "
+                f"heartbeat, only bus tool calls and dispatch replies). "
+                f"Most common cause: Blender's main thread is busy with "
+                f"a long bpy operation (heavy render, scene evaluation "
+                f"on a complex graph, modal popup). Either wait and "
+                f"retry, raise _timeout, or simplify the dispatched "
+                f"code. Use Disconnect→Connect in the addon sidebar to "
+                f"reset if the addon Status shows disconnected."
+            )
         else:
+            seen_ago = None
             hint = (
                 "Target client is no longer registered on the bus. The "
                 "addon may have unregistered between dispatch send and "
@@ -218,14 +209,12 @@ async def _dispatch(
             "command": command,
             "target_uuid": chosen_uuid,
             "waited_seconds": timeout,
-            "target_last_seen_seconds_ago": (
-                round(now - client_info.last_seen, 1)
-                if client_info is not None else None
+            # Reports "last bus activity" not "last heartbeat" — see hint.
+            # Caller should not interpret a stale value as "disconnected."
+            "target_last_bus_activity_seconds_ago": (
+                round(seen_ago, 1) if seen_ago is not None else None
             ),
-            "target_heartbeat_healthy": (
-                (now - client_info.last_seen) < 60
-                if client_info is not None else False
-            ),
+            "target_is_registered": client_info is not None,
             "hint": hint,
         })
 
