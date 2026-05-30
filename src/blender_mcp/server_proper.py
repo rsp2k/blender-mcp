@@ -258,13 +258,21 @@ def build_http_mcp() -> FastMCP:
     - Dispatch tools: flat round-trip tools for the 24 addon commands;
       shield MCP clients from job_id correlation and notification-listening
     """
+    # Patch the MCP SDK's _ping_handler so heartbeat pings refresh
+    # bus.last_seen. Must run BEFORE FastMCP("BlenderMCP") because the
+    # underlying Server.__init__ captures the module-level _ping_handler
+    # reference at construction time into its request_handlers dict.
+    # Pings are handled at the SDK protocol layer before FastMCP
+    # middleware fires, so this is the only practical place to hook
+    # transport-level heartbeats — see memory: mcp-pings-skip-middleware.
+    from .ping_touch import install_ping_touch
+    install_ping_touch()
+
     auth_provider = _build_auth_provider()
     server = FastMCP("BlenderMCP", auth=auth_provider)
-    # Refresh bus.last_seen on every incoming MCP message from a
-    # registered client so the addon's heartbeat (1.5.10 transport-level
-    # ping every 30s) actually shows as bus liveness. Without this,
-    # last_seen only updated on register/dispatch-reply paths, and the
-    # bus believed quiet-but-alive clients had disconnected.
+    # Refresh bus.last_seen on every NON-ping incoming message
+    # (CallToolRequest, ListToolsRequest, etc.). Ping path is hooked
+    # separately via install_ping_touch above.
     from .bus_activity_middleware import BusActivityMiddleware
     server.add_middleware(BusActivityMiddleware())
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
