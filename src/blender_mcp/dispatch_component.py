@@ -161,16 +161,60 @@ async def _dispatch(
     except asyncio.TimeoutError:
         job_waiter.cancel(bus_id_str, job_id)
         _pending_jobs.pop(job_id, None)
+        # Enrich the timeout response with the target's liveness info so
+        # the calling LLM can self-diagnose. Without this, every dispatch
+        # failure looks the same — "Blender client didn't reply" — even
+        # when the actual cause varies wildly:
+        #   - Addon long-disconnected (last_seen ages ago)
+        #   - Addon alive (heartbeat fresh) but main thread busy on a
+        #     long render — most common when running heavy bpy ops
+        #   - Addon alive but drainer stuck (rare; needs Disconnect/Connect)
+        # The recency of last_seen disambiguates: heartbeat pings update
+        # it every 30s, so a value >60s ago means the addon's bus_client
+        # is gone, not just slow.
+        import time as _time
+        client_info = bus.get(chosen_uuid)
+        now = _time.time()
+        if client_info is not None:
+            seen_ago = now - client_info.last_seen
+            heartbeat_healthy = seen_ago < 60
+            if heartbeat_healthy:
+                hint = (
+                    f"Heartbeat is healthy (last_seen {seen_ago:.0f}s ago) — "
+                    f"the addon is alive but didn't finish the {command} "
+                    f"call within {timeout:.0f}s. Likely Blender's main thread "
+                    f"is busy with a long bpy operation (renders, scene "
+                    f"evaluation on heavy graphs, modal popups). Either wait "
+                    f"and retry, increase _timeout, or simplify the dispatched "
+                    f"code. Use Disconnect→Connect in the addon sidebar to "
+                    f"reset if truly wedged."
+                )
+            else:
+                hint = (
+                    f"Heartbeat is stale (last_seen {seen_ago:.0f}s ago) — "
+                    f"the addon's bus_client appears to have disconnected. "
+                    f"Check the addon sidebar Status and reconnect if needed."
+                )
+        else:
+            hint = (
+                "Target client is no longer registered on the bus. The "
+                "addon may have unregistered between dispatch send and "
+                "timeout. Verify with blender_list_available_clients."
+            )
         return json.dumps({
             "status": "timeout",
             "command": command,
             "target_uuid": chosen_uuid,
             "waited_seconds": timeout,
-            "hint": (
-                "The Blender client didn't reply within the timeout. The "
-                "addon may be stuck, or the bus delivery dropped. Check the "
-                "Blender system console for tracebacks."
+            "target_last_seen_seconds_ago": (
+                round(now - client_info.last_seen, 1)
+                if client_info is not None else None
             ),
+            "target_heartbeat_healthy": (
+                (now - client_info.last_seen) < 60
+                if client_info is not None else False
+            ),
+            "hint": hint,
         })
 
     return json.dumps({
