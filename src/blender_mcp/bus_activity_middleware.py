@@ -48,14 +48,25 @@ class BusActivityMiddleware(Middleware):
         if session is None:
             return
 
-        # O(1) lookup in the manager's session index. Returns
-        # (bus_id, client_uuid) or None if the session isn't registered
-        # to any client (anonymous request, pre-register_client probe,
-        # etc.).
+        # Primary path: O(1) lookup in the manager's session index.
+        # Returns (bus_id, client_uuid) populated at register/unregister
+        # time. Works at thousands-of-clients scale.
         indexed = bus_manager.lookup_session(session)
-        if indexed is None:
+        if indexed is not None:
+            bus_id, client_uuid = indexed
+            bus = bus_manager.all_buses().get(bus_id)
+            if bus is not None:
+                bus.touch(client_uuid)
             return
-        bus_id, client_uuid = indexed
-        bus = bus_manager.all_buses().get(bus_id)
-        if bus is not None:
-            bus.touch(client_uuid)
+
+        # Fallback: O(N) iteration. Fires when register_client stored a
+        # different session object than what the middleware sees here
+        # (e.g. FastMCP wraps the session differently in tool-call
+        # contexts vs middleware contexts). When this path lands, we
+        # auto-correct by populating the index for next time.
+        for bus in bus_manager.all_buses().values():
+            for client in bus.all_clients():
+                if client.session is session:
+                    bus.touch(client.uuid)
+                    bus_manager.index_session(session, bus.bus_id, client.uuid)
+                    return
