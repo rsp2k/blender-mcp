@@ -28,7 +28,24 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 
 class BusActivityMiddleware(Middleware):
-    """Touch bus.last_seen on every incoming message from a registered client."""
+    """Touch bus.last_seen on every incoming message from a registered client.
+
+    KNOWN LIMITATION (verified empirically 2026-05-30): MCP-SDK
+    PingRequests do NOT fire ``on_message``. They're handled at the
+    protocol layer before FastMCP middleware sees them. So the addon's
+    30s heartbeat ping does NOT refresh ``last_seen`` through this
+    middleware. Only "real" traffic (tool calls, list_tools, etc.) does.
+
+    Practical effect: ``last_seen`` reflects "client did something
+    useful via the bus recently", not "transport is alive." A quiet but
+    healthy addon's last_seen will age out between dispatches. Code
+    consuming this signal (e.g. the dispatch timeout hint) must not
+    conflate the two.
+
+    A separate hook would be needed to update last_seen on transport
+    pings — possibly subclassing FastMCP's ServerSession or finding a
+    different middleware tier. Queued as a TODO.
+    """
 
     async def on_message(self, context: MiddlewareContext, call_next: CallNext) -> Any:
         self._touch_for_session(context)
