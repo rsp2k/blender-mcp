@@ -175,28 +175,34 @@ async def _dispatch(
         import time as _time
         client_info = bus.get(chosen_uuid)
         now = _time.time()
-        # IMPORTANT: ``last_seen`` reflects "last bus activity from this
-        # client" (tool call, dispatch reply, register), NOT transport-
-        # level heartbeat. MCP-SDK pings don't fire FastMCP middleware,
-        # so a stale value here does NOT mean the addon is disconnected
-        # — it just means no bus traffic in a while. Worth reporting
-        # the number for caller context, but the hint should not draw
-        # transport-liveness conclusions from it.
-        # (See bus_activity_middleware docstring for the model gap.)
+        # ``last_seen`` is now a real transport-liveness signal: the
+        # patched _ping_handler (see ping_touch.py) refreshes it on
+        # every addon heartbeat (~30s). Combined with bus-tool activity
+        # via BusActivityMiddleware, anything <60s ago = transport
+        # confirmed alive within the last heartbeat window.
         if client_info is not None:
             seen_ago = now - client_info.last_seen
-            hint = (
-                f"Dispatch sent but no reply within {timeout:.0f}s "
-                f"(last bus activity from this client: {seen_ago:.0f}s "
-                f"ago — note: this counter doesn't track transport "
-                f"heartbeat, only bus tool calls and dispatch replies). "
-                f"Most common cause: Blender's main thread is busy with "
-                f"a long bpy operation (heavy render, scene evaluation "
-                f"on a complex graph, modal popup). Either wait and "
-                f"retry, raise _timeout, or simplify the dispatched "
-                f"code. Use Disconnect→Connect in the addon sidebar to "
-                f"reset if the addon Status shows disconnected."
-            )
+            heartbeat_healthy = seen_ago < 60
+            if heartbeat_healthy:
+                hint = (
+                    f"Addon heartbeat is alive (last seen {seen_ago:.0f}s "
+                    f"ago) — transport is fine. The {command} call didn't "
+                    f"finish within {timeout:.0f}s. Most common cause: "
+                    f"Blender's main thread is busy with a long bpy "
+                    f"operation (heavy render, scene evaluation on a "
+                    f"complex graph, modal popup). Either wait and retry, "
+                    f"raise _timeout, or simplify the dispatched code. "
+                    f"Use Disconnect→Connect in the addon sidebar to "
+                    f"reset if truly wedged."
+                )
+            else:
+                hint = (
+                    f"No traffic from this client in {seen_ago:.0f}s "
+                    f"(>1min — heartbeat should fire every 30s). The "
+                    f"addon's bus_client transport may have dropped "
+                    f"without unregistering. Check the addon sidebar "
+                    f"Status and reconnect if needed."
+                )
         else:
             seen_ago = None
             hint = (
@@ -209,12 +215,12 @@ async def _dispatch(
             "command": command,
             "target_uuid": chosen_uuid,
             "waited_seconds": timeout,
-            # Reports "last bus activity" not "last heartbeat" — see hint.
-            # Caller should not interpret a stale value as "disconnected."
-            "target_last_bus_activity_seconds_ago": (
+            "target_last_seen_seconds_ago": (
                 round(seen_ago, 1) if seen_ago is not None else None
             ),
-            "target_is_registered": client_info is not None,
+            "target_heartbeat_healthy": (
+                seen_ago < 60 if seen_ago is not None else False
+            ),
             "hint": hint,
         })
 
