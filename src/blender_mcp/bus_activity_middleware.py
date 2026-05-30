@@ -12,10 +12,12 @@ This middleware fires on every incoming MCP message (ping, tool call,
 notification, anything) and touches the corresponding bus client's
 ``last_seen``. Now the heartbeat actually refreshes liveness.
 
-Lookup is by session identity: each ``ClientInfo`` stores its FastMCP
-session reference at register-time, so we iterate registered clients
-and match by ``is``-comparison. O(N) where N is total clients across
-all buses. With single-digit clients per user, that's nothing.
+Lookup is **O(1)** via ``BusManager._session_index`` (a dict keyed by
+``id(session)`` populated at register/unregister time). Per-message
+overhead is one hash lookup and one float assignment regardless of how
+many clients are registered — important at the planned thousands-of-
+clients scale where the prior O(N) cross-bus scan would have added
+noticeable per-message cost.
 """
 
 from __future__ import annotations
@@ -46,8 +48,14 @@ class BusActivityMiddleware(Middleware):
         if session is None:
             return
 
-        for bus in bus_manager.all_buses().values():
-            for client in bus.all_clients():
-                if client.session is session:
-                    bus.touch(client.uuid)
-                    return  # one client per session — done
+        # O(1) lookup in the manager's session index. Returns
+        # (bus_id, client_uuid) or None if the session isn't registered
+        # to any client (anonymous request, pre-register_client probe,
+        # etc.).
+        indexed = bus_manager.lookup_session(session)
+        if indexed is None:
+            return
+        bus_id, client_uuid = indexed
+        bus = bus_manager.all_buses().get(bus_id)
+        if bus is not None:
+            bus.touch(client_uuid)
