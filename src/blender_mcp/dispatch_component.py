@@ -175,25 +175,37 @@ async def _dispatch(
         import time as _time
         client_info = bus.get(chosen_uuid)
         now = _time.time()
+        # Caveat: `last_seen` only updates on bus-tool activity
+        # (register, route, dispatch replies) — NOT on FastMCP transport-
+        # level pings. Addon's heartbeat keeps the transport alive but
+        # doesn't refresh this counter. So a stale value here doesn't
+        # mean the addon is disconnected — it just means no bus traffic
+        # in a while. 5min threshold is generous enough to tolerate
+        # quiet periods, tight enough to still catch "addon truly gone."
+        # (Follow-up: hook the server-side ping handler to bus.touch
+        # so the heartbeat actually refreshes liveness — see TODO.)
         if client_info is not None:
             seen_ago = now - client_info.last_seen
-            heartbeat_healthy = seen_ago < 60
+            heartbeat_healthy = seen_ago < 300
             if heartbeat_healthy:
                 hint = (
-                    f"Heartbeat is healthy (last_seen {seen_ago:.0f}s ago) — "
-                    f"the addon is alive but didn't finish the {command} "
-                    f"call within {timeout:.0f}s. Likely Blender's main thread "
-                    f"is busy with a long bpy operation (renders, scene "
-                    f"evaluation on heavy graphs, modal popups). Either wait "
-                    f"and retry, increase _timeout, or simplify the dispatched "
-                    f"code. Use Disconnect→Connect in the addon sidebar to "
-                    f"reset if truly wedged."
+                    f"Bus shows the addon as registered (last bus activity "
+                    f"{seen_ago:.0f}s ago); the {command} call didn't finish "
+                    f"within {timeout:.0f}s. Most common cause: Blender's "
+                    f"main thread is busy with a long bpy operation (heavy "
+                    f"render, scene evaluation on a complex graph, modal "
+                    f"popup). Either wait and retry, raise _timeout, or "
+                    f"simplify the dispatched code. Use Disconnect→Connect "
+                    f"in the addon sidebar to reset if truly wedged."
                 )
             else:
                 hint = (
-                    f"Heartbeat is stale (last_seen {seen_ago:.0f}s ago) — "
-                    f"the addon's bus_client appears to have disconnected. "
-                    f"Check the addon sidebar Status and reconnect if needed."
+                    f"No bus activity from this client in {seen_ago:.0f}s "
+                    f"(>5min). Either the addon's bus_client disconnected "
+                    f"without unregistering OR there has just been a long "
+                    f"quiet period (the transport-level heartbeat doesn't "
+                    f"update bus.last_seen yet — known limitation). Verify "
+                    f"the addon sidebar Status before assuming disconnect."
                 )
         else:
             hint = (
