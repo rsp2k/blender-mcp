@@ -22,15 +22,28 @@ noticeable per-message cost.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+
+logger = logging.getLogger(__name__)
 
 
 class BusActivityMiddleware(Middleware):
     """Touch bus.last_seen on every incoming message from a registered client."""
 
     async def on_message(self, context: MiddlewareContext, call_next: CallNext) -> Any:
+        # TEMP DEBUG: log every middleware invocation with message type +
+        # session id so we can see what's hitting this layer.
+        msg = context.message if hasattr(context, "message") else None
+        msg_type = type(msg).__name__ if msg is not None else "<no-message>"
+        sess = getattr(context.fastmcp_context, "session", None) if context.fastmcp_context else None
+        logger.info(
+            "BusActivityMiddleware.on_message msg_type=%s session_id=%s ctx=%s",
+            msg_type, id(sess) if sess is not None else "<none>",
+            "yes" if context.fastmcp_context is not None else "no",
+        )
         self._touch_for_session(context)
         return await call_next(context)
 
