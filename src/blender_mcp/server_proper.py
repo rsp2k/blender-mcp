@@ -260,6 +260,13 @@ def build_http_mcp() -> FastMCP:
     """
     auth_provider = _build_auth_provider()
     server = FastMCP("BlenderMCP", auth=auth_provider)
+    # Refresh bus.last_seen on every incoming MCP message from a
+    # registered client so the addon's heartbeat (1.5.10 transport-level
+    # ping every 30s) actually shows as bus liveness. Without this,
+    # last_seen only updated on register/dispatch-reply paths, and the
+    # bus believed quiet-but-alive clients had disconnected.
+    from .bus_activity_middleware import BusActivityMiddleware
+    server.add_middleware(BusActivityMiddleware())
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
     # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
     # don't collide with anything else in tool listings, but resources are
