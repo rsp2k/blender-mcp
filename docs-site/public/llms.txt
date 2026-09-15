@@ -1,0 +1,42 @@
+# BlenderMCP
+
+> A Model Context Protocol server that lets multiple LLM clients collaborate on shared Blender 3D instances over an OAuth-isolated message bus.
+
+BlenderMCP is three pieces: any number of LLM clients on one side, any number of Blender addon clients on the other, and a single MCP server in the middle holding a per-user message bus. Authentication is MCP-spec OAuth 2.1 (PKCE + Dynamic Client Registration). Two users on the same physical server never see each other's clients or jobs.
+
+The reference deployment lives at `https://mcp.blender.bet/`. Source: <https://github.com/rsp2k/blender-mcp>.
+
+## Tutorials
+
+- [Quickstart](https://docs.blender.bet/tutorials/quickstart/): Authenticate against a BlenderMCP server, list connected Blender peers, dispatch your first tool call. Five minutes.
+
+## How-to guides
+
+- [Install and upgrade the addon](https://docs.blender.bet/how-to/install-addon/): Two install paths — extension repo on Blender 4.2+ (bundles fastmcp) or legacy Install-from-Disk on 3.2-4.1. How each one gets updates.
+- [Write your own LLM client](https://docs.blender.bet/how-to/write-llm-client/): Two client styles — library-mediated dispatch (simple) vs custom `_message_bus` subscription (advanced). Pick the right one.
+- [Use capabilities](https://docs.blender.bet/how-to/use-capabilities/): The capabilities array on `register_client`, and how to gate dispatch by capability via `list_available_clients`.
+
+## Reference
+
+- [Authentication](https://docs.blender.bet/reference/auth/): MCP-spec OAuth 2.1 with PKCE + Dynamic Client Registration. Discovery URLs, endpoints, token shape.
+- [Bus tools](https://docs.blender.bet/reference/bus-tools/): The five `blender_*` MCP tools that manage the bus itself: register, unregister, send, update, list.
+- [Dispatch tools](https://docs.blender.bet/reference/dispatch-tools/): 24 MCP tools that wrap addon `@command` handlers. Call them directly; the server handles the bus round-trip.
+- [Addon commands](https://docs.blender.bet/reference/addon-commands/): Every command the BlenderMCP addon registers, grouped by domain. 23 commands across 8 handler mixins.
+- [Resources](https://docs.blender.bet/reference/resources/): Read-only MCP resources — bus state, scene snapshots, paginated console output.
+- [Prompts](https://docs.blender.bet/reference/prompts/): Nine MCP prompts — dispatch helpers, workflow assistants, troubleshooting, and asset pipeline guidance.
+- [Routing modes](https://docs.blender.bet/reference/routing-modes/): Four routing modes — direct, group, type_filter, broadcast. Precedence rules, sender exclusion, when to use which.
+- [Priority levels](https://docs.blender.bet/reference/priorities/): MCP log levels repurposed as job priorities. Eight tiers, lower-int = higher urgency.
+- [ClientInfo](https://docs.blender.bet/reference/client-info/): The dataclass representing one client on a user's bus. Wire shape, session handling, re-registration semantics.
+
+## Explanation
+
+- [Architecture](https://docs.blender.bet/explanation/architecture/): Three tiers — LLM clients, MCP server with per-user bus, Blender addons. Full round-trip trace.
+- [OAuth and per-user buses](https://docs.blender.bet/explanation/oauth-buses/): How an authenticated identity maps to a UserMessageBus. Why your peers are invisible to other users.
+- [Command dispatch vs script dispatch](https://docs.blender.bet/explanation/dispatch-vs-script/): Two paths into Blender — typed command tools vs free-form script execution. When each is the right answer.
+- [Why MCP logging as a bus](https://docs.blender.bet/explanation/why-mcp-logging/): Three alternatives considered for the cross-instance transport — custom socket, WebSocket, MCP sampling. Why logging won. Honest tradeoffs.
+- [Use cases](https://docs.blender.bet/explanation/use-cases/): Seven concrete patterns — multi-LLM specialization, render farm, long-running jobs, state mirroring, approval workflows, event broadcast, status-probe-before-dispatch.
+
+## Optional
+
+- [Apex site (blender.bet)](https://blender.bet/): Marketing landing. Two-sentence summary + links here.
+- [GitHub repository](https://github.com/rsp2k/blender-mcp): Source, addon code, installation scripts.

@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import node from '@astrojs/node';
+import sitemap from '@astrojs/sitemap';
 
 // Public site URL — used for canonical links + sitemap. Override per-env
 // via SITE_URL.
@@ -25,6 +26,15 @@ export default defineConfig({
   // true` for caching.
   output: 'server',
   adapter: node({ mode: 'standalone' }),
+
+  // Exclude auth-gated paths — they 401 for crawlers and hurt SEO signal.
+  integrations: [
+    sitemap({
+      filter: (page) =>
+        !page.includes('/login-complete') &&
+        !page.includes('/buses'),
+    }),
+  ],
 
   // /login-complete reads Authentik headers and renders — it never
   // mutates state. CSRF protection here rejects local-test 127.0.0.1

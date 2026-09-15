@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import sitemap from '@astrojs/sitemap';
 import icon from 'astro-icon';
 
 // HMR-behind-Caddy configuration (see ~/.claude/CLAUDE.md HMR section).
@@ -10,13 +11,19 @@ const HMR_HOST = process.env.HMR_HOST || 'localhost';
 const HMR_PROTOCOL = process.env.HMR_PROTOCOL || 'ws';
 const HMR_CLIENT_PORT = Number(process.env.HMR_CLIENT_PORT || 4321);
 
-const SITE = process.env.SITE_URL || 'https://blender.bet';
+const SITE = process.env.SITE_URL || 'https://docs.blender.bet';
 
 // https://astro.build/config
 export default defineConfig({
   site: SITE,
   devToolbar: { enabled: false },
   integrations: [
+    // Must precede starlight() so Starlight uses our customized instance
+    // instead of auto-registering its own. Excludes /login-complete from
+    // the sitemap — auth-gated, would 401 for crawlers.
+    sitemap({
+      filter: (page) => !page.includes('/login-complete'),
+    }),
     icon({
       include: {
         // Pull only the lucide icons we actually use to keep the bundle lean.

@@ -1,0 +1,15 @@
+# BlenderMCP
+
+> A Model Context Protocol server that lets multiple LLM clients collaborate on shared Blender 3D instances over an OAuth-isolated message bus.
+
+This is the apex marketing site. The substantive content for LLMs lives on the documentation site.
+
+## Primary
+
+- [Documentation (llms.txt)](https://docs.blender.bet/llms.txt): Full Diátaxis-organized index of tutorials, how-to guides, reference, and explanation.
+- [Documentation (HTML root)](https://docs.blender.bet/): Same content, rendered.
+- [GitHub repository](https://github.com/rsp2k/blender-mcp): Source, addon code, installation scripts.
+
+## Optional
+
+- [Reference MCP server](https://mcp.blender.bet/): Public OAuth-protected MCP endpoint. Start an MCP-spec OAuth flow here to connect.
