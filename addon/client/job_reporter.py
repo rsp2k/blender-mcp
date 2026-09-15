@@ -44,3 +44,28 @@ def submit_job_update(
             print(f"[BlenderMCP] job_update for {job_id} failed: {e}")
 
     future.add_done_callback(_log_err)
+
+
+def submit_force_release_control(client: "BlenderMCPClient", target_uuid: str) -> None:
+    """Fire-and-forget ``blender_force_release_control`` call from the addon.
+
+    Used by the "Take back" button so LLMs polling get_control_state
+    see the release immediately instead of waiting for the natural
+    expiry. Same asyncio-marshal pattern as ``submit_job_update``.
+    """
+    if not (client.loop and client.client and client.loop.is_running()):
+        print(f"[BlenderMCP] Cannot force-release: client not connected")
+        return
+
+    coro = client.client.call_tool("blender_force_release_control", {
+        "target_uuid": target_uuid,
+    })
+    future = asyncio.run_coroutine_threadsafe(coro, client.loop)
+
+    def _log_err(fut):
+        try:
+            fut.result(timeout=0)
+        except Exception as e:
+            print(f"[BlenderMCP] force_release_control failed: {e}")
+
+    future.add_done_callback(_log_err)

@@ -14,9 +14,12 @@ here and registers each with bpy.utils.register_class.
 from __future__ import annotations
 
 from .operators import (
+    BLENDERMCP_OT_AlwaysAllowControl,
     BLENDERMCP_OT_CopyClientUUID,
     BLENDERMCP_OT_CreateBus,
+    BLENDERMCP_OT_DenyControl,
     BLENDERMCP_OT_DismissFatalError,
+    BLENDERMCP_OT_GrantControl,
     BLENDERMCP_OT_InviteToBus,
     BLENDERMCP_OT_JoinBus,
     BLENDERMCP_OT_LeaveBus,
@@ -27,6 +30,7 @@ from .operators import (
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
+    BLENDERMCP_OT_TakeBackControl,
     BLENDERMCP_OT_TestConnection,
 )
 from .panel import BLENDERMCP_PT_Panel
@@ -48,6 +52,10 @@ CLASSES = (
     BLENDERMCP_OT_CopyClientUUID,
     BLENDERMCP_OT_DismissFatalError,
     BLENDERMCP_OT_ReLogin,
+    BLENDERMCP_OT_GrantControl,
+    BLENDERMCP_OT_DenyControl,
+    BLENDERMCP_OT_AlwaysAllowControl,
+    BLENDERMCP_OT_TakeBackControl,
 )
 
 __all__ = [
@@ -67,4 +75,8 @@ __all__ = [
     "BLENDERMCP_OT_CopyClientUUID",
     "BLENDERMCP_OT_DismissFatalError",
     "BLENDERMCP_OT_ReLogin",
+    "BLENDERMCP_OT_GrantControl",
+    "BLENDERMCP_OT_DenyControl",
+    "BLENDERMCP_OT_AlwaysAllowControl",
+    "BLENDERMCP_OT_TakeBackControl",
 ]

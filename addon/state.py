@@ -52,3 +52,24 @@ _auth_dots: int = 0
 _latest_addon_version: Optional[str] = None
 _addon_download_url: Optional[str] = None
 _update_available: bool = False
+
+# Cooperative control-lock state. Two orthogonal things live here:
+#
+#   1. Pending REQUEST — an LLM asked for control, user hasn't clicked
+#      yet. The banner in the sidebar draws Allow/Deny/Always-allow
+#      buttons wired to operators that resolve _pending_control_request
+#      by posting a submit_job_update reply and clearing this dict.
+#
+#   2. Active LOCK — an LLM's request was granted (either by pre-auth
+#      or by the user). Header text shows the countdown; auto-release
+#      timer (bpy.app.timers) fires at _lock_expires_at to submit a
+#      release_control call and clear these fields.
+#
+# Both are None/False when nothing's happening; that's the vast common
+# case, and the draw path early-returns on it so the banner has zero
+# cost when idle.
+_pending_control_request: Optional[dict] = None  # {job_id, requester_uuid, requester_label, reason, duration_s}
+_lock_holder_uuid: Optional[str] = None
+_lock_holder_label: Optional[str] = None
+_lock_expires_at: Optional[float] = None  # unix epoch
+_lock_reason: Optional[str] = None

@@ -19,6 +19,7 @@ from .. import state
 from ..auth import OAuthError, logout, oauth_login
 from ..client import BlenderMCPClient
 from ..client.bus_client import FASTMCP_AVAILABLE
+from ..client.job_reporter import submit_force_release_control, submit_job_update
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..executor import BlenderCommandExecutor
 from ..identity import StickyUUIDManager
@@ -637,4 +638,151 @@ class BLENDERMCP_OT_CopyClientUUID(bpy.types.Operator):
         payload = f"{label} · {uuid}"
         context.window_manager.clipboard = payload
         self.report({'INFO'}, f"Copied: {payload}")
+        return {'FINISHED'}
+
+
+# --- Control-lock operators ---------------------------------------------
+#
+# Grant / Deny / AlwaysAllow all resolve a pending control_request by
+# calling submit_job_update with the JSON-encoded reply the LLM tool is
+# waiting on. TakeBack clears the local active-lock state AND asks the
+# server to release its ClientInfo mirror so any polling LLM sees the
+# release immediately (not waiting for natural expiry).
+
+import json as _json
+import time as _time
+
+
+def _resolve_pending(client, reply_payload: dict, add_to_prefs: bool = False, prefs=None) -> bool:
+    """Common tail for Grant + AlwaysAllow.
+
+    Reads state._pending_control_request, submits the reply, updates
+    the local lock mirror if granted, optionally adds the requester
+    UUID to prefs.pre_authorized_llms. Returns True on success.
+    """
+    pending = state._pending_control_request
+    if not pending:
+        return False
+
+    submit_job_update(
+        client, pending["job_id"], "completed",
+        result=_json.dumps(reply_payload),
+        error="",
+    )
+
+    if reply_payload.get("granted"):
+        state._lock_holder_uuid = pending["requester_uuid"]
+        state._lock_holder_label = pending.get("requester_label")
+        state._lock_expires_at = reply_payload.get("expires_at")
+        state._lock_reason = pending.get("reason")
+
+    if add_to_prefs and prefs is not None:
+        existing = {u.strip() for u in prefs.pre_authorized_llms.split(",") if u.strip()}
+        existing.add(pending["requester_uuid"])
+        prefs.pre_authorized_llms = ",".join(sorted(existing))
+
+    state._pending_control_request = None
+    _tag_panel_redraw()
+    return True
+
+
+class BLENDERMCP_OT_GrantControl(bpy.types.Operator):
+    """Grant the pending control request. LLM proceeds; UI shows the countdown."""
+
+    bl_idname = "blendermcp.grant_control"
+    bl_label = "Allow"
+    bl_description = "Give the requesting LLM temporary control of this Blender"
+
+    def execute(self, context):
+        client = state._client
+        pending = state._pending_control_request
+        if client is None or not pending:
+            self.report({'WARNING'}, "No pending control request to grant")
+            return {'CANCELLED'}
+        expires_at = _time.time() + float(pending.get("duration_s") or 60.0)
+        ok = _resolve_pending(client, {
+            "granted": True,
+            "expires_at": expires_at,
+            "auto_granted": False,
+        })
+        if not ok:
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Granted control for {int(pending['duration_s'])}s")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DenyControl(bpy.types.Operator):
+    """Deny the pending control request. LLM sees granted=false and backs off."""
+
+    bl_idname = "blendermcp.deny_control"
+    bl_label = "Deny"
+    bl_description = "Reject the LLM's request for control"
+
+    def execute(self, context):
+        client = state._client
+        pending = state._pending_control_request
+        if client is None or not pending:
+            return {'CANCELLED'}
+        _resolve_pending(client, {
+            "granted": False,
+            "reason": "user_denied",
+        })
+        self.report({'INFO'}, "Denied control request")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_AlwaysAllowControl(bpy.types.Operator):
+    """Grant this request AND add the requester's UUID to the pre-auth list."""
+
+    bl_idname = "blendermcp.always_allow_control"
+    bl_label = "Always allow"
+    bl_description = "Grant control now AND future requests from this LLM without prompting"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        client = state._client
+        pending = state._pending_control_request
+        if client is None or not pending:
+            return {'CANCELLED'}
+        expires_at = _time.time() + float(pending.get("duration_s") or 60.0)
+        _resolve_pending(
+            client,
+            {
+                "granted": True,
+                "expires_at": expires_at,
+                "auto_granted": False,
+            },
+            add_to_prefs=True,
+            prefs=prefs,
+        )
+        self.report(
+            {'INFO'},
+            f"Granted + added to pre-authorized LLMs. Revoke in Preferences."
+        )
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_TakeBackControl(bpy.types.Operator):
+    """Force-release the active control lock. Human trumps LLM."""
+
+    bl_idname = "blendermcp.take_back_control"
+    bl_label = "Take back"
+    bl_description = "Immediately release the control lock; the LLM's next dispatch will see no lock"
+
+    def execute(self, context):
+        client = state._client
+        if client is None or client.client_uuid is None:
+            return {'CANCELLED'}
+
+        # Tell the server first so polling LLMs see the release right
+        # away. Local clear runs regardless of network success — the
+        # user wants control back NOW.
+        submit_force_release_control(client, client.client_uuid)
+
+        state._lock_holder_uuid = None
+        state._lock_holder_label = None
+        state._lock_expires_at = None
+        state._lock_reason = None
+        _tag_panel_redraw()
+        self.report({'INFO'}, "Control lock released")
         return {'FINISHED'}

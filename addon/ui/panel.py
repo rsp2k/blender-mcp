@@ -12,6 +12,8 @@ identical without copy-paste drift.
 
 from __future__ import annotations
 
+import time as _time
+
 import bpy
 
 from .. import state
@@ -23,6 +25,54 @@ from ..preferences import (
     get_client_label,
     get_prefs,
 )
+
+
+def _draw_pending_control_request(layout) -> None:
+    """Prominent Allow/Deny/Always-allow banner for an unanswered request."""
+    pending = state._pending_control_request
+    if not pending:
+        return
+    box = layout.box()
+    col = box.column(align=True)
+    who = pending.get("requester_label") or pending.get("requester_uuid", "?")[:12]
+    col.label(text=f"'{who}' wants control", icon='HAND')
+    col.label(text=f"reason: {pending.get('reason', '')[:60]}")
+    col.label(text=f"for {int(pending.get('duration_s') or 0)}s")
+    row = col.row(align=True)
+    row.operator("blendermcp.grant_control", text="Allow", icon='CHECKMARK')
+    row.operator("blendermcp.deny_control", text="Deny", icon='CANCEL')
+    row2 = col.row(align=True)
+    row2.operator(
+        "blendermcp.always_allow_control",
+        text="Always allow this LLM",
+        icon='FUND',
+    )
+
+
+def _draw_active_lock_header(layout) -> None:
+    """Header + Take-back for an active control lock. Countdown auto-updates."""
+    if state._lock_expires_at is None:
+        return
+    remaining = state._lock_expires_at - _time.time()
+    if remaining <= 0:
+        # Lazy-clear stale local mirror when the natural expiry has
+        # passed. The server's ClientInfo.lock_is_active() reports the
+        # same thing via the same time check.
+        state._lock_holder_uuid = None
+        state._lock_holder_label = None
+        state._lock_expires_at = None
+        state._lock_reason = None
+        return
+    box = layout.box()
+    col = box.column(align=True)
+    who = state._lock_holder_label or (state._lock_holder_uuid or "?")[:12]
+    col.label(text=f"{who} has control", icon='LOCKED')
+    col.label(text=f"{int(remaining)}s left · {(state._lock_reason or '')[:50]}")
+    col.operator(
+        "blendermcp.take_back_control",
+        text="Take back control",
+        icon='UNLOCKED',
+    )
 
 
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
@@ -67,6 +117,13 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             row.operator(
                 "blendermcp.dismiss_fatal_error", text="Dismiss", icon='X',
             )
+
+        # Cooperative control-lock banners. Pending request is drawn
+        # first (time-sensitive, blocks an LLM until answered); active
+        # lock header goes below it (informational + Take-back). Both
+        # no-op when their state is empty.
+        _draw_pending_control_request(layout)
+        _draw_active_lock_header(layout)
 
         # Version-mismatch banner — no-op unless the server told us we're
         # behind on the last register_client. Drawn before login so users

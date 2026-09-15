@@ -23,6 +23,7 @@ import bmesh
 import bpy
 import mathutils
 
+from .. import state
 from .job_reporter import submit_job_update
 
 if TYPE_CHECKING:
@@ -74,6 +75,11 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
         if not command:
             return 0.0
         execute_command(client, job_id, command, params)
+    elif msg_type == "control_request":
+        # Cooperative advisory lock. Auto-grants if the requester is
+        # on prefs.pre_authorized_llms; otherwise stashes into state
+        # for the sidebar banner to render Allow/Deny/Always-allow.
+        handle_control_request(client, job_id, payload)
     # Unknown message_type silently dropped (forward-compatible: future
     # message types in the wire won't make older addons crash).
 
@@ -166,6 +172,87 @@ def execute_command(
         )
     finally:
         client.active_jobs.pop(job_id, None)
+
+
+def _pre_authorized(prefs_uuids: str, requester_uuid: str) -> bool:
+    """True iff requester_uuid appears in the comma-separated allow-list."""
+    if not requester_uuid:
+        return False
+    return requester_uuid in {u.strip() for u in prefs_uuids.split(",") if u.strip()}
+
+
+def _get_prefs():
+    """Local prefs lookup that tolerates being called before register.
+
+    Uses ADDON_PACKAGE_NAME so the same code works whether the addon
+    was installed the legacy way (package "addon") or as a Blender
+    extension (package "bl_ext.<repo>.blender_mcp").
+    """
+    from ..preferences import ADDON_PACKAGE_NAME
+    try:
+        return bpy.context.preferences.addons[ADDON_PACKAGE_NAME].preferences
+    except (KeyError, AttributeError):
+        return None
+
+
+def _tag_redraw() -> None:
+    """Kick the sidebar to redraw so a pending-request banner appears fast."""
+    try:
+        for area in bpy.context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+    except (AttributeError, RuntimeError):
+        # bpy.context isn't always populated (edge cases during startup).
+        pass
+
+
+def handle_control_request(
+    client: "BlenderMCPClient",
+    job_id: str,
+    payload: dict,
+) -> None:
+    """Process an incoming control_request. Grant instantly if pre-authed,
+    otherwise store as pending for the sidebar to prompt the user."""
+    requester_uuid = payload.get("requester_uuid") or ""
+    requester_label = payload.get("requester_label")
+    reason = payload.get("reason") or "(no reason given)"
+    duration_s = float(payload.get("duration_s") or 60.0)
+
+    prefs = _get_prefs()
+    pre_auth_list = getattr(prefs, "pre_authorized_llms", "") if prefs else ""
+
+    if _pre_authorized(pre_auth_list, requester_uuid):
+        # Silent auto-grant. The active-lock header still surfaces the
+        # holder, so it's not truly invisible — just no click required.
+        expires_at = time.time() + duration_s
+        state._lock_holder_uuid = requester_uuid
+        state._lock_holder_label = requester_label
+        state._lock_expires_at = expires_at
+        state._lock_reason = reason
+        _tag_redraw()
+        submit_job_update(
+            client, job_id, "completed",
+            result=_safe_json({
+                "granted": True,
+                "auto_granted": True,
+                "expires_at": expires_at,
+            }),
+            error="",
+        )
+        return
+
+    # Prompt path: store pending; operators pick this up on click.
+    state._pending_control_request = {
+        "job_id": job_id,
+        "requester_uuid": requester_uuid,
+        "requester_label": requester_label,
+        "reason": reason,
+        "duration_s": duration_s,
+    }
+    _tag_redraw()
+    # NO submit_job_update here — the reply happens when the user clicks
+    # Allow / Deny / Always-allow (see BLENDERMCP_OT_GrantControl etc.
+    # in ui/operators.py).
 
 
 def _safe_json(value) -> str:

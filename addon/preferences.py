@@ -301,6 +301,24 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         default="",
     )
 
+    # --- Control-lock trust list ---
+    # Comma-separated LLM client UUIDs that the addon auto-grants
+    # control to without popping the Allow/Deny banner. Populated by
+    # the "Always allow" button on incoming requests. Stored as a
+    # single StringProperty rather than a CollectionProperty because
+    # the shape is a flat list of opaque IDs and we never need to
+    # tag them with metadata.
+    pre_authorized_llms: StringProperty(
+        name="Pre-authorized LLMs",
+        description=(
+            "Comma-separated LLM client UUIDs that skip the "
+            "control-request prompt and get granted automatically. "
+            "Populated by clicking 'Always allow' on an incoming "
+            "request; edit here to revoke."
+        ),
+        default="",
+    )
+
     def draw(self, context):
         """Draw the prefs panel in Edit > Preferences > Add-ons > BlenderMCP."""
         layout = self.layout
