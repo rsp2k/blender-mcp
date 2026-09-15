@@ -34,6 +34,56 @@ except ImportError:
     print("[BlenderMCP] fastmcp not installed - run: <blender_python> -m pip install fastmcp")
 
 
+def _update_state_from_register_response(reg_result: Any) -> None:
+    """Read the server's version-hint envelope out of a register_client result.
+
+    The server (bus_tools.register_client) returns a JSON-encoded dict
+    that may carry ``server.latest_addon_version`` + ``server.addon_download_url``.
+    We compare that semver to ``addon._version.tuple_version`` and set
+    the three ``state`` fields the UI panels read. A missing envelope is
+    normal (older server, or server built without the addon source on
+    disk) and leaves state untouched — the banner just doesn't draw.
+    """
+    import json
+
+    from .. import _version, state
+
+    # FastMCP's CallToolResult carries a ``content`` list of ContentBlock
+    # objects; a JSON-string tool return lands as TextContent(text=...).
+    text: Optional[str] = None
+    content = getattr(reg_result, "content", None)
+    if content:
+        first = content[0]
+        text = getattr(first, "text", None)
+    if not text:
+        # data attr sometimes carries the pre-decoded structured content
+        text = getattr(reg_result, "data", None)
+    if not text:
+        return
+
+    if isinstance(text, str):
+        payload = json.loads(text)
+    else:
+        payload = text  # already a dict on the structured-content path
+    server_env = payload.get("server") if isinstance(payload, dict) else None
+    if not isinstance(server_env, dict):
+        return
+
+    latest = server_env.get("latest_addon_version")
+    url = server_env.get("addon_download_url")
+    if not isinstance(latest, str):
+        return
+
+    try:
+        latest_tuple = tuple(int(p) for p in latest.split("."))
+    except ValueError:
+        return
+
+    state._latest_addon_version = latest
+    state._addon_download_url = url if isinstance(url, str) else None
+    state._update_available = latest_tuple > _version.tuple_version
+
+
 class BlenderMCPClient:
     """FastMCP client subscribed to the server's _message_bus log channel."""
 
@@ -360,11 +410,20 @@ class BlenderMCPClient:
                                 reg_args["label"] = self.label
                             if self.bus_id:
                                 reg_args["bus_id"] = self.bus_id
-                            await client.call_tool("blender_register_client", reg_args)
+                            reg_result = await client.call_tool(
+                                "blender_register_client", reg_args
+                            )
                             self.connected = True
                             backoff = 1.0  # successful registration → reset backoff
                             self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
+                            # Server-advertised update hint. Failures here are
+                            # never fatal — a missing envelope just means the
+                            # server predates the version-hint field.
+                            try:
+                                _update_state_from_register_response(reg_result)
+                            except Exception as vh_exc:
+                                print(f"[BlenderMCP] update-hint parse skipped: {vh_exc}")
                         except Exception as e:
                             # Register failed but transport is up. Fall through
                             # to the outer except via a raise — same backoff +

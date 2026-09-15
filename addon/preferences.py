@@ -74,6 +74,38 @@ def get_server_base_url(prefs: Optional["BlenderMCPPreferences"] = None) -> str:
     return f"{scheme}://{host}"
 
 
+def draw_update_banner(layout):
+    """Draw an "Update available" banner when the server said we're behind.
+
+    No-op when ``state._update_available`` is False, which is the case
+    until the first successful register_client OR when the server
+    doesn't send the version-hint envelope (pre-hint server, or no
+    LATEST_ADDON_VERSION available on the server side). Shared by the
+    prefs and sidebar draw paths so the message is identical in both.
+    """
+    from . import _version
+    from . import state as _state
+
+    if not getattr(_state, "_update_available", False):
+        return
+
+    latest = getattr(_state, "_latest_addon_version", None) or "?"
+    url = getattr(_state, "_addon_download_url", None)
+
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(
+        text=f"Addon update available: {_version.__version__} → {latest}",
+        icon='FILE_REFRESH',
+    )
+    if url:
+        # wm.url_open is Blender's built-in; setting .url on the returned
+        # OperatorProperties is the standard idiom for parameterizing it
+        # from a panel.
+        op = col.operator("wm.url_open", text="Get the update", icon='URL')
+        op.url = url
+
+
 def draw_login_section(layout, prefs):
     """Login / Logout UI block — shared by the prefs panel AND the View3D sidebar.
 
@@ -272,6 +304,11 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         """Draw the prefs panel in Edit > Preferences > Add-ons > BlenderMCP."""
         layout = self.layout
+
+        # Version-mismatch banner at the very top so it's the first thing
+        # users see when they open Preferences. No-op when we're current
+        # or when the server hasn't sent a hint yet.
+        draw_update_banner(layout)
 
         # --- Connection ---
         col = layout.column(align=True)

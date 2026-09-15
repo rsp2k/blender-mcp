@@ -17,7 +17,12 @@ import bpy
 from .. import state
 from .._version import __version__
 from ..client.bus_client import FASTMCP_AVAILABLE
-from ..preferences import draw_login_section, get_client_label, get_prefs
+from ..preferences import (
+    draw_login_section,
+    draw_update_banner,
+    get_client_label,
+    get_prefs,
+)
 
 
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
@@ -62,6 +67,11 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             row.operator(
                 "blendermcp.dismiss_fatal_error", text="Dismiss", icon='X',
             )
+
+        # Version-mismatch banner — no-op unless the server told us we're
+        # behind on the last register_client. Drawn before login so users
+        # see the hint whether or not they're signed in for the moment.
+        draw_update_banner(layout)
 
         # --- Login / Logout (shared widget with prefs panel) ---
         draw_login_section(layout, prefs)

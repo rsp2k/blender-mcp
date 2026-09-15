@@ -253,6 +253,13 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         prefs.user_display_name = ""
         prefs.user_email = ""
 
+        # 4. Clear the server-advertised update hint so the banner
+        # doesn't linger from a prior session. It'll re-populate on the
+        # next successful register_client.
+        state._latest_addon_version = None
+        state._addon_download_url = None
+        state._update_available = False
+
         self.report({'INFO'}, "Logged out")
         return {'FINISHED'}
 

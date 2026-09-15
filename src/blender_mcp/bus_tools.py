@@ -13,6 +13,7 @@ from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool, mcp_resource, mcp_prompt
 from fastmcp.prompts.base import Message
 
+from .addon_version import ADDON_DOWNLOAD_URL, LATEST_ADDON_VERSION
 from .client_role import require_role
 from .job_waiter import job_waiter
 from .message_bus import bus_manager, ClientInfo
@@ -185,11 +186,20 @@ class BlenderBusComponent(MCPMixin):
             session=_session_from_ctx(ctx),
         )
         registered = resolved["bus"].register(info)
-        return json.dumps({
+        response: dict[str, Any] = {
             "status": "ok",
             "bus_id": str(resolved["bus_id"]),
             "client": registered.to_dict(),
-        })
+        }
+        # Version-hint envelope: an addon on an older _version.py than
+        # LATEST_ADDON_VERSION renders an "update available" banner. Absent
+        # field = "server doesn't know" (old-shape clients ignore it).
+        if LATEST_ADDON_VERSION:
+            response["server"] = {
+                "latest_addon_version": LATEST_ADDON_VERSION,
+                "addon_download_url": ADDON_DOWNLOAD_URL,
+            }
+        return json.dumps(response)
 
     @mcp_tool()
     @require_role("addon")

@@ -41,3 +41,14 @@ _buses: list = []
 # while in flight, modulo 3 picks 1/2/3 dots.
 _auth_in_progress: bool = False
 _auth_dots: int = 0
+
+# Server-advertised latest addon version, populated from the
+# register_client response envelope. `_update_available` is set True
+# only when the server sent a hint AND the semver tuple is strictly
+# greater than addon._version.tuple_version. Both are None until the
+# first successful registration; the sidebar/preferences panels read
+# them to render an "Update available" banner. Cleared on Logout so a
+# fresh login re-derives them.
+_latest_addon_version: Optional[str] = None
+_addon_download_url: Optional[str] = None
+_update_available: bool = False
