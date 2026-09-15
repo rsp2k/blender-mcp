@@ -39,11 +39,34 @@ class ClientInfo:
     # Set by bus_tools when a tool call comes in from the client.
     session: Any = None
 
+    # Control-lock state (per-Blender-instance). Advisory only in v1:
+    # dispatch tools don't refuse when a lock is held, but well-behaved
+    # LLMs call blender_request_control first + inspect this field via
+    # blender_get_control_state. Only meaningful when client_type=="blender";
+    # left blank on LLM/ephemeral clients.
+    control_holder_uuid: Optional[str] = None
+    control_holder_label: Optional[str] = None
+    control_expires_at: Optional[float] = None  # unix epoch, None = no lock
+    control_reason: Optional[str] = None
+
+    def lock_is_active(self, now: Optional[float] = None) -> bool:
+        """True iff a non-expired lock is held. Lazy-expiry: callers that
+        see False after this returned True should treat the lock as gone."""
+        if self.control_holder_uuid is None or self.control_expires_at is None:
+            return False
+        return (now if now is not None else time.time()) < self.control_expires_at
+
+    def clear_lock(self) -> None:
+        self.control_holder_uuid = None
+        self.control_holder_label = None
+        self.control_expires_at = None
+        self.control_reason = None
+
     def to_dict(self) -> dict[str, Any]:
         # Build manually — asdict() deep-copies all fields including `session`,
         # which holds an MCP ServerSession with asyncio.Future objects that
         # cannot be pickled/deepcopied.
-        return {
+        d: dict[str, Any] = {
             "uuid": self.uuid,
             "client_type": self.client_type,
             "label": self.label,
@@ -53,6 +76,16 @@ class ClientInfo:
             "connected_at": self.connected_at,
             "last_seen": self.last_seen,
         }
+        # Advertise the lock only when active so list_available_clients
+        # payloads stay small for the common no-lock case.
+        if self.lock_is_active():
+            d["control_lock"] = {
+                "holder_uuid": self.control_holder_uuid,
+                "holder_label": self.control_holder_label,
+                "expires_at": self.control_expires_at,
+                "reason": self.control_reason,
+            }
+        return d
 
 
 @dataclass

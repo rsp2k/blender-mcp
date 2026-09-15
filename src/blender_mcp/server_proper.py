@@ -28,6 +28,7 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.auth import AuthProvider
 
 from .bus_tools import BlenderBusComponent
+from .control_tools import BlenderControlComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
 from .prompts_component import BlenderPromptsComponent
@@ -275,6 +276,12 @@ def build_http_mcp() -> FastMCP:
     # separately via install_ping_touch above.
     from .bus_activity_middleware import BusActivityMiddleware
     server.add_middleware(BusActivityMiddleware())
+    # Opt-in QA payload logging. No-op unless QA_LOG is set, and OFF by
+    # default. Added after BusActivityMiddleware so the measured
+    # duration covers the actual tool body rather than the liveness
+    # touch that wraps it. See qa_logging_middleware for the levels.
+    from .qa_logging_middleware import QALoggingMiddleware
+    server.add_middleware(QALoggingMiddleware())
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
     # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
     # don't collide with anything else in tool listings, but resources are
@@ -300,11 +307,17 @@ def build_http_mcp() -> FastMCP:
     # comment in dispatch_component.py above ``console_resource``.
     dispatch.register_templated_resources(mcp_server=server)
 
+    # Cooperative control-lock tools (request/release/get_state). Advisory
+    # in v1: dispatch tools do not refuse when a lock is held, so registering
+    # this alongside the rest is purely additive.
+    control = BlenderControlComponent()
+    control.register_tools(mcp_server=server, prefix="blender")
+
     # Skeletal prompts — same registration as stdio (templates only,
     # no per-request state).
     BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
 
-    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + prompts")
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + prompts")
     return server
 
 

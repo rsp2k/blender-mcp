@@ -377,6 +377,34 @@ class BlenderPromptsComponent(MCPMixin):
         else:
             call = f"blender_{normalized}()"
 
+        # Highlight the "ask before invasive edits" pattern for the two
+        # tools that can meaningfully collide with a human editing the
+        # scene. Advisory-only in v1: nothing enforces this, but a
+        # well-behaved LLM asks so the user knows what's about to happen.
+        invasive_note = ""
+        if normalized in {"execute_code", "job_dispatch"}:
+            invasive_note = (
+                "\n**Cooperative etiquette:** ``execute_code`` and script\n"
+                "dispatches can silently overwrite what the human is\n"
+                "editing. Before you dispatch, call:\n\n"
+                "```python\n"
+                "blender_request_control(\n"
+                "    target_uuid=\"<blender uuid>\",\n"
+                "    reason=\"<one sentence — shown to the user>\",\n"
+                "    requester_uuid=\"<your stable LLM UUID>\",\n"
+                "    requester_label=\"<friendly name>\",\n"
+                "    duration_s=60,\n"
+                ")\n"
+                "```\n\n"
+                "It returns ``{granted: bool, expires_at: <epoch>}``. On\n"
+                "``granted=False`` back off or ask the user out-of-band.\n"
+                "Call ``blender_release_control(target_uuid, requester_uuid)``\n"
+                "when you're done so the user can resume immediately.\n"
+                "The first request may prompt a per-user Allow/Deny in\n"
+                "Blender; subsequent requests from the same requester_uuid\n"
+                "can be pre-authorized to skip that prompt.\n"
+            )
+
         text = (
             f"Canonical MCP call for ``{normalized}``:\n\n"
             "```python\n"
@@ -399,5 +427,6 @@ class BlenderPromptsComponent(MCPMixin):
             "  \"error\": \"<empty string on success>\"\n"
             "}\n"
             "```"
+            f"{invasive_note}"
         )
         return _msg(text)
