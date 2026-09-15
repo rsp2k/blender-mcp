@@ -4,16 +4,24 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: help prod dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean
+.PHONY: help prod dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage: make <target>\n\nTargets:\n"} \
 		/^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' \
 		$(MAKEFILE_LIST)
 
-prod: ## Start the production stack (FastMCP server behind caddy-docker-proxy)
-	$(COMPOSE) up -d --build blender-mcp
+extensions: ## Build the self-hosted Blender extension zip + index.json into dist/extensions/
+	python3 scripts/build_extension.py
+
+# `prod` depends on `extensions` so the compose mount (./dist/extensions -> /srv)
+# is populated before the file-server container starts. Rebuilding on every prod
+# invocation is cheap after the first run because scripts/build_extension.py
+# reuses cached wheels for unchanged deps (pip's own resolver cache).
+prod: extensions ## Start the production stack (FastMCP server + extension repo behind caddy-docker-proxy)
+	$(COMPOSE) up -d --build blender-mcp blender-mcp-extensions
 	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/mcp"
+	@echo "-> Extension repo at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions/index.json"
 
 dev: ## Start the dev stack with hot reload
 	$(COMPOSE) --profile dev up -d --build blender-mcp-dev

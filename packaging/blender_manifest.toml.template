@@ -1,0 +1,39 @@
+# Blender 4.2+ extension manifest.
+#
+# This is a TEMPLATE. scripts/build_extension.py substitutes the version
+# and wheels placeholders below at build time; never hand-edit those two
+# lines. Everything else is authored here.
+#
+# Coexists with bl_info in addon.py (legacy install path) for as long as we
+# support Blender 3.2 through 4.1. The two systems read different files, so
+# they never fight; the version field below and bl_info.version must be kept
+# in sync via scripts/bump_addon_version.py.
+
+schema_version = "1.0.0"
+
+id = "blender_mcp"
+version = "__VERSION__"
+name = "Blender MCP"
+tagline = "Multi-LLM collaboration on shared Blender scenes over MCP"
+maintainer = "Ryan Malloy <ryan@supported.systems>"
+type = "add-on"
+
+website = "https://blender.bet/"
+tags = ["Development", "Pipeline"]
+
+# Extensions themselves need 4.2+ (that's when the extension system landed).
+# Legacy install via bl_info still targets 3.2+ separately.
+blender_version_min = "4.2.0"
+
+license = ["SPDX:MIT"]
+
+# Populated by the build script from ./wheels/*.whl inside the zip.
+# Kept above the [permissions] section — TOML tables absorb every key
+# after their header, and Blender requires wheels at the top level.
+wheels = __WHEELS__
+
+[permissions]
+# Shown verbatim in the extension installer's permission prompt so the
+# reason is opt-in transparent, not buried in a README.
+network = "Talks to the BlenderMCP server over HTTPS + OAuth 2.1 to join the shared bus."
+files = "Downloads generated assets from Poly Haven, Sketchfab, and Hyper3D into a local cache."

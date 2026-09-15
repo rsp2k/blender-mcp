@@ -1,0 +1,30 @@
+# Minimal file-server for the self-hosted Blender extension repo.
+#
+# Rendered at mcp.blender.bet/extensions/* by the caddy-docker-proxy
+# handle_path label on the blender-mcp-extensions service. The label
+# strips the /extensions prefix before forwarding, so this Caddyfile
+# just serves /srv at its own root.
+#
+# dist/extensions/ (host) -> /srv (container, read-only mount)
+
+:80 {
+	root * /srv
+	file_server
+	encode zstd gzip
+
+	# Immutable versioned zips: the filename embeds the version, and a
+	# rebuild only ever ADDS a new file. Long-max-age + immutable lets
+	# every intermediary cache these forever.
+	@zip path *.zip
+	header @zip Cache-Control "public, max-age=31536000, immutable"
+
+	# The repo index is the mutable pointer to the current version.
+	# Short max-age so a fresh release becomes visible within a minute.
+	@index path /index.json
+	header @index Cache-Control "public, max-age=60"
+
+	log {
+		output stdout
+		format json
+	}
+}

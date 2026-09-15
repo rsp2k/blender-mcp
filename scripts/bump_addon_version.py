@@ -19,6 +19,7 @@ already drifted (would need manual reconciliation first).
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -93,6 +94,22 @@ def main() -> None:
     print("files updated:")
     for path in FILES.values():
         print(f"  {path.relative_to(ROOT)}")
+
+    # 4. Rebuild the self-hosted extension repo so index.json and the
+    # versioned zip match the new number. Non-fatal on failure so a
+    # bump can still land when the network is down or pip is missing;
+    # the operator sees the warning and reruns build_extension.py.
+    build_script = ROOT / "scripts" / "build_extension.py"
+    if build_script.exists():
+        print("running scripts/build_extension.py to refresh the extension repo...")
+        proc = subprocess.run([sys.executable, str(build_script)])
+        if proc.returncode != 0:
+            print(
+                "WARNING: extension build failed; version files bumped but "
+                "dist/extensions/ is stale. Rerun `scripts/build_extension.py` "
+                "when you can.",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

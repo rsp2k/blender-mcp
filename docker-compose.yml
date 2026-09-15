@@ -110,6 +110,31 @@ services:
     # Dockerfile already declares a healthcheck against /health via python
     # urllib (slim image has no curl/wget). Not overriding it here.
 
+  # Static file server for the self-hosted Blender extension repo. Shares
+  # the mcp.blender.bet vhost with blender-mcp above via caddy-docker-proxy's
+  # per-service label merging: the handle_path_0 directive here matches
+  # /extensions/* FIRST and strips the prefix before forwarding, so this
+  # container just serves ./dist/extensions as its own root. Everything
+  # else on mcp.blender.bet falls through to blender-mcp's reverse_proxy.
+  #
+  # Built artifacts are produced locally by scripts/build_extension.py
+  # and mounted read-only. When bump_addon_version.py rebuilds, this
+  # container sees the new files on the next request (no restart needed
+  # because it's just a file server).
+  blender-mcp-extensions:
+    image: caddy:2.10-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-extensions
+    restart: unless-stopped
+    volumes:
+      - ./dist/extensions:/srv:ro
+      - ./packaging/extensions.Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
+      caddy.handle_path_0: /extensions/*
+      caddy.handle_path_0.reverse_proxy: "{{upstreams 80}}"
+
   # Dev variant — `docker compose --profile dev up`.
   # DO NOT run alongside prod: both bind the same DOMAIN on the caddy fabric
   # and caddy-docker-proxy will pick whichever container started last,
