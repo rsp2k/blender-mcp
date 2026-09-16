@@ -84,6 +84,11 @@ WORKDIR /app
 COPY --from=build --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app addon/ ./addon/
+# Admin scripts — reply_to_feedback.py in particular is designed to be
+# `docker compose exec`d for out-of-band admin work (feedback replies +
+# status updates without a web UI). Small footprint; kept in the prod
+# image so ops paths don't require a separate deploy artifact.
+COPY --chown=app:app scripts/ ./scripts/
 # Alembic config + entrypoint shim (Phase I — runs ``alembic upgrade head``
 # before handing off to the app process). The shim is bash so the slim
 # image's /bin/sh works without extra packages.
