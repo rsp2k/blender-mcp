@@ -105,6 +105,73 @@ class BlenderPromptsComponent(MCPMixin):
     """
 
     @mcp_prompt()
+    def feedback_help(self) -> list[Message]:
+        """The submit-feedback pattern for gaps in the tool surface.
+
+        Fetch this once when you want the full story on when to use
+        blender_submit_feedback. Referenced from dispatch_recipe when
+        the LLM is about to reach for execute_code.
+        """
+        text = (
+            "**When to submit feedback via ``blender_submit_feedback``**\n\n"
+            "The single biggest signal about what to build next is what\n"
+            "LLMs try to do that no dedicated tool covers. If you're\n"
+            "about to write Python for a task that FEELS like it should\n"
+            "be a first-class ``blender_*`` tool, submit a feature-request\n"
+            "first, THEN write the Python. Two seconds of your time captures\n"
+            "the gap; without it, the maintainer sees the ``execute_code``\n"
+            "call in logs but not what you were trying to do.\n\n"
+            "**Four categories, four prefixes on the shortcode:**\n\n"
+            "- ``feature-request`` (id prefix ``fr-``) — \"this should be\n"
+            "  a dedicated tool.\" Example title: \"a tool for setting the\n"
+            "  active camera by name\"\n"
+            "- ``bug`` (``bug-``) — \"an existing tool returned wrong\n"
+            "  results or crashed.\" Include the exact call + response.\n"
+            "- ``friction`` (``fx-``) — \"this workflow was awkward.\"\n"
+            "  Softer than a bug or a feature. Multiple frictions might\n"
+            "  add up to a design change.\n"
+            "- ``other`` (``ot-``) — anything else. Use freely.\n\n"
+            "**Canonical call shape:**\n\n"
+            "```python\n"
+            "result = blender_submit_feedback(\n"
+            "    title=\"Set active camera by name\",\n"
+            "    body=(\n"
+            "        \"I wanted `blender_set_active_camera(name='Main')` \"\n"
+            "        \"and had to fall back to execute_code. \"\n"
+            "        \"Would be a nice one-liner tool.\"\n"
+            "    ),\n"
+            "    category=\"feature-request\",\n"
+            "    context={\n"
+            "        \"attempted_tool\": \"blender_execute_code\",\n"
+            "        \"attempted_code\": \"bpy.context.scene.camera = ...\",\n"
+            "        \"addon_version\": \"1.5.20\",\n"
+            "        \"blender_version\": \"5.2\",\n"
+            "    },\n"
+            "    submitter_client_uuid=\"<your stable LLM id, if any>\",\n"
+            "    submitter_client_label=\"Claude Desktop\",\n"
+            ")\n"
+            "# result -> {\"status\":\"ok\", \"id\":\"fr-Kf3nQp7Xy_A\",\n"
+            "#            \"category\":\"feature-request\", \"url\":...}\n"
+            "```\n\n"
+            "**Checking for replies:** the maintainer may reply via an\n"
+            "out-of-band admin path. Poll with:\n\n"
+            "```python\n"
+            "blender_get_feedback(feedback_id=\"fr-Kf3nQp7Xy_A\")\n"
+            "# returns {\"feedback\": {..., \"replies\": [...], \"status\": \"...\"}}\n"
+            "```\n\n"
+            "**See what everyone is submitting:** the read model is\n"
+            "transparent — any authenticated user sees every submission.\n\n"
+            "```python\n"
+            "blender_list_feedback(category=\"feature-request\", status=\"open\")\n"
+            "blender_list_feedback(mine_only=True)  # your own submissions only\n"
+            "```\n\n"
+            "Rule of thumb: if you write two ``execute_code`` calls for\n"
+            "the same conceptual thing across sessions, that's a\n"
+            "feature-request. Don't wait for the third."
+        )
+        return _msg(text)
+
+    @mcp_prompt()
     def script_writing_assistant(self, goal: str) -> list[Message]:
         """Outline the bpy patterns that fit the user's stated goal."""
         text = (
@@ -403,6 +470,26 @@ class BlenderPromptsComponent(MCPMixin):
                 "The first request may prompt a per-user Allow/Deny in\n"
                 "Blender; subsequent requests from the same requester_uuid\n"
                 "can be pre-authorized to skip that prompt.\n"
+                "\n**Also — capture the gap:** if you're about to write\n"
+                "Python for something that FEELS like it should be a\n"
+                "dedicated tool (a fill / an export / an asset-shape you\n"
+                "keep repeating), submit feedback FIRST so we learn what\n"
+                "to build next:\n\n"
+                "```python\n"
+                "blender_submit_feedback(\n"
+                "    title=\"<one-line what you tried to do>\",\n"
+                "    body=\"<longer: what you wrote, what didn't work>\",\n"
+                "    category=\"feature-request\",\n"
+                "    context={\"attempted_tool\": \"blender_execute_code\",\n"
+                "             \"blender_version\": \"5.2\",\n"
+                "             \"addon_version\": \"1.5.20\"},\n"
+                ")\n"
+                "```\n\n"
+                "Returns a shortcode like ``fr-Kf3nQp7Xy_A`` you can\n"
+                "re-check later via ``blender_get_feedback(id)`` for\n"
+                "any reply. Then proceed with your ``execute_code`` —\n"
+                "you've captured the friction, now solve the immediate\n"
+                "problem.\n"
             )
 
         text = (

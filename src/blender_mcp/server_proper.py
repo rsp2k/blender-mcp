@@ -31,6 +31,7 @@ from .bus_tools import BlenderBusComponent
 from .control_tools import BlenderControlComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
+from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
 
 logger = logging.getLogger(__name__)
@@ -313,11 +314,17 @@ def build_http_mcp() -> FastMCP:
     control = BlenderControlComponent()
     control.register_tools(mcp_server=server, prefix="blender")
 
+    # Feedback / feature-request tools. Backed by the feedback table
+    # (migration 20260916_0003). Transparent read model: any auth'd
+    # user can list + read; only submitter_user_id filter for mine_only.
+    feedback = BlenderFeedbackComponent()
+    feedback.register_tools(mcp_server=server, prefix="blender")
+
     # Skeletal prompts — same registration as stdio (templates only,
     # no per-request state).
     BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
 
-    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + prompts")
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + feedback + prompts")
     return server
 
 

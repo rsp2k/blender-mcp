@@ -26,9 +26,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -196,6 +197,100 @@ class BusInvitation(Base):
 
     __table_args__ = (
         Index("ix_bus_invitation_code", "code"),
+    )
+
+
+class FeedbackCategory(str, enum.Enum):
+    """Four categories, mapped to short prefixes in the public shortcode.
+
+    Prefixes are stable — they're baked into shortcodes that get pasted
+    into chat and referenced later. Renaming a category later means
+    supporting the old prefix as an alias forever.
+    """
+
+    feature_request = "feature-request"  # prefix "fr"
+    bug = "bug"                           # prefix "bug"
+    friction = "friction"                 # prefix "fx"
+    other = "other"                       # prefix "ot"
+
+
+class FeedbackStatus(str, enum.Enum):
+    open = "open"
+    in_progress = "in-progress"
+    resolved = "resolved"
+    duplicate = "duplicate"
+    wontfix = "wontfix"
+
+
+_CATEGORY_PREFIX = {
+    FeedbackCategory.feature_request: "fr",
+    FeedbackCategory.bug: "bug",
+    FeedbackCategory.friction: "fx",
+    FeedbackCategory.other: "ot",
+}
+
+
+def new_feedback_id(category: FeedbackCategory) -> str:
+    """``{prefix}-{11-char-token}`` — e.g. ``fr-Kf3nQp7Xy_A``.
+
+    ``secrets.token_urlsafe(8)`` yields 11 chars from ``[A-Za-z0-9_-]``.
+    64^11 ≈ 7e19 keyspace per prefix; collision-free at any realistic
+    scale, and the prefix is a human-readable "what kind of thing is
+    this" hint when the id shows up in URLs or messages.
+    """
+    return f"{_CATEGORY_PREFIX[category]}-{secrets.token_urlsafe(8)}"
+
+
+class Feedback(Base):
+    """LLM- or human-submitted feedback / feature request / bug report.
+
+    Every authenticated user can list + read every row (transparent
+    model per v1). Only the submitter's user_id is written to
+    ``submitter_user_id``; replies are appended to ``replies`` as
+    ``{"author", "text", "created_at"}`` dicts by the reply CLI, not
+    via any MCP tool in v1 (admin-side workflow, not LLM-side).
+
+    ``id`` is the public shortcode, primary key. See ``new_feedback_id``.
+    """
+
+    __tablename__ = "feedback"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    submitter_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    # Optional — LLM sessions can register a client UUID via
+    # bus_register_session but many don't. When present, useful for
+    # correlating multiple submissions from the same tool/agent.
+    submitter_client_uuid: Mapped[str | None] = mapped_column(String(128))
+    submitter_client_label: Mapped[str | None] = mapped_column(String(255))
+
+    category: Mapped[FeedbackCategory] = mapped_column(
+        Enum(FeedbackCategory, name="feedback_category"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Free-form JSON — the tool signature suggests fields like
+    # {attempted_tool, error, addon_version, blender_version} but doesn't
+    # enforce a schema. Callers write whatever they think is useful.
+    context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    status: Mapped[FeedbackStatus] = mapped_column(
+        Enum(FeedbackStatus, name="feedback_status"),
+        nullable=False,
+        default=FeedbackStatus.open,
+        index=True,
+    )
+    # Replies: list of {"author": str, "text": str, "created_at": iso8601-str}.
+    # Appended by the reply CLI. Never mutated (append-only history).
+    replies: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Resolution note: filled by the admin when marking resolved/wontfix
+    # etc. Optional — a status change without a note is allowed.
+    resolution: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )
 
 
