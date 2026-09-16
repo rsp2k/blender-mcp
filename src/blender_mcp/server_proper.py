@@ -31,6 +31,7 @@ from .bus_tools import BlenderBusComponent
 from .control_tools import BlenderControlComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
+from .extension_tools import BlenderExtensionComponent
 from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
 
@@ -320,11 +321,17 @@ def build_http_mcp() -> FastMCP:
     feedback = BlenderFeedbackComponent()
     feedback.register_tools(mcp_server=server, prefix="blender")
 
+    # Bus-driven extension install (consent-gated via the addon's
+    # sidebar banner). Companion list_installed_extensions is a plain
+    # dispatch tool registered above via BlenderDispatchComponent.
+    extension = BlenderExtensionComponent()
+    extension.register_tools(mcp_server=server, prefix="blender")
+
     # Skeletal prompts — same registration as stdio (templates only,
     # no per-request state).
     BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
 
-    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + feedback + prompts")
+    logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + feedback + extension + prompts")
     return server
 
 

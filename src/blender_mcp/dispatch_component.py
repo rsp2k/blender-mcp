@@ -420,6 +420,30 @@ class BlenderDispatchComponent(MCPMixin):
             bus_id=bus_id,
         )
 
+    @mcp_tool()
+    async def list_installed_extensions(
+        self,
+        include_disabled: bool = True,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """List addons + Blender 4.2+ extensions installed on the target.
+
+        Read-only companion to ``blender_install_extension``; use this
+        to check if an extension is already installed before asking
+        the user for consent to install it again.
+        """
+        return await self._call(
+            ctx,
+            "list_installed_extensions",
+            {"include_disabled": include_disabled},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
     # ---- Tier 2: always-on integration status (3 commands) ---------
 
     @mcp_tool()
