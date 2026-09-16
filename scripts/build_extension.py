@@ -47,14 +47,21 @@ DIST_DIR = ROOT / "dist" / "extensions"
 # Runtime deps to bundle. Additive: transitives are pulled automatically
 # by `pip download`. Pin at the top-level so the resolver picks
 # consistent transitives across the platform runs.
+#
+# fastmcp pin: match pyproject.toml (>=3.3.1) with an explicit <4 cap.
+# Per memory `fastmcp_pin_landmine`, five FastMCP/SDK private APIs would
+# break on the 4.x bump (the _ping_handler monkey-patch, OIDCProxy
+# internals, provider.update_default_scopes, client_storage kwarg,
+# fastmcp.contrib.mcp_mixin). A version-neutral bump belongs on its own
+# branch with a full auth-flow verification pass; not something the
+# extension zip should silently drag in.
 RUNTIME_DEPS = [
-    "fastmcp>=2.9,<3",
-    "requests>=2.32,<3",
+    "fastmcp>=3.3.1,<4",
+    "requests>=2.34.2,<3",
 ]
 
 # Platforms we ship wheels for. Each entry is what pip's --platform tag
-# expects. Blender 4.2 ships CPython 3.11; 4.3+ still 3.11. When Blender
-# bumps to 3.13 (likely 5.x), add a second sweep here for --python 3.13.
+# expects.
 PLATFORMS = [
     "manylinux2014_x86_64",
     "manylinux_2_17_aarch64",
@@ -68,7 +75,13 @@ PLATFORMS = [
 # who to offer the extension to.
 BLENDER_PLATFORMS = ["linux-x64", "linux-arm64", "windows-x64", "macos-x64", "macos-arm64"]
 
-PYTHON_VERSION = "3.11"
+# Python versions Blender ships across the 4.2+ range we support. 3.11 =
+# Blender 4.2 - 4.5 LTS. 3.14 = Blender 5.x (verified: install failure
+# from Blender 5.2 reported "This Python version (3.14) isn't compatible
+# with (3.11)"). One zip contains the union of wheels across every
+# (platform, python) tuple; Blender picks the subset matching the host's
+# tags at install time.
+PYTHON_VERSIONS = ["3.11", "3.14"]
 
 
 def _read_addon_version() -> str:
@@ -80,28 +93,31 @@ def _read_addon_version() -> str:
 
 
 def _download_wheels(target_dir: Path) -> list[str]:
-    """Fetch wheels for RUNTIME_DEPS across every platform in PLATFORMS.
+    """Fetch wheels for RUNTIME_DEPS across every (platform, python) combo.
 
-    Runs ``uv pip download`` once per (platform, python-version) combo
-    and dedupes filenames — pure-Python wheels (``*-py3-none-any.whl``)
+    Runs ``pip download`` once per (platform, python-version) pair and
+    dedupes filenames — pure-Python wheels (``*-py3-none-any.whl``)
     naturally coalesce because they have identical names across
-    platforms, so the same file only appears once in the output.
+    combinations, so the same file only appears once in the output.
+    C-extension wheels come out as separate files per (cpXY, platform)
+    tuple, which is exactly what we want Blender to have available.
     """
     target_dir.mkdir(parents=True, exist_ok=True)
-    for plat in PLATFORMS:
-        print(f"  fetching wheels for {plat} (py{PYTHON_VERSION})...")
-        cmd = [
-            sys.executable, "-m", "pip", "download",
-            "--only-binary=:all:",
-            "--python-version", PYTHON_VERSION,
-            "--platform", plat,
-            "--dest", str(target_dir),
-            *RUNTIME_DEPS,
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            print(proc.stderr, file=sys.stderr)
-            sys.exit(f"ERROR: pip download failed for {plat}")
+    for py in PYTHON_VERSIONS:
+        for plat in PLATFORMS:
+            print(f"  fetching wheels for {plat} (py{py})...")
+            cmd = [
+                sys.executable, "-m", "pip", "download",
+                "--only-binary=:all:",
+                "--python-version", py,
+                "--platform", plat,
+                "--dest", str(target_dir),
+                *RUNTIME_DEPS,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                print(proc.stderr, file=sys.stderr)
+                sys.exit(f"ERROR: pip download failed for {plat} py{py}")
     files = sorted(f.name for f in target_dir.iterdir() if f.suffix == ".whl")
     print(f"  {len(files)} unique wheels resolved")
     return files
