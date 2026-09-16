@@ -49,6 +49,34 @@ def _draw_pending_control_request(layout) -> None:
     )
 
 
+def _draw_pending_extension_install(layout) -> None:
+    """Banner for an unanswered blender_install_extension request."""
+    pending = state._pending_extension_request
+    if not pending:
+        return
+    box = layout.box()
+    col = box.column(align=True)
+    who = pending.get("requester_label") or pending.get("requester_uuid", "?")[:12]
+    col.label(text=f"'{who}' wants to install an extension", icon='IMPORT')
+    col.label(text=f"package: {pending.get('package_id', '')[:60]}")
+    # Repo URL is important trust context — show it, even if it wraps.
+    col.label(text=f"from: {pending.get('repo_url', '')[:80]}")
+    if pending.get("new_repo"):
+        # A never-seen repo is a bigger trust decision than a new
+        # package from an already-trusted repo; call it out.
+        col.label(text="(NEW REPO — never installed from before)", icon='ERROR')
+    col.label(text=f"reason: {(pending.get('reason') or '')[:60]}")
+    row = col.row(align=True)
+    row.operator("blendermcp.grant_extension_install", text="Install", icon='CHECKMARK')
+    row.operator("blendermcp.deny_extension_install", text="Deny", icon='CANCEL')
+    row2 = col.row(align=True)
+    row2.operator(
+        "blendermcp.always_allow_extension_install",
+        text="Always allow this LLM + repo",
+        icon='FUND',
+    )
+
+
 def _draw_active_lock_header(layout) -> None:
     """Header + Take-back for an active control lock. Countdown auto-updates."""
     if state._lock_expires_at is None:
@@ -124,6 +152,9 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         # no-op when their state is empty.
         _draw_pending_control_request(layout)
         _draw_active_lock_header(layout)
+        # Extension-install request lives at the same visual tier as
+        # the control-lock request — both are consent prompts.
+        _draw_pending_extension_install(layout)
 
         # Version-mismatch banner — no-op unless the server told us we're
         # behind on the last register_client. Drawn before login so users

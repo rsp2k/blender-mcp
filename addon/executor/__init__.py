@@ -18,6 +18,7 @@ from ..preferences import get_prefs
 from ._shared import SharedHelpersMixin
 from .handlers.code_exec import CodeExecHandlersMixin
 from .handlers.console import ConsoleHandlersMixin
+from .handlers.extensions import ExtensionsHandlersMixin
 from .handlers.hyper3d import Hyper3dHandlersMixin
 from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
@@ -36,6 +37,7 @@ class BlenderCommandExecutor(
     PolyhavenHandlersMixin,
     Hyper3dHandlersMixin,
     SketchfabHandlersMixin,
+    ExtensionsHandlersMixin,
     SharedHelpersMixin,
 ):
     """Routes incoming `{type, params}` commands to handler methods.

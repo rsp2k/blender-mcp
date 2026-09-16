@@ -53,6 +53,15 @@ _latest_addon_version: Optional[str] = None
 _addon_download_url: Optional[str] = None
 _update_available: bool = False
 
+# Pending extension-install request from an LLM via
+# blender_install_extension. Set by the drainer's extension_install_request
+# handler when consent is needed (repo not pre-authorized OR requester
+# not pre-authorized). Cleared by the Grant/Deny/AlwaysAllow operators,
+# which also submit the reply. Dict shape:
+#   {job_id, requester_uuid, requester_label, repo_url, repo_name,
+#    package_id, reason, new_repo: bool}
+_pending_extension_request: Optional[dict] = None
+
 # Cooperative control-lock state. Two orthogonal things live here:
 #
 #   1. Pending REQUEST — an LLM asked for control, user hasn't clicked

@@ -80,6 +80,14 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
         # on prefs.pre_authorized_llms; otherwise stashes into state
         # for the sidebar banner to render Allow/Deny/Always-allow.
         handle_control_request(client, job_id, payload)
+    elif msg_type == "extension_install_request":
+        # Bus-driven extension install. Auto-installs only when BOTH
+        # (a) the requester is pre-authorized AND (b) the repo URL is
+        # on prefs.pre_authorized_extension_repos. A new repo always
+        # prompts even for trusted LLMs, since adding a repo is a
+        # separate trust decision from installing from an already-
+        # trusted one.
+        handle_extension_install_request(client, job_id, payload)
     # Unknown message_type silently dropped (forward-compatible: future
     # message types in the wire won't make older addons crash).
 
@@ -253,6 +261,152 @@ def handle_control_request(
     # NO submit_job_update here — the reply happens when the user clicks
     # Allow / Deny / Always-allow (see BLENDERMCP_OT_GrantControl etc.
     # in ui/operators.py).
+
+
+def _pre_auth_repo(prefs_urls: str, repo_url: str) -> bool:
+    """True iff repo_url is in the comma-separated allowlist."""
+    if not repo_url:
+        return False
+    allowlist = {u.strip().rstrip("/") for u in prefs_urls.split(",") if u.strip()}
+    return repo_url.strip().rstrip("/") in allowlist
+
+
+def _find_registered_repo(remote_url: str):
+    """Return (repo_index, repo) for the first extension repo whose
+    remote_url matches, or (None, None) if not registered.
+
+    Blender exposes the repo list at ``bpy.context.preferences.extensions.repos``
+    on 4.2+; older Blenders don't have this at all and this function
+    just returns (None, None).
+    """
+    try:
+        repos = bpy.context.preferences.extensions.repos
+    except AttributeError:
+        return None, None
+    needle = (remote_url or "").strip().rstrip("/")
+    for idx, repo in enumerate(repos):
+        remote = (getattr(repo, "remote_url", "") or "").strip().rstrip("/")
+        if remote == needle:
+            return idx, repo
+    return None, None
+
+
+def _perform_extension_install(
+    repo_url: str,
+    package_id: str,
+    repo_name: str,
+) -> dict:
+    """Actually invoke the Blender extensions manager operators.
+
+    Runs on the drainer (main) thread so bpy.ops calls are legal.
+    Returns a JSON-safe dict; the caller feeds it into submit_job_update.
+    Any exception path lands as ``{"installed": False, "error": "..."}``
+    so the LLM sees a structured failure instead of an addon-side raise.
+    """
+    if bpy.app.background:
+        return {"installed": False, "error": "no_ui_in_background"}
+    try:
+        # Add the repo if not already registered.
+        idx, repo = _find_registered_repo(repo_url)
+        added_repo = False
+        if idx is None:
+            # remote_url is the reliable kwarg name across 4.2+; name
+            # falls back to the URL if not supplied (Blender assigns
+            # something reasonable).
+            bpy.ops.extensions.repo_add(remote_url=repo_url, name=repo_name or repo_url)
+            idx, repo = _find_registered_repo(repo_url)
+            if idx is None:
+                return {"installed": False, "error": "repo_add_did_not_register"}
+            added_repo = True
+            # Sync so the index is available before install.
+            bpy.ops.extensions.repo_sync(repo_index=idx)
+
+        bpy.ops.extensions.package_install(repo_index=idx, pkg_id=package_id)
+        # package_install returns as soon as the download is queued —
+        # actual extraction runs on Blender's background thread and
+        # completes later. Honest wire: report queued, and hint that
+        # list_installed_extensions is the way to confirm completion.
+        return {
+            "install_initiated": True,
+            "repo_index": idx,
+            "repo_added": added_repo,
+            "hint": (
+                "Blender's extensions manager runs the download + "
+                "extraction on a background thread. Poll "
+                "blender_list_installed_extensions to confirm the "
+                "package appears (usually a few seconds; can be longer "
+                "for wheel-bearing extensions like blender_mcp)."
+            ),
+        }
+    except Exception as e:
+        return {"install_initiated": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def handle_extension_install_request(
+    client: "BlenderMCPClient",
+    job_id: str,
+    payload: dict,
+) -> None:
+    """Route an incoming extension_install_request through the consent
+    check + install path.
+
+    Auto-install requires BOTH: the requester UUID on the pre-authorized
+    LLM list, AND the repo URL already on the pre-authorized repo list.
+    A new-repo install always prompts, so adding a repo is opt-in every
+    time even for trusted LLMs.
+    """
+    requester_uuid = payload.get("requester_uuid") or ""
+    requester_label = payload.get("requester_label")
+    repo_url = payload.get("repo_url") or ""
+    repo_name = payload.get("repo_name") or ""
+    package_id = payload.get("package_id") or ""
+    reason = payload.get("reason") or "(no reason given)"
+
+    if not repo_url or not package_id:
+        submit_job_update(
+            client, job_id, "completed",
+            result=_safe_json({"installed": False, "error": "missing_repo_url_or_package_id"}),
+            error="",
+        )
+        return
+
+    prefs = _get_prefs()
+    pre_auth_llms = getattr(prefs, "pre_authorized_llms", "") if prefs else ""
+    pre_auth_repos = getattr(prefs, "pre_authorized_extension_repos", "") if prefs else ""
+
+    llm_trusted = _pre_authorized(pre_auth_llms, requester_uuid)
+    repo_trusted = _pre_auth_repo(pre_auth_repos, repo_url)
+
+    # Determine whether this would ADD a new repo — used both for the
+    # auto-vs-prompt decision AND for the sidebar banner wording.
+    idx, _repo = _find_registered_repo(repo_url)
+    would_add_repo = idx is None
+
+    # Fast path: LLM + repo both trusted AND we're not adding a repo.
+    # Adding a repo is always a fresh trust decision, so it prompts
+    # even when both trust checks pass.
+    if llm_trusted and repo_trusted and not would_add_repo:
+        result = _perform_extension_install(repo_url, package_id, repo_name)
+        result["auto_granted"] = True
+        submit_job_update(
+            client, job_id, "completed",
+            result=_safe_json(result),
+            error="",
+        )
+        return
+
+    # Prompt path — banner draws until the user clicks.
+    state._pending_extension_request = {
+        "job_id": job_id,
+        "requester_uuid": requester_uuid,
+        "requester_label": requester_label,
+        "repo_url": repo_url,
+        "repo_name": repo_name,
+        "package_id": package_id,
+        "reason": reason,
+        "new_repo": would_add_repo,
+    }
+    _tag_redraw()
 
 
 def _safe_json(value) -> str:

@@ -15,11 +15,14 @@ from __future__ import annotations
 
 from .operators import (
     BLENDERMCP_OT_AlwaysAllowControl,
+    BLENDERMCP_OT_AlwaysAllowExtensionInstall,
     BLENDERMCP_OT_CopyClientUUID,
     BLENDERMCP_OT_CreateBus,
     BLENDERMCP_OT_DenyControl,
+    BLENDERMCP_OT_DenyExtensionInstall,
     BLENDERMCP_OT_DismissFatalError,
     BLENDERMCP_OT_GrantControl,
+    BLENDERMCP_OT_GrantExtensionInstall,
     BLENDERMCP_OT_InviteToBus,
     BLENDERMCP_OT_JoinBus,
     BLENDERMCP_OT_LeaveBus,
@@ -56,6 +59,9 @@ CLASSES = (
     BLENDERMCP_OT_DenyControl,
     BLENDERMCP_OT_AlwaysAllowControl,
     BLENDERMCP_OT_TakeBackControl,
+    BLENDERMCP_OT_GrantExtensionInstall,
+    BLENDERMCP_OT_DenyExtensionInstall,
+    BLENDERMCP_OT_AlwaysAllowExtensionInstall,
 )
 
 __all__ = [
@@ -79,4 +85,7 @@ __all__ = [
     "BLENDERMCP_OT_DenyControl",
     "BLENDERMCP_OT_AlwaysAllowControl",
     "BLENDERMCP_OT_TakeBackControl",
+    "BLENDERMCP_OT_GrantExtensionInstall",
+    "BLENDERMCP_OT_DenyExtensionInstall",
+    "BLENDERMCP_OT_AlwaysAllowExtensionInstall",
 ]

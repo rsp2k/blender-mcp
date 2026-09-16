@@ -319,6 +319,23 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         default="",
     )
 
+    # Repos an LLM can install FROM without user re-confirmation,
+    # provided the LLM itself is also pre-authorized. Defaults to
+    # the self-hosted BlenderMCP repo since a user who's already
+    # installed the addon via that repo has implicitly trusted it.
+    # A NEW repo (not on this list) ALWAYS prompts, even for a
+    # pre-authorized LLM — see extension_install_request handler.
+    pre_authorized_extension_repos: StringProperty(
+        name="Pre-authorized extension repos",
+        description=(
+            "Comma-separated repo URLs (index.json URLs) an LLM can "
+            "install packages from without re-prompting, provided the "
+            "requesting LLM is also on the pre-authorized list. Adding "
+            "a NEW repo always prompts regardless. Edit to revoke."
+        ),
+        default="https://mcp.blender.bet/extensions/index.json",
+    )
+
     def draw(self, context):
         """Draw the prefs panel in Edit > Preferences > Add-ons > BlenderMCP."""
         layout = self.layout

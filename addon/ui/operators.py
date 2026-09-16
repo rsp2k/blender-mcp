@@ -786,3 +786,122 @@ class BLENDERMCP_OT_TakeBackControl(bpy.types.Operator):
         _tag_panel_redraw()
         self.report({'INFO'}, "Control lock released")
         return {'FINISHED'}
+
+
+# --- Extension-install operators ----------------------------------------
+#
+# Mirror shape of the control-lock operators (Grant / Deny / AlwaysAllow)
+# but resolve _pending_extension_request and invoke the drainer's
+# _perform_extension_install synchronously. Blender's extension operators
+# are legal on the main thread (which is where operators run).
+
+
+def _resolve_extension_pending(
+    client,
+    granted: bool,
+    add_repo_to_prefs: bool = False,
+    add_llm_to_prefs: bool = False,
+    prefs=None,
+) -> bool:
+    """Common tail for the three extension-install operators.
+
+    On granted=True: performs the install synchronously (main thread),
+    then submits the reply. On granted=False: submits a denied reply.
+    Optionally extends the pre-auth allowlists so future requests from
+    the same LLM + same repo bypass the prompt.
+    """
+    from ..client.drainer import _perform_extension_install
+
+    pending = state._pending_extension_request
+    if not pending:
+        return False
+
+    if granted:
+        install_result = _perform_extension_install(
+            pending["repo_url"],
+            pending["package_id"],
+            pending.get("repo_name") or "",
+        )
+        install_result["auto_granted"] = False
+    else:
+        install_result = {"installed": False, "reason": "user_denied"}
+
+    submit_job_update(
+        client, pending["job_id"], "completed",
+        result=_json.dumps(install_result),
+        error="",
+    )
+
+    if add_repo_to_prefs and prefs is not None and pending.get("repo_url"):
+        existing = {u.strip().rstrip("/") for u in prefs.pre_authorized_extension_repos.split(",") if u.strip()}
+        existing.add(pending["repo_url"].strip().rstrip("/"))
+        prefs.pre_authorized_extension_repos = ",".join(sorted(existing))
+    if add_llm_to_prefs and prefs is not None and pending.get("requester_uuid"):
+        existing = {u.strip() for u in prefs.pre_authorized_llms.split(",") if u.strip()}
+        existing.add(pending["requester_uuid"])
+        prefs.pre_authorized_llms = ",".join(sorted(existing))
+
+    state._pending_extension_request = None
+    _tag_panel_redraw()
+    return True
+
+
+class BLENDERMCP_OT_GrantExtensionInstall(bpy.types.Operator):
+    """Install the requested extension. One-shot; doesn't extend trust."""
+
+    bl_idname = "blendermcp.grant_extension_install"
+    bl_label = "Install"
+    bl_description = "Install this extension. LLM will need to re-ask for future installs."
+
+    def execute(self, context):
+        client = state._client
+        if client is None or not state._pending_extension_request:
+            return {'CANCELLED'}
+        ok = _resolve_extension_pending(client, granted=True)
+        if not ok:
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Extension install initiated")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DenyExtensionInstall(bpy.types.Operator):
+    """Reject the extension-install request."""
+
+    bl_idname = "blendermcp.deny_extension_install"
+    bl_label = "Deny"
+    bl_description = "Reject the LLM's extension-install request"
+
+    def execute(self, context):
+        client = state._client
+        if client is None or not state._pending_extension_request:
+            return {'CANCELLED'}
+        _resolve_extension_pending(client, granted=False)
+        self.report({'INFO'}, "Extension install denied")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_AlwaysAllowExtensionInstall(bpy.types.Operator):
+    """Install AND remember this LLM+repo so future installs auto-approve.
+
+    Adds the requester's UUID to pre_authorized_llms AND the repo URL
+    to pre_authorized_extension_repos. Both are needed for the fast
+    path to trigger; missing either still prompts.
+    """
+
+    bl_idname = "blendermcp.always_allow_extension_install"
+    bl_label = "Always allow this LLM + repo"
+    bl_description = "Install now AND future installs from this LLM using this repo skip the prompt"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        client = state._client
+        if client is None or not state._pending_extension_request:
+            return {'CANCELLED'}
+        _resolve_extension_pending(
+            client, granted=True,
+            add_repo_to_prefs=True,
+            add_llm_to_prefs=True,
+            prefs=prefs,
+        )
+        self.report({'INFO'}, "Installed + trust extended for future requests from this LLM + repo")
+        return {'FINISHED'}
