@@ -263,8 +263,21 @@ class Feedback(Base):
     submitter_client_uuid: Mapped[str | None] = mapped_column(String(128))
     submitter_client_label: Mapped[str | None] = mapped_column(String(255))
 
+    # values_callable is mandatory here — without it, SQLAlchemy sends
+    # the enum's .name (Python attribute — ``feature_request`` with an
+    # underscore) instead of its .value (``feature-request`` with a
+    # hyphen). The Postgres enum type was created from .value strings,
+    # so the mismatch triggers InvalidTextRepresentationError only for
+    # entries where name != value (feature_request; the others slip
+    # through by coincidence). Verified in prod by bug-pYH00BElpAs.
     category: Mapped[FeedbackCategory] = mapped_column(
-        Enum(FeedbackCategory, name="feedback_category"), nullable=False, index=True
+        Enum(
+            FeedbackCategory,
+            name="feedback_category",
+            values_callable=lambda cls: [e.value for e in cls],
+        ),
+        nullable=False,
+        index=True,
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -273,8 +286,15 @@ class Feedback(Base):
     # enforce a schema. Callers write whatever they think is useful.
     context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
+    # Same values_callable fix as `category` above — FeedbackStatus.in_progress
+    # would blow up identically the first time anyone tried to set it
+    # from Python (``.name == "in_progress"`` vs ``.value == "in-progress"``).
     status: Mapped[FeedbackStatus] = mapped_column(
-        Enum(FeedbackStatus, name="feedback_status"),
+        Enum(
+            FeedbackStatus,
+            name="feedback_status",
+            values_callable=lambda cls: [e.value for e in cls],
+        ),
         nullable=False,
         default=FeedbackStatus.open,
         index=True,

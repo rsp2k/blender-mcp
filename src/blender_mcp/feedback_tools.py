@@ -20,6 +20,7 @@ schema is already shaped for it (JSONB replies array, indexed status).
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from fastmcp import Context
@@ -35,6 +36,8 @@ from .storage.feedback_repo import (
 )
 from .storage.models import FeedbackCategory, FeedbackStatus
 
+logger = logging.getLogger(__name__)
+
 
 # Bound the response payload for list_feedback so a large table doesn't
 # blow through MCP tool-result budgets. 50 rows @ few-KB each is safe.
@@ -42,22 +45,37 @@ LIST_LIMIT_DEFAULT = 50
 LIST_LIMIT_MAX = 200
 
 
-def _parse_category(raw: Optional[str]) -> Optional[FeedbackCategory]:
+# Sentinel for "caller passed an unknown value" — distinct from "caller
+# passed None to mean no filter". Callers convert this into a structured
+# error rather than silently coercing to a default (which was the pre-fix
+# behavior: unknown category → silent fallback to friction).
+class _Unknown:
+    pass
+UNKNOWN = _Unknown()
+
+
+def _parse_category(raw: Optional[str]):
+    """Returns None (no value given), UNKNOWN (bad value), or the enum."""
     if raw is None:
         return None
     try:
         return FeedbackCategory(raw)
     except ValueError:
-        return None
+        return UNKNOWN
 
 
-def _parse_status(raw: Optional[str]) -> Optional[FeedbackStatus]:
+def _parse_status(raw: Optional[str]):
+    """Returns None (no value given), UNKNOWN (bad value), or the enum."""
     if raw is None:
         return None
     try:
         return FeedbackStatus(raw)
     except ValueError:
-        return None
+        return UNKNOWN
+
+
+_VALID_CATEGORIES = [c.value for c in FeedbackCategory]
+_VALID_STATUSES = [s.value for s in FeedbackStatus]
 
 
 class BlenderFeedbackComponent(MCPMixin):
@@ -116,7 +134,16 @@ class BlenderFeedbackComponent(MCPMixin):
         if not user_id:
             return json.dumps({"status": "error", "reason": "unauthenticated"})
 
-        cat = _parse_category(category) or FeedbackCategory.friction
+        cat = _parse_category(category)
+        if isinstance(cat, _Unknown):
+            return json.dumps({
+                "status": "error",
+                "reason": "unknown_category",
+                "given": category,
+                "accepted": _VALID_CATEGORIES,
+            })
+        if cat is None:
+            cat = FeedbackCategory.friction
 
         # Both title and body are required non-empty; a truly empty
         # submission is almost always a client-side bug rather than a
@@ -127,17 +154,33 @@ class BlenderFeedbackComponent(MCPMixin):
                 "reason": "title_and_body_required",
             })
 
-        async with get_session() as session:
-            row = await create_feedback(
-                session,
-                submitter_user_id=user_id,
-                submitter_client_uuid=submitter_client_uuid,
-                submitter_client_label=submitter_client_label,
-                category=cat,
-                title=title.strip(),
-                body=body,
-                context=context or {},
-            )
+        try:
+            async with get_session() as session:
+                row = await create_feedback(
+                    session,
+                    submitter_user_id=user_id,
+                    submitter_client_uuid=submitter_client_uuid,
+                    submitter_client_label=submitter_client_label,
+                    category=cat,
+                    title=title.strip(),
+                    body=body,
+                    context=context or {},
+                )
+        except Exception as exc:
+            # Defense-in-depth: even with values_callable on the enum
+            # column, any future schema mismatch or DB-level failure
+            # would previously dump SQLAlchemy's full error including
+            # the INSERT statement, bound params, and submitter user_id
+            # hash to the MCP caller. Log the detail server-side, return
+            # a scrubbed structured error to the caller. Verified in
+            # bug-pYH00BElpAs. See also FeedbackCategory.feature_request
+            # → previously "feature_request" reached Postgres by mistake.
+            logger.exception("submit_feedback failed for user_id=%s category=%s", user_id, cat.value)
+            return json.dumps({
+                "status": "error",
+                "reason": "storage_failure",
+                "hint": "The submission couldn't be recorded. Server-side logs have the detail. Try again; if it persists, report to the maintainer out-of-band.",
+            })
 
         return json.dumps({
             "status": "ok",
@@ -204,7 +247,21 @@ class BlenderFeedbackComponent(MCPMixin):
             return json.dumps({"status": "error", "reason": "unauthenticated"})
 
         cat = _parse_category(category)
+        if isinstance(cat, _Unknown):
+            return json.dumps({
+                "status": "error",
+                "reason": "unknown_category",
+                "given": category,
+                "accepted": _VALID_CATEGORIES,
+            })
         stat = _parse_status(status)
+        if isinstance(stat, _Unknown):
+            return json.dumps({
+                "status": "error",
+                "reason": "unknown_status",
+                "given": status,
+                "accepted": _VALID_STATUSES,
+            })
         capped_limit = max(1, min(int(limit), LIST_LIMIT_MAX))
 
         async with get_session() as session:
