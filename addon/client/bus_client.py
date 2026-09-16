@@ -139,6 +139,15 @@ class BlenderMCPClient:
         # Cleared by the user clicking Login or Dismiss.
         self.last_error: Optional[str] = None
         self.fatal_error: Optional[str] = None
+        # Reconnect visibility state — surfaced in the sidebar's Status
+        # section so users can see the addon is actively retrying rather
+        # than silently stuck. `reconnect_attempt` counts consecutive
+        # failed reconnects and resets on successful registration.
+        # `next_retry_at` is a unix epoch the sidebar subtracts from
+        # time.time() to render the countdown; None outside a scheduled
+        # sleep window.
+        self.reconnect_attempt = 0
+        self.next_retry_at: Optional[float] = None
         # Set by _refresh_watcher to signal that _run should tear down the
         # current FastMCP Client and reopen with the rotated JWT. Cleared
         # after reconnect completes.
@@ -415,6 +424,8 @@ class BlenderMCPClient:
                             )
                             self.connected = True
                             backoff = 1.0  # successful registration → reset backoff
+                            self.reconnect_attempt = 0
+                            self.next_retry_at = None
                             self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
                             # Server-advertised update hint. Failures here are
@@ -546,7 +557,13 @@ class BlenderMCPClient:
                 if self._rotate_requested:
                     print("[BlenderMCP] Reconnecting with rotated JWT")
                 else:
-                    print(f"[BlenderMCP] Reconnecting in {backoff:.0f}s")
+                    import time as _time
+                    self.reconnect_attempt += 1
+                    self.next_retry_at = _time.time() + backoff
+                    print(
+                        f"[BlenderMCP] Reconnect attempt {self.reconnect_attempt} in "
+                        f"{backoff:.0f}s"
+                    )
                     sleep_remaining = backoff
                     # Sleep in 0.5s chunks so stop() takes effect promptly
                     # without making the user wait for the full backoff.
@@ -554,6 +571,9 @@ class BlenderMCPClient:
                         chunk = min(0.5, sleep_remaining)
                         await asyncio.sleep(chunk)
                         sleep_remaining -= chunk
+                    # Sleep is over; the loop iterates and either succeeds
+                    # (clearing next_retry_at above) or lands back here.
+                    self.next_retry_at = None
                     backoff = min(backoff * 2, BACKOFF_MAX)
 
                 if self._rotate_requested and self.running:

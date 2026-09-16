@@ -239,9 +239,23 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                     text=f"Queue: {qlen} pending  Active: {len(client.active_jobs)}",
                 )
             elif client.running:
-                col.label(text="Status: Connecting...", icon='TIME')
+                # Enriched reconnect status: attempt counter + countdown to
+                # the next retry so extended outages don't look like a
+                # frozen "Connecting..." spinner. next_retry_at is None
+                # during the actual connect attempt itself (versus the
+                # sleep between attempts), so guard the countdown.
+                attempt = getattr(client, "reconnect_attempt", 0)
+                if attempt > 0:
+                    header = f"Status: Reconnecting (attempt {attempt})"
+                else:
+                    header = "Status: Connecting..."
+                col.label(text=header, icon='TIME')
+                next_at = getattr(client, "next_retry_at", None)
+                if next_at is not None:
+                    remaining = int(max(0, next_at - _time.time()))
+                    col.label(text=f"Next try in {remaining}s")
             if client.last_error:
-                col.label(text=f"Last error: {client.last_error[:40]}", icon='ERROR')
+                col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
 
         # --- Asset integrations (toggles only — API keys live in prefs) ---
         layout.separator()
