@@ -255,11 +255,31 @@ class BlenderMCPClient:
             return False
 
         new_jwt = payload.get("access_token", "")
-        new_expires_in = int(payload.get("expires_in", 0))
-        if not new_jwt or not new_expires_in:
-            self.last_error = "Refresh response malformed"
+        if not new_jwt:
+            self.last_error = "Refresh response malformed (no access_token)"
             print(f"[BlenderMCP] {self.last_error}")
             return False
+
+        new_expires_in = int(payload.get("expires_in", 0))
+        if not new_expires_in:
+            # Same OIDCProxy-omits-expires_in fallback as OAuth login.
+            # Decode the fresh JWT's exp claim so the watcher has a real
+            # deadline for the NEXT rotation. Without this, a rotation
+            # succeeds once, then jwt_expires_at is 0, watcher sleeps
+            # an hour, and the (new) token expires unrefreshed.
+            from ..auth.oauth_pkce import _decode_jwt_payload
+            claims = _decode_jwt_payload(new_jwt) or {}
+            exp = claims.get("exp")
+            if isinstance(exp, (int, float)):
+                new_expires_in = int(exp - time.time())
+                print(
+                    f"[BlenderMCP] Refresh response omitted expires_in; "
+                    f"using JWT exp claim ({new_expires_in}s from now)"
+                )
+            else:
+                self.last_error = "Refresh response has no expires_in and no JWT exp"
+                print(f"[BlenderMCP] {self.last_error}")
+                return False
 
         # OAuth refresh rotates the refresh_token too (per spec — old one
         # is immediately invalidated). Capture the new one if returned.

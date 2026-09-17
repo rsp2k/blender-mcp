@@ -163,6 +163,28 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             expires_in = int(tok.get("expires_in", 0))
             if expires_in:
                 prefs_now.jwt_expires_at = str(int(_time.time()) + expires_in)
+            else:
+                # OIDCProxy sometimes omits ``expires_in`` from the token
+                # response, leaving prefs.jwt_expires_at empty; the refresh
+                # watcher then reads 0, hits its "unknown expiry" branch,
+                # and sleeps an hour instead of refreshing. Fall back to
+                # the JWT's own ``exp`` claim (every JWT carries it) so
+                # the watcher has a real deadline to wake up on. Verified
+                # against server logs — the failing case sent zero POST
+                # /token refresh grants before the sidebar flipped to
+                # "Not logged in."
+                from ..auth.oauth_pkce import _decode_jwt_payload
+                claims = _decode_jwt_payload(tok["access_token"]) or {}
+                exp = claims.get("exp")
+                if isinstance(exp, (int, float)):
+                    prefs_now.jwt_expires_at = str(int(exp))
+                    expires_in = int(exp - _time.time())
+                else:
+                    print(
+                        "[BlenderMCP] Login: no expires_in and no JWT exp "
+                        "claim — refresh watcher will sleep an hour and "
+                        "may miss the rotation window"
+                    )
             # Capture user-display fields from the id_token (set by
             # oauth_pkce.oauth_login when Authentik returned one). Missing
             # → fall back to empty string, panel renders legacy label.
