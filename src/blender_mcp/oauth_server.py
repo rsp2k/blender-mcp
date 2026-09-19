@@ -260,6 +260,18 @@ def build_app() -> FastAPI:
         finally:
             current_downstream_client_id.reset(token_var)
 
+    # ---- expires_in injection middleware ----
+    # OIDCProxy sometimes omits ``expires_in`` from the /token response
+    # body when the upstream Authentik reply lacks it. Strict OAuth 2.0
+    # clients (including the BlenderMCP addon on <=1.5.21) use that
+    # field to schedule refresh; without it they silently never rotate
+    # and the session dies at the real TTL. This middleware injects
+    # ``expires_in = exp - now`` from the access_token's own JWT exp
+    # claim when the field is missing. Zero effect on responses that
+    # already include the field.
+    from .token_expires_in_middleware import ensure_expires_in
+    app.middleware("http")(ensure_expires_in)
+
     # ---- DCR-capture middleware (phase H — role attribution) ----
     # Intercept POST /register to record (client_id → role) from the
     # client's declared ``software_id``. We DON'T modify the request or the
