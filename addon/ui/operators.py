@@ -438,6 +438,42 @@ class BLENDERMCP_OT_StopServer(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BLENDERMCP_OT_ReconnectNow(bpy.types.Operator):
+    """Skip the current reconnect backoff and try again immediately.
+
+    During an outage the client waits between reconnect attempts with
+    exponential backoff up to a 30s cap, plus up to another 30s for
+    the heartbeat interval to notice a dead transport. Together that
+    can be a minute of "reconnecting" with nothing visibly moving.
+    This button tears down the current client and stands up a fresh
+    one with backoff reset to 1s, so a user impatient with the
+    countdown has an immediate escape without walking through
+    Disconnect + Connect manually.
+    """
+
+    bl_idname = "blendermcp.reconnect_now"
+    bl_label = "Reconnect now"
+    bl_description = (
+        "Skip the current backoff sleep and reconnect immediately. "
+        "Equivalent to clicking Disconnect then Connect."
+    )
+
+    def execute(self, context):
+        # Reuse the existing operator bodies rather than duplicating
+        # their logic — stop_server handles the client stop + null,
+        # start_server handles the fresh BlenderMCPClient construction
+        # + start (backoff resets to 1s because it's a fresh client).
+        try:
+            bpy.ops.blendermcp.stop_server('EXEC_DEFAULT')
+            bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+        except Exception as e:
+            self.report({'ERROR'}, f"Reconnect failed: {e}")
+            traceback.print_exc()
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Reconnecting")
+        return {'FINISHED'}
+
+
 # ---- Phase I7: bus management operators ---------------------------------
 
 def _api_call(method: str, path: str, prefs, body: dict | None = None) -> dict:

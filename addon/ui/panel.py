@@ -284,7 +284,17 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                 next_at = getattr(client, "next_retry_at", None)
                 if next_at is not None:
                     remaining = int(max(0, next_at - _time.time()))
-                    col.label(text=f"Next try in {remaining}s")
+                    # Countdown + escape hatch on the same row: skips
+                    # the current backoff sleep AND the heartbeat
+                    # detect window by tearing down the client and
+                    # standing up a fresh one with backoff reset.
+                    retry_row = col.row(align=True)
+                    retry_row.label(text=f"Next try in {remaining}s")
+                    retry_row.operator(
+                        "blendermcp.reconnect_now",
+                        text="Now",
+                        icon='FILE_REFRESH',
+                    )
             if client.last_error:
                 col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
 
