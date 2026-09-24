@@ -444,6 +444,63 @@ class BlenderDispatchComponent(MCPMixin):
             bus_id=bus_id,
         )
 
+    @mcp_tool()
+    async def list_annotations(
+        self,
+        include_bbox: bool = True,
+        limit: int = 200,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """List grease-pencil strokes the user has drawn in the viewport.
+
+        Blender's D-key annotation tool stores strokes on a special
+        ``Annotations`` grease-pencil datablock; entries whose
+        ``gp_name == "Annotations"`` are what the user drew via that
+        tool. Other gp_names are grease-pencil ART objects (created
+        via Add > Grease Pencil), also returned so the LLM can see
+        the whole picture.
+
+        Cheap metadata call: bbox + point counts, not the point
+        coordinates themselves. Call ``blender_get_annotation`` on
+        interesting IDs for full geometry.
+        """
+        return await self._call(
+            ctx,
+            "list_annotations",
+            {"include_bbox": include_bbox, "limit": limit},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def get_annotation(
+        self,
+        annotation_id: str,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Full geometry for one stroke by id (from list_annotations).
+
+        Returns world-space points, color, bbox. If the id doesn't
+        resolve (user deleted the stroke or edited the layer since
+        the last list_annotations), returns
+        ``{"error": "not_found", ...}`` — re-list rather than retry.
+        """
+        return await self._call(
+            ctx,
+            "get_annotation",
+            {"annotation_id": annotation_id},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
     # ---- Tier 2: always-on integration status (3 commands) ---------
 
     @mcp_tool()

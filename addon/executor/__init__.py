@@ -16,6 +16,7 @@ import traceback
 
 from ..preferences import get_prefs
 from ._shared import SharedHelpersMixin
+from .handlers.annotations import AnnotationHandlersMixin
 from .handlers.code_exec import CodeExecHandlersMixin
 from .handlers.console import ConsoleHandlersMixin
 from .handlers.extensions import ExtensionsHandlersMixin
@@ -38,6 +39,7 @@ class BlenderCommandExecutor(
     Hyper3dHandlersMixin,
     SketchfabHandlersMixin,
     ExtensionsHandlersMixin,
+    AnnotationHandlersMixin,
     SharedHelpersMixin,
 ):
     """Routes incoming `{type, params}` commands to handler methods.

@@ -24,6 +24,31 @@ class SharedHelpersMixin:
     """Shared bpy helpers attached to BlenderCommandExecutor."""
 
     @staticmethod
+    def _grease_pencil_datablocks():
+        """Return a list of (source_label, gp_datablock) across Blender
+        versions.
+
+        Blender 4.x kept everything under ``bpy.data.grease_pencils``.
+        Blender 4.3 introduced Grease Pencil v3 at
+        ``bpy.data.grease_pencils_v3``, and 5.x deprecates the legacy
+        collection (feedback fx-5ZRSYENMByk called this out for the
+        keyframe API; the same rename applies here). Every handler that
+        walks GPs should go through this helper so a version bump is
+        one edit not N.
+
+        Returns pairs so the caller can tag stroke IDs with which
+        collection they came from — the two GP models have different
+        stroke shapes and we don't want to conflate their IDs.
+        """
+        pairs = []
+        for attr, label in (("grease_pencils", "v2"), ("grease_pencils_v3", "v3")):
+            coll = getattr(bpy.data, attr, None)
+            if coll is not None:
+                for gp in coll:
+                    pairs.append((label, gp))
+        return pairs
+
+    @staticmethod
     def _get_aabb(obj):
         """Returns the world-space axis-aligned bounding box (AABB) of an object."""
         if obj.type != 'MESH':
