@@ -34,46 +34,82 @@ import mathutils
 from ..registry import command
 
 
-def _bbox_from_points(world_points):
-    """min/max across a list of world-space Vector3s."""
-    if not world_points:
-        return None, None
-    xs = [p.x for p in world_points]
-    ys = [p.y for p in world_points]
-    zs = [p.z for p in world_points]
-    return [min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]
+def _extract_stroke_points(stroke):
+    """Extract stroke points as raw [x,y,z] Vectors in whatever space
+    Blender stored them in — NOT world-transformed here.
 
-
-def _stroke_points_world(stroke, matrix_world):
-    """Extract stroke points as world-space [x,y,z] lists.
-
-    Legacy GP (v2) stroke points expose ``.co`` as a Vector3. GPv3
-    exposes points differently (via foreach_get on a flat array),
-    detected here at runtime rather than by version-check so the
-    code survives whatever exact 5.x release the user is on.
+    Legacy GP (v2) stroke points expose ``.co``. GPv3 exposes points
+    via foreach_get on a flat array. Runtime-detected rather than
+    version-branched so the code survives whichever 5.x release.
     """
-    world_points = []
-    # v2 path: iterable of points, each with .co
+    raw = []
     try:
         for p in stroke.points:
             co = getattr(p, "co", None)
             if co is not None:
-                world_points.append(matrix_world @ mathutils.Vector(co[:3]))
+                raw.append(mathutils.Vector(co[:3]))
     except (AttributeError, TypeError):
         pass
-    # v3 path: strokes have a flat position array read via foreach_get
-    if not world_points:
+    if not raw:
         n = getattr(stroke, "points_num", None)
         if n:
             flat = [0.0] * (n * 3)
             try:
                 stroke.points.foreach_get("position", flat)
                 for i in range(n):
-                    v = mathutils.Vector(flat[i * 3 : i * 3 + 3])
-                    world_points.append(matrix_world @ v)
+                    raw.append(mathutils.Vector(flat[i * 3 : i * 3 + 3]))
             except (AttributeError, RuntimeError):
                 pass
-    return world_points
+    return raw
+
+
+def _detect_stroke_space(stroke, layer, raw_points):
+    """Return the coordinate space Blender stored this stroke in.
+
+    Blender annotation strokes carry a ``display_mode`` (or similar)
+    attribute with values like ``SCREEN`` / ``3DSPACE`` / ``2DSPACE`` /
+    ``2DIMAGE`` — this is the authoritative source. Fall back to a
+    Z-variance heuristic if the attribute doesn't exist on that stroke
+    shape.
+
+    Returns one of: ``"3D"``, ``"2D-View"``, ``"2D-Image"``, ``"2D-Local"``,
+    ``"unknown"``. Callers should ONLY treat matrix_world @ point as
+    meaningful when space == "3D".
+    """
+    for obj in (stroke, layer):
+        for attr in ("display_mode", "annotation_placement", "placement"):
+            val = getattr(obj, attr, None)
+            if val is None:
+                continue
+            token = str(val).upper()
+            if "3D" in token or "SURFACE" in token or "CURSOR" in token or "STROKE" in token:
+                return "3D"
+            if "SCREEN" in token or token == "VIEW":
+                return "2D-View"
+            if "IMAGE" in token:
+                return "2D-Image"
+            if "2D" in token or "LOCAL" in token:
+                return "2D-Local"
+    # Heuristic fallback: if every point's Z equals the first's, this is
+    # a flat stroke — very likely screen/view space. Real 3D annotations
+    # have depth variance because the user's viewpoint changes with the
+    # pen's cursor position when drawing.
+    if not raw_points:
+        return "unknown"
+    z0 = raw_points[0].z
+    if all(abs(p.z - z0) < 1e-6 for p in raw_points):
+        return "2D-View"
+    return "3D"
+
+
+def _bbox_from_vectors(vecs):
+    """min/max across a list of Vector3s. Returns (None, None) if empty."""
+    if not vecs:
+        return None, None
+    xs = [v.x for v in vecs]
+    ys = [v.y for v in vecs]
+    zs = [v.z for v in vecs]
+    return [min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]
 
 
 def _stroke_color(stroke, layer):
@@ -149,6 +185,8 @@ class AnnotationHandlersMixin:
                             truncated = True
                             break
                         stroke_id = f"{source}:{gp.name}:{layer_idx}:{frame_num}:{stroke_idx}"
+                        raw = _extract_stroke_points(stroke)
+                        space = _detect_stroke_space(stroke, layer, raw)
                         entry: dict = {
                             "id": stroke_id,
                             "gp_source": source,
@@ -157,18 +195,22 @@ class AnnotationHandlersMixin:
                             "layer_index": layer_idx,
                             "frame": frame_num,
                             "stroke_index": stroke_idx,
-                            "point_count": len(getattr(stroke, "points", []) or []),
+                            "point_count": len(raw),
                             "color": _stroke_color(stroke, layer),
+                            "space": space,
                         }
                         if include_bbox:
-                            pts = _stroke_points_world(stroke, matrix_world)
-                            bmin, bmax = _bbox_from_points(pts)
+                            # World-space bbox is only meaningful for
+                            # 3D strokes. For screen/view-space strokes,
+                            # applying matrix_world gives nonsense; leave
+                            # bbox null and let the LLM know via `space`.
+                            if space == "3D":
+                                world = [matrix_world @ v for v in raw]
+                                bmin, bmax = _bbox_from_vectors(world)
+                            else:
+                                bmin = bmax = None
                             entry["bbox_min"] = bmin
                             entry["bbox_max"] = bmax
-                            # Overwrite point_count with the number we
-                            # actually extracted, which may differ from
-                            # len(stroke.points) on v3.
-                            entry["point_count"] = len(pts)
                         entries.append(entry)
                     if truncated:
                         break
@@ -236,17 +278,45 @@ class AnnotationHandlersMixin:
         stroke = strokes_list[stroke_idx]
 
         matrix_world = getattr(layer, "matrix_world", None) or mathutils.Matrix.Identity(4)
-        pts = _stroke_points_world(stroke, matrix_world)
-        bmin, bmax = _bbox_from_points(pts)
+        raw = _extract_stroke_points(stroke)
+        space = _detect_stroke_space(stroke, layer, raw)
+
+        # World coords + bbox only make sense for 3D strokes; for
+        # screen/view/image space the matrix_world transform is
+        # meaningless (points are in view-plane units, not scene
+        # units) so we return the raw coords with an explicit space
+        # tag and let the LLM decide whether to raycast, unproject,
+        # or bail out.
+        if space == "3D":
+            world = [matrix_world @ v for v in raw]
+            world_points = [[w.x, w.y, w.z] for w in world]
+            bmin, bmax = _bbox_from_vectors(world)
+        else:
+            world_points = None
+            bmin = bmax = None
+
         return {
             "id": annotation_id,
             "gp_source": source,
             "gp_name": gp_name,
             "layer": getattr(layer, "info", None) or getattr(layer, "name", "?"),
             "frame": frame_num,
-            "point_count": len(pts),
-            "points": [[p.x, p.y, p.z] for p in pts],
+            "space": space,
+            "point_count": len(raw),
+            # raw_points are always safe (in whatever space Blender
+            # stored them); world_points are ONLY populated for
+            # space == "3D" where the transform is meaningful.
+            "raw_points": [[p.x, p.y, p.z] for p in raw],
+            "world_points": world_points,
             "color": _stroke_color(stroke, layer),
             "bbox_min": bmin,
             "bbox_max": bmax,
+            "hint": (
+                None if space == "3D"
+                else "Stroke was drawn in " + space + " space; raw_points are "
+                     "in view-plane coordinates, not world. To associate with "
+                     "scene objects, use a raycast through the viewport at each "
+                     "point (bpy.ops.view3d.select or scene.ray_cast) from the "
+                     "user's active viewport region."
+            ),
         }

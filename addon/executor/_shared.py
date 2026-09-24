@@ -26,22 +26,29 @@ class SharedHelpersMixin:
     @staticmethod
     def _grease_pencil_datablocks():
         """Return a list of (source_label, gp_datablock) across Blender
-        versions.
+        versions AND the dedicated annotation collection.
 
-        Blender 4.x kept everything under ``bpy.data.grease_pencils``.
-        Blender 4.3 introduced Grease Pencil v3 at
-        ``bpy.data.grease_pencils_v3``, and 5.x deprecates the legacy
-        collection (feedback fx-5ZRSYENMByk called this out for the
-        keyframe API; the same rename applies here). Every handler that
-        walks GPs should go through this helper so a version bump is
-        one edit not N.
+        Three sources to cover the whole 4.2 -> 5.x range:
 
-        Returns pairs so the caller can tag stroke IDs with which
-        collection they came from — the two GP models have different
-        stroke shapes and we don't want to conflate their IDs.
+        - ``bpy.data.annotations`` — Blender 5.x moved D-key annotation
+          strokes here (verified from a client report). This is the
+          source most callers actually want.
+        - ``bpy.data.grease_pencils`` — legacy GP through 4.x, holds
+          both annotations (before the 5.x split) and user-created GP
+          art objects.
+        - ``bpy.data.grease_pencils_v3`` — 4.3+ GPv3 for art objects.
+
+        Every handler that walks GPs goes through this helper so a
+        future rename is one edit, not N. ``getattr(..., None)`` makes
+        this safe on any Blender: unknown attributes are just skipped,
+        no version-check branches.
         """
         pairs = []
-        for attr, label in (("grease_pencils", "v2"), ("grease_pencils_v3", "v3")):
+        for attr, label in (
+            ("annotations", "ann"),       # 5.x: dedicated D-key annotations
+            ("grease_pencils", "v2"),     # legacy through 4.x
+            ("grease_pencils_v3", "v3"),  # 4.3+ GPv3 for art
+        ):
             coll = getattr(bpy.data, attr, None)
             if coll is not None:
                 for gp in coll:
