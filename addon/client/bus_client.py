@@ -491,6 +491,34 @@ class BlenderMCPClient:
                                 try:
                                     await client.ping()
                                     last_heartbeat = now
+                                    # Drainer-watchdog: verified against
+                                    # feedback bug-iDJHVyy4e2Q (queue stall
+                                    # with heartbeat still healthy). If the
+                                    # main-thread timer that pops jobs off
+                                    # client.job_queue has been unregistered
+                                    # for any reason (an unhandled exception
+                                    # that Blender caught, a module reload
+                                    # from an extension update, etc.), the
+                                    # bus stays "connected" but no dispatch
+                                    # ever completes. Re-register from here
+                                    # — bpy.app.timers.register is documented
+                                    # thread-safe.
+                                    try:
+                                        if not bpy.app.timers.is_registered(self._drain_queue):
+                                            bpy.app.timers.register(
+                                                self._drain_queue, first_interval=0.1
+                                            )
+                                            self._timer_registered = True
+                                            print(
+                                                "[BlenderMCP] Drainer timer was "
+                                                "not registered; re-registered "
+                                                "from heartbeat watchdog."
+                                            )
+                                    except Exception as _wd_exc:
+                                        print(
+                                            f"[BlenderMCP] Drainer watchdog "
+                                            f"check failed: {_wd_exc}"
+                                        )
                                 except Exception as hb_exc:
                                     self.last_error = (
                                         f"Heartbeat failed: {hb_exc}"
