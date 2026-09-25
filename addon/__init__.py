@@ -86,6 +86,123 @@ _LEGACY_SCENE_PROPS = (
 )
 
 
+def _try_autoconnect() -> None:
+    """Invoke start_server if credentials are stored and we're not
+    already running. Called from a scheduled timer at register-time
+    and from the load_post handler.
+
+    Failures are silent: if credentials are stale, the normal reconnect
+    + auth-fatal path will handle it and surface a Re-login banner.
+    """
+    import bpy
+
+    from . import state
+    from .preferences import get_prefs
+
+    try:
+        prefs = get_prefs()
+        if not prefs.jwt_token:
+            return  # nothing to reconnect with; user hasn't logged in
+        scene = getattr(bpy.context, "scene", None)
+        if scene is None:
+            return
+        # Already connected? nothing to do.
+        if state._client is not None and getattr(state._client, "running", False):
+            return
+        if scene.blendermcp_server_running:
+            return
+        print("[BlenderMCP] Auto-reconnect: stored auth present, invoking Connect")
+        bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+    except Exception as e:
+        print(f"[BlenderMCP] Auto-reconnect failed (non-fatal): {e}")
+
+
+def _schedule_autoconnect() -> None:
+    """Register a one-shot timer that runs _try_autoconnect ~2s after
+    addon register. Delay lets Blender finish scene load before the
+    first register_client fires."""
+    import bpy
+
+    def _tick():
+        _try_autoconnect()
+        return None  # one-shot; return None unregisters the timer
+
+    try:
+        bpy.app.timers.register(_tick, first_interval=2.0)
+    except Exception as e:
+        print(f"[BlenderMCP] Could not schedule autoconnect timer: {e}")
+
+
+def _on_blend_load_post(_dummy):
+    """Persistent handler: fires on every .blend file open.
+
+    Two responsibilities:
+    1. If the client is running, soft-reconnect so the fresh blend_file
+       lands in the server-side ClientInfo (LLMs see the file the user
+       is now editing).
+    2. If we have credentials but no live client, this is the auto-
+       reconnect entry point for "reopen Blender" (register()'s timer
+       covers process startup; this handler covers File > Open cases
+       inside a running Blender). Same _try_autoconnect logic.
+    """
+    import bpy
+
+    from . import state
+
+    try:
+        client = state._client
+        if client is not None and getattr(client, "running", False):
+            # Soft reconnect: teardown + fresh start. Delegates via
+            # bpy.ops so the operator's error handling applies.
+            print("[BlenderMCP] .blend load detected — soft-reconnect to refresh metadata")
+            try:
+                bpy.ops.blendermcp.stop_server('EXEC_DEFAULT')
+                bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+            except Exception as e:
+                print(f"[BlenderMCP] Soft-reconnect failed (non-fatal): {e}")
+        else:
+            _try_autoconnect()
+    except Exception as e:
+        print(f"[BlenderMCP] load_post handler failed (non-fatal): {e}")
+
+
+# Marks the handler persistent so Blender doesn't unregister it after
+# the first .blend load (default handlers are dropped on load).
+try:
+    import bpy as _bpy_for_handler_decoration
+    _on_blend_load_post = _bpy_for_handler_decoration.app.handlers.persistent(_on_blend_load_post)
+except Exception:
+    pass  # non-Blender import context (tests/CI)
+
+
+def _install_lifecycle_handlers() -> None:
+    """Hook _on_blend_load_post into bpy.app.handlers.load_post,
+    idempotently (safe to call from register() even if the handler
+    was already installed by a prior register())."""
+    import bpy
+
+    try:
+        handlers = bpy.app.handlers.load_post
+        # Idempotent add: only append if not already present.
+        if _on_blend_load_post not in handlers:
+            handlers.append(_on_blend_load_post)
+    except Exception as e:
+        print(f"[BlenderMCP] Could not install load_post handler: {e}")
+
+
+def _uninstall_lifecycle_handlers() -> None:
+    """Remove _on_blend_load_post from bpy.app.handlers.load_post,
+    tolerating the case where it isn't there."""
+    import bpy
+
+    try:
+        handlers = bpy.app.handlers.load_post
+        while _on_blend_load_post in handlers:
+            handlers.remove(_on_blend_load_post)
+    except Exception as e:
+        print(f"[BlenderMCP] Could not remove load_post handler: {e}")
+
+
 def register():
     """Blender entry point — register all classes + properties.
 
@@ -132,32 +249,27 @@ def register():
     except Exception as e:
         print(f"[BlenderMCP] Migration warning (non-fatal): {e}")
 
-    # Clear stored auth on every addon register. Trade-off: user clicks
-    # Login once per Blender session (browser consent + one Allow click)
-    # in exchange for never seeing the stale-JWT-after-restart confusion
-    # that the in-server JTI mapping can't survive a server restart of.
-    # The addon's reconnect/refresh logic can usually recover (since
-    # 1.5.4), but "Connect button does nothing visible" is a worse UX
-    # than "Click Login first." Predictable beats clever.
-    #
-    # Edge case: this also wipes auth when the user disables + re-enables
-    # the addon mid-session. Rare; acceptable trade.
-    try:
-        from .preferences import get_prefs
-        prefs_now = get_prefs()
-        if prefs_now.jwt_token:
-            print("[BlenderMCP] Clearing stored auth on addon load — click Login to re-authenticate")
-            prefs_now.jwt_token = ""
-            prefs_now.refresh_token = ""
-            prefs_now.jwt_expires_at = ""
-            prefs_now.oauth_client_id = ""
-            prefs_now.user_display_name = ""
-            prefs_now.user_email = ""
-    except Exception as e:
-        # Non-fatal: register() shouldn't fail because we couldn't clear
-        # prefs. Worst case, the user sees stale auth and falls back to
-        # the (now-working) Re-login flow.
-        print(f"[BlenderMCP] Auth clear at register failed (non-fatal): {e}")
+    # Stored auth is preserved across addon loads now. Previously we
+    # wiped tokens on every register() because early server-side state
+    # wasn't restart-safe (JTI mapping in memory). Since then we've
+    # added PostgreSQL kv_store persistence, a JWT-exp-claim fallback,
+    # and the token middleware that guarantees expires_in — so refresh
+    # tokens survive server restarts, and the auth-fatal path already
+    # clears creds if they DO turn out to be truly dead. Keeping the
+    # tokens means auto-reconnect (below) can actually reconnect.
+
+    # Register load_post handler: when Blender opens a .blend file
+    # (either at startup or via File > Open), soft-reconnect so the
+    # bus sees the current blend_file in ClientInfo. Handler is marked
+    # persistent so Blender doesn't drop it after the first .blend load.
+    _install_lifecycle_handlers()
+
+    # Auto-reconnect on Blender startup: schedule a one-shot timer that
+    # invokes start_server if we have credentials AND aren't already
+    # running. Delay of 2s lets Blender finish loading the initial
+    # scene before the client fires its first register_client. Avoids
+    # "click Connect after every restart" friction for the common case.
+    _schedule_autoconnect()
 
     print(f"[BlenderMCP] Addon v{__version__} registered")
     if not FASTMCP_AVAILABLE:
@@ -172,6 +284,10 @@ def unregister():
     from . import state
     from .preferences import BlenderMCPPreferences
     from .ui import CLASSES as _CLASSES
+
+    # Remove our load_post handler first so nothing fires against
+    # torn-down state during unregister.
+    _uninstall_lifecycle_handlers()
 
     # Stop any running client; state owns the singletons since phase 6.
     if state._client is not None:
