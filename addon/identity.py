@@ -19,20 +19,33 @@ from typing import Optional
 class StickyUUIDManager:
     """Manages persistent client UUID for message bus registration.
 
-    The UUID is written to `<USER>/config/blender_mcp_uuid.txt`. On load,
-    if the file content is a valid-length UUID string, it's reused; the
-    bus-side client ID is always prefixed with ``blender-`` so it's
+    The UUID is written to ``<USER>/config/blender_mcp_uuid_<pid>.txt`` —
+    one file per Blender process. Sharing a single file across Blender
+    processes (the pre-fix behavior) meant two simultaneously-running
+    Blenders registered on the bus with the SAME uuid, and every dispatch
+    landed on whichever one the server saw last. Client-reported: commands
+    would silently execute against the wrong scene.
+
+    Pid-aware naming makes the UUID sticky WITHIN a Blender process
+    lifetime (each Blender keeps its own uuid across Connect/Disconnect
+    cycles) but distinct BETWEEN concurrent processes. Restarting Blender
+    yields a fresh UUID because the pid changes, which is fine: LLM
+    clients rediscover Blenders via ``blender_list_available_clients``
+    at the start of each session anyway.
+
+    The bus-side client ID is always prefixed with ``blender-`` so it's
     distinguishable from other client types on the bus.
     """
 
     UUID_PREFIX = "blender-"
-    UUID_FILENAME = "blender_mcp_uuid.txt"
+    UUID_FILENAME_TEMPLATE = "blender_mcp_uuid_{pid}.txt"
 
     def __init__(self, uuid_file: Optional[str] = None) -> None:
         if uuid_file is None:
             import bpy  # lazy: only when actually used inside Blender
+            filename = self.UUID_FILENAME_TEMPLATE.format(pid=os.getpid())
             uuid_file = os.path.join(
-                bpy.utils.resource_path("USER"), "config", self.UUID_FILENAME
+                bpy.utils.resource_path("USER"), "config", filename
             )
         self.uuid_file = uuid_file
         self.client_id = self._load_or_generate_uuid()
