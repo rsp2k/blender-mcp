@@ -439,6 +439,24 @@ class BlenderMCPClient:
                                 reg_args["label"] = self.label
                             if self.bus_id:
                                 reg_args["bus_id"] = self.bus_id
+                            # Per-process disambiguation metadata: pid,
+                            # hostname, current .blend filepath. Server
+                            # exposes these on list_available_clients so
+                            # LLMs facing multiple concurrent Blenders
+                            # can filter/pick unambiguously (e.g., by
+                            # blend_file endswith "myscene.blend").
+                            try:
+                                import os as _os
+                                import socket as _socket
+                                reg_args["pid"] = _os.getpid()
+                                reg_args["hostname"] = _socket.gethostname()
+                                _blend = getattr(bpy.data, "filepath", "") or None
+                                if _blend:
+                                    reg_args["blend_file"] = _blend
+                            except Exception as _meta_exc:
+                                # Metadata is optional; a failure here
+                                # shouldn't block a working register.
+                                print(f"[BlenderMCP] Metadata build failed (non-fatal): {_meta_exc}")
                             reg_result = await client.call_tool(
                                 "blender_register_client", reg_args
                             )
