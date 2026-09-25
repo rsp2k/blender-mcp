@@ -49,6 +49,16 @@ class ClientInfo:
     control_expires_at: Optional[float] = None  # unix epoch, None = no lock
     control_reason: Optional[str] = None
 
+    # Per-process disambiguation metadata (Blender clients only). Old
+    # addons omit these and the server leaves them None; new addons
+    # send them at register_client time AND re-send on any bpy load_post
+    # so blend_file stays live. Exposed on list_available_clients so
+    # LLMs facing multiple concurrent Blenders can pick unambiguously
+    # (e.g., filter by blend_file endswith "terrahawk.blend").
+    pid: Optional[int] = None
+    hostname: Optional[str] = None
+    blend_file: Optional[str] = None
+
     def lock_is_active(self, now: Optional[float] = None) -> bool:
         """True iff a non-expired lock is held. Lazy-expiry: callers that
         see False after this returned True should treat the lock as gone."""
@@ -85,6 +95,15 @@ class ClientInfo:
                 "expires_at": self.control_expires_at,
                 "reason": self.control_reason,
             }
+        # Per-process metadata — only included when the client actually
+        # sent them (old addons don't). Keeps the payload shape identical
+        # for pre-metadata clients.
+        if self.pid is not None:
+            d["pid"] = self.pid
+        if self.hostname is not None:
+            d["hostname"] = self.hostname
+        if self.blend_file is not None:
+            d["blend_file"] = self.blend_file
         return d
 
 
@@ -138,6 +157,15 @@ class MessageBus:
             # reconnect without having to recompute its label every time.
             if client_info.label is not None:
                 existing.label = client_info.label
+            # Same "None = keep" semantics for per-process metadata, so
+            # a bare re-register (from load_post etc.) doesn't wipe the
+            # fields when the addon didn't recompute them.
+            if client_info.pid is not None:
+                existing.pid = client_info.pid
+            if client_info.hostname is not None:
+                existing.hostname = client_info.hostname
+            if client_info.blend_file is not None:
+                existing.blend_file = client_info.blend_file
             if client_info.session is not None:
                 # Session changed → re-index. Drop the old session's entry
                 # (whatever it was pointing to is stale) and add the new

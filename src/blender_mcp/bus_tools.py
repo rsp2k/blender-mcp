@@ -148,6 +148,9 @@ class BlenderBusComponent(MCPMixin):
         is_persistent: bool = False,
         capabilities: Optional[list[str]] = None,
         group_id: Optional[str] = None,
+        pid: Optional[int] = None,
+        hostname: Optional[str] = None,
+        blend_file: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Join the caller's user bus. Returns JSON {status, client}.
@@ -184,6 +187,9 @@ class BlenderBusComponent(MCPMixin):
             capabilities=list(capabilities or []),
             group_id=group_id,
             session=_session_from_ctx(ctx),
+            pid=pid,
+            hostname=hostname,
+            blend_file=blend_file,
         )
         registered = resolved["bus"].register(info)
         response: dict[str, Any] = {
