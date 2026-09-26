@@ -163,11 +163,6 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             expires_in = int(tok.get("expires_in", 0))
             if expires_in:
                 prefs_now.jwt_expires_at = str(int(_time.time()) + expires_in)
-            # Flush fresh JWT to disk so a Blender restart after this
-            # login can auto-reconnect. StringProperty assignment does
-            # not dirty prefs, so ambient auto-save-on-quit misses it.
-            from ..preferences import persist_prefs as _persist
-            _persist()
             else:
                 # OIDCProxy sometimes omits ``expires_in`` from the token
                 # response, leaving prefs.jwt_expires_at empty; the refresh
@@ -195,6 +190,13 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             # → fall back to empty string, panel renders legacy label.
             prefs_now.user_display_name = tok.get("user_display_name", "")
             prefs_now.user_email = tok.get("user_email", "")
+            # Flush fresh JWT + display fields to disk so a Blender restart
+            # after this login can auto-reconnect. StringProperty assignment
+            # doesn't dirty prefs, so ambient auto-save-on-quit misses it.
+            # Placed AFTER the whole if/else + display-field block so ONE
+            # save call captures the entire logged-in state.
+            from ..preferences import persist_prefs as _persist
+            _persist()
             print(
                 f"[BlenderMCP] OAuth login complete; access token expires in "
                 f"{expires_in}s, client_id={prefs_now.oauth_client_id}, "

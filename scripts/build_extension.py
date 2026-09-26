@@ -29,6 +29,7 @@ Why the zip contents look the way they do:
 from __future__ import annotations
 
 import argparse
+import compileall
 import hashlib
 import json
 import re
@@ -204,6 +205,34 @@ def _write_index(version: str, zip_path: Path) -> Path:
     return index_path
 
 
+def _syntax_check_addon() -> None:
+    """Fail the build if any addon/ module has a SyntaxError.
+
+    Added 2026-09-26 after 1.5.30 shipped with an unparseable
+    ui/operators.py (a persist_prefs call inserted between an if and
+    its else, orphaning the else). Blender's extension enable failed
+    on install with 'Error: invalid syntax', so the extension appeared
+    to distribute correctly but wouldn't register — the failure mode
+    was quiet enough that our own smoke check missed it. compileall
+    against addon/ takes ~200ms and catches this class of bug at build
+    time rather than at every user's `extension install` moment.
+    """
+    print("  syntax-checking addon/ with compileall...")
+    ok = compileall.compile_dir(
+        str(ADDON_SRC),
+        quiet=1,           # print only errors
+        force=True,        # re-check every file
+        legacy=False,      # don't leave .pyc littered under source
+    )
+    if not ok:
+        sys.exit(
+            "ERROR: addon/ failed syntax check. Extension NOT built. "
+            "Fix the SyntaxError above before rebuilding — a shipped "
+            "extension with a syntax error installs cleanly but fails "
+            "to register in Blender, which is worse than a build failure."
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -215,6 +244,9 @@ def main() -> None:
 
     version = _read_addon_version()
     print(f"Building blender_mcp extension {version}")
+
+    # Gate: no build proceeds if addon/ has a SyntaxError.
+    _syntax_check_addon()
 
     wheels_dir = ROOT / "dist" / "wheels-work"
     if args.skip_download and wheels_dir.exists():
