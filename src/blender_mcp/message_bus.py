@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
@@ -407,9 +408,12 @@ class BusManager:
         # instead of iterating all clients across all buses on every
         # incoming message — critical at thousands-of-clients scale.
         # Key is id(session) since FastMCP sessions don't expose a stable
-        # hashable id of their own and Python's object id is unique for
-        # the object's lifetime.
-        self._session_index: dict[int, tuple[Any, str]] = {}
+        # hashable id of their own. An id is only unique for the object's
+        # lifetime and entries can outlive it (a client that drops without
+        # unregistering), so each entry keeps a reference to its session and
+        # lookups verify identity; otherwise a new session reusing a dead
+        # one's id would inherit its bus and client uuid.
+        self._session_index: dict[int, tuple[Any, Any, str]] = {}
 
     def get_or_create(self, bus_id, name: str = "") -> MessageBus:
         """Return the MessageBus for ``bus_id``, creating in-memory state
@@ -429,6 +433,9 @@ class BusManager:
 
     def remove(self, bus_id) -> None:
         self._buses.pop(bus_id, None)
+        for key, entry in list(self._session_index.items()):
+            if entry[1] == bus_id:
+                self._session_index.pop(key, None)
 
     def all_buses(self) -> dict[Any, MessageBus]:
         return dict(self._buses)
@@ -439,19 +446,37 @@ class BusManager:
         """Record session → (bus_id, client_uuid). Idempotent."""
         if session is None:
             return
-        self._session_index[id(session)] = (bus_id, client_uuid)
+        try:
+            ref: Any = weakref.ref(session)
+        except TypeError:
+            ref = session  # not weak-referenceable: hold it, so its id can't be reused
+        self._session_index[id(session)] = (ref, bus_id, client_uuid)
 
     def forget_session(self, session: Any) -> None:
         """Remove a session's index entry. Idempotent."""
         if session is None:
             return
-        self._session_index.pop(id(session), None)
+        entry = self._session_index.get(id(session))
+        if entry is not None and self._entry_session(entry) is session:
+            self._session_index.pop(id(session), None)
 
     def lookup_session(self, session: Any) -> Optional[tuple[Any, str]]:
         """Return (bus_id, client_uuid) for the given session, or None."""
         if session is None:
             return None
-        return self._session_index.get(id(session))
+        entry = self._session_index.get(id(session))
+        if entry is None:
+            return None
+        if self._entry_session(entry) is not session:
+            # A stale entry from a dead session whose id was reused.
+            self._session_index.pop(id(session), None)
+            return None
+        return entry[1], entry[2]
+
+    @staticmethod
+    def _entry_session(entry: tuple[Any, Any, str]) -> Any:
+        ref = entry[0]
+        return ref() if isinstance(ref, weakref.ref) else ref
 
 
 # Module-level singleton.
