@@ -340,7 +340,7 @@ class BlenderMCPClient:
         Wrapped in a try anyway so a write failure can't kill the worker.
         """
         try:
-            from ..preferences import get_prefs
+            from ..preferences import get_prefs, persist_prefs
             prefs = get_prefs()
             prefs.jwt_token = self.jwt_token
             prefs.jwt_expires_at = str(self.jwt_expires_at)
@@ -349,6 +349,9 @@ class BlenderMCPClient:
             # new one across Blender restarts).
             if self.refresh_token:
                 prefs.refresh_token = self.refresh_token
+            # Worker thread — persist_prefs hops the wm operator call to
+            # the main thread via bpy.app.timers.
+            persist_prefs()
         except Exception as e:
             print(f"[BlenderMCP] Could not persist rotated JWT to prefs: {e}")
 
@@ -602,11 +605,14 @@ class BlenderMCPClient:
                         # (no mesh/scene mutation), per the convention already used
                         # by _persist_rotated_jwt_to_prefs above.
                         try:
-                            from ..preferences import get_prefs
+                            from ..preferences import get_prefs, persist_prefs
                             prefs = get_prefs()
                             prefs.jwt_token = ""
                             prefs.refresh_token = ""
                             prefs.jwt_expires_at = "0"
+                            # Persist the cleared state so the "Re-login"
+                            # sidebar prompt survives a Blender restart.
+                            persist_prefs()
                         except Exception as exc:
                             print(f"[BlenderMCP] Could not clear stale JWT from prefs: {exc}")
                         self.running = False

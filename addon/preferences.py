@@ -34,6 +34,54 @@ if TYPE_CHECKING:
 
 ADDON_PACKAGE_NAME = __package__ or "addon"
 
+
+def persist_prefs() -> None:
+    """Flush current AddonPreferences to disk (``userpref.blend``).
+
+    Blender's own auto-save-preferences-on-quit only fires when it
+    considers preferences dirty, and assigning a StringProperty from
+    Python does NOT set that flag (verified 2026-09-26: a fresh login
+    followed by a clean Ctrl+Q lost the JWT because Blender didn't
+    consider prefs modified). So we set ``is_dirty`` explicitly and
+    then trigger the save operator, giving the write deterministic
+    timing rather than depending on ambient auto-save behavior.
+
+    Safe to call from any thread. When invoked from a worker thread
+    (e.g. the refresh watcher rotating the JWT, or the bus_client
+    clearing tokens on an auth-fatal), the actual bpy calls get hopped
+    to the main thread via ``bpy.app.timers.register`` (documented
+    thread-safe by Blender). Timer callbacks always run on the main
+    thread, which is where the wm operator must fire.
+
+    Non-fatal: errors are logged and swallowed. A save failure means
+    the user has to log in again after a Blender restart, which is
+    annoying but not destructive — the token is still valid in memory
+    for the current session.
+    """
+    import threading
+
+    if threading.current_thread() is threading.main_thread():
+        _persist_prefs_now()
+    else:
+        try:
+            bpy.app.timers.register(_persist_prefs_now, first_interval=0.0)
+        except Exception as exc:
+            print(f"[BlenderMCP] Could not schedule prefs save: {exc}")
+
+
+def _persist_prefs_now():
+    """Actually write userpref.blend. Runs on the main thread only.
+
+    Returns ``None`` so that when registered as a one-shot timer,
+    Blender unregisters it after the single call.
+    """
+    try:
+        bpy.context.preferences.is_dirty = True
+        bpy.ops.wm.save_userpref()
+    except Exception as exc:
+        print(f"[BlenderMCP] Could not save user preferences: {exc}")
+    return None
+
 # Default server is the production deploy — fresh installs land on a
 # working URL. Stored as a bare hostname; ``get_server_base_url`` adds
 # the https:// scheme at use sites.
