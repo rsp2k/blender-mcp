@@ -149,6 +149,8 @@ def enqueue_pulled(client: "BlenderMCPClient", dispatches: list[dict], bus_id: s
                 continue
             heapq.heappush(client.job_queue, (6, time.time(), log_data))
         added += 1
+        # Per-job so the canary can tell stream deliveries from pulled ones.
+        print(f"[BlenderMCP] Dispatch {job_id} recovered by pull (event stream missed it)")
     return added
 
 
