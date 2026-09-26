@@ -48,7 +48,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 27),  # MUST match addon/_version.py:tuple_version
+    "version": (1, 5, 28),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -93,6 +93,8 @@ def _try_autoconnect() -> None:
 
     Failures are silent: if credentials are stale, the normal reconnect
     + auth-fatal path will handle it and surface a Re-login banner.
+    Each early-return prints its reason so a user diagnosing "why
+    didn't it connect" has a paper trail in the console.
     """
     import bpy
 
@@ -102,14 +104,19 @@ def _try_autoconnect() -> None:
     try:
         prefs = get_prefs()
         if not prefs.jwt_token:
-            return  # nothing to reconnect with; user hasn't logged in
-        scene = getattr(bpy.context, "scene", None)
-        if scene is None:
+            print("[BlenderMCP] Auto-reconnect skipped: no stored jwt_token (Login first).")
             return
-        # Already connected? nothing to do.
+        # Only the CLIENT state is authoritative for "already connected".
+        # scene.blendermcp_server_running is a Scene property that gets
+        # saved into .blend files (including startup.blend). A user who
+        # ever saved a scene while connected has that flag stuck at True
+        # on every subsequent open — checking it here would silently skip
+        # every startup autoconnect. Trust the live client instead; the
+        # flag is a UI hint, not a source of truth. Verified in 1.5.27
+        # where this exact check was blocking autoconnect for users with
+        # a saved startup.blend.
         if state._client is not None and getattr(state._client, "running", False):
-            return
-        if scene.blendermcp_server_running:
+            print("[BlenderMCP] Auto-reconnect skipped: client already running.")
             return
         print("[BlenderMCP] Auto-reconnect: stored auth present, invoking Connect")
         bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
