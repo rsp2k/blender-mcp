@@ -920,6 +920,193 @@ class BlenderDispatchComponent(MCPMixin):
             bus_id=bus_id,
         )
 
+    # ---- Tier 4: view, timeline and placement controls -------------
+
+    @mcp_tool()
+    async def set_frame(
+        self,
+        frame: int,
+        apply_markers: bool = True,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Jump to a frame and apply timeline-marker camera bindings.
+
+        Unlike scene.frame_set via execute_code, this switches
+        scene.camera to the camera bound to the latest marker at or
+        before the frame, so baked camera tours step correctly. Returns
+        the frame, active camera, previous camera and the marker used.
+        Pair with blender_look_through to view the tour in the viewport.
+        """
+        return await self._call(
+            ctx,
+            "set_frame",
+            {"frame": frame, "apply_markers": apply_markers},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def look_through(
+        self,
+        camera: str,
+        lock: bool = True,
+        shading: Optional[str] = None,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Set the 3D viewport to camera view through the named camera.
+
+        Makes it scene.camera, sets view_perspective='CAMERA'. ``lock``
+        toggles "Lock Camera to View" (while on, viewport navigation
+        moves the camera). ``shading`` optionally sets WIREFRAME / SOLID /
+        MATERIAL / RENDERED in the same call. Needs a GUI viewport.
+        """
+        return await self._call(
+            ctx,
+            "look_through",
+            {"camera": camera, "lock": lock, "shading": shading},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def place_object(
+        self,
+        object: str,
+        location: list[float],
+        target: Optional[list[float]] = None,
+        parent: Optional[str] = None,
+        frame: str = "parent",
+        track_axis: str = "-Z",
+        up_axis: str = "Y",
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Place an object using coordinates in its parent's frame.
+
+        frame="parent" (default): ``location`` and ``target`` are in the
+        local coordinates of ``parent`` (if given; it also re-parents the
+        object), else the object's current parent, else world. Use this
+        when a model sits under an offset/scaled empty so you never
+        hand-convert through its matrix. frame="world": raw world coords.
+        ``target`` aims the object at a point (-Z track, Y up suits
+        cameras and lights); without it rotation and scale are kept.
+        """
+        return await self._call(
+            ctx,
+            "place_object",
+            {
+                "object": object,
+                "location": location,
+                "target": target,
+                "parent": parent,
+                "frame": frame,
+                "track_axis": track_axis,
+                "up_axis": up_axis,
+            },
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def world_from_local(
+        self,
+        object: str,
+        point: list[float],
+        inverse: bool = False,
+        target_uuid: Optional[str] = None,
+        _timeout: float = TIMEOUT_FAST,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Convert a point from ``object``'s local frame to world space.
+
+        inverse=True converts world -> local instead. Pass a parent empty
+        to translate model coordinates for anything parented under it.
+        """
+        return await self._call(
+            ctx,
+            "world_from_local",
+            {"object": object, "point": point, "inverse": inverse},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def set_viewport_shading(
+        self,
+        type: Optional[str] = None,
+        scene_world: Optional[bool] = None,
+        scene_lights: Optional[bool] = None,
+        studio_light: Optional[str] = None,
+        raytracing: Optional[bool] = None,
+        all_viewports: bool = False,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Set 3D viewport shading; omitted arguments stay unchanged.
+
+        type: WIREFRAME / SOLID / MATERIAL / RENDERED. scene_world=True
+        replaces Material Preview's built-in studio HDRI with the scene
+        world (stops it showing in mirrors and glass); scene_lights does
+        the same for lights. raytracing toggles the scene's EEVEE ray
+        tracing. Returns the resulting shading state.
+        """
+        return await self._call(
+            ctx,
+            "set_viewport_shading",
+            {
+                "type": type,
+                "scene_world": scene_world,
+                "scene_lights": scene_lights,
+                "studio_light": studio_light,
+                "raytracing": raytracing,
+                "all_viewports": all_viewports,
+            },
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
+    @mcp_tool()
+    async def set_viewport_overlays(
+        self,
+        flags: Optional[dict[str, bool]] = None,
+        all_viewports: bool = False,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Toggle viewport overlay flags by name, e.g.
+        {"show_relationship_lines": false, "show_extras": false,
+        "show_floor": false, "show_overlays": true}.
+
+        Unknown flag names are rejected with the list of valid ones.
+        Call with no flags to read the current state of common overlays.
+        """
+        return await self._call(
+            ctx,
+            "set_viewport_overlays",
+            {"flags": flags or {}, "all_viewports": all_viewports},
+            target_uuid,
+            _timeout,
+            bus_id=bus_id,
+        )
+
     # ---- Resources (live, dispatch-backed) -------------------------
     # MCP clients render these as attachable, re-fetchable state snapshots
     # rather than tool invocations. Each one shares the dispatch round-trip
