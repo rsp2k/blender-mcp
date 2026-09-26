@@ -480,6 +480,96 @@ def _install_update_deferred(repo_index: int, pkg_id: str):
     return None
 
 
+def _user_agent() -> str:
+    try:
+        from bl_pkg.bl_extension_ops import online_user_agent_from_blender
+        return online_user_agent_from_blender()
+    except Exception:
+        import platform
+        return "Blender/{:d}.{:d}.{:d} ({:s} {:s})".format(
+            *bpy.app.version, platform.system(), platform.machine())
+
+
+def _plan_prefetch(repo_index: int, repo, pkg_id: str):
+    """Build a Prefetch for this platform's archive, or return (None, reason)
+    when Blender's own download should be used instead."""
+    from .. import update_prefetch as up
+
+    if not getattr(repo, "use_cache", False):
+        return None, "the repository's cache is off, so Blender would download again"
+    repo_dir = getattr(repo, "directory", "")
+    index = up.load_synced_index(repo_dir) if repo_dir else None
+    if index is None:
+        return None, "couldn't read the synced repository index"
+    platform = up.platform_token()
+    entry = up.select_entry(index, pkg_id, platform)
+    if entry is None:
+        return None, f"no archive for {platform} in the index"
+    try:
+        size, digest = int(entry["archive_size"]), str(entry["archive_hash"])
+        url = up.resolve_archive_url(repo.remote_url, str(entry["archive_url"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return None, f"index entry is incomplete ({e})"
+    headers = {"User-Agent": _user_agent()}
+    if getattr(repo, "use_access_token", False) and getattr(repo, "access_token", ""):
+        headers["Authorization"] = f"Bearer {repo.access_token}"
+    return up.Prefetch(
+        url=url, repo_index=repo_index, pkg_id=pkg_id, repo_dir=repo_dir,
+        expected_size=size, expected_hash=digest,
+        timeout=float(bpy.context.preferences.system.network_timeout or 10),
+        headers=headers, version=str(entry.get("version", "")),
+    ), ""
+
+
+def _schedule_install(repo_index: int, pkg_id: str) -> None:
+    import functools
+    bpy.app.timers.register(
+        functools.partial(_install_update_deferred, repo_index, pkg_id),
+        first_interval=0.1,
+    )
+
+
+def _prefetch_poll():
+    """Main-thread timer while the update downloads: redraw the banner, then
+    hand over to the installer. Returns None before scheduling the install,
+    because the install unregisters this module."""
+    from .. import state
+    from ..connection import request_ui_redraw
+
+    pf = state._update_prefetch
+    if pf is None:
+        return None
+    request_ui_redraw()
+    if pf.active:
+        return 0.2
+    state._update_prefetch = None
+    if pf.state == "verified":
+        secs = max(0.0, pf.finished_at - pf.started_at)
+        print(f"[BlenderMCP] Update: download verified in {secs:.1f}s, installing from cache")
+        _schedule_install(pf.repo_index, pf.pkg_id)
+    elif pf.state == "failed":
+        print(f"[BlenderMCP] Update: falling back to Blender's download: {pf.error}")
+        _schedule_install(pf.repo_index, pf.pkg_id)
+    else:
+        print("[BlenderMCP] Update: download cancelled")
+    return None
+
+
+class BLENDERMCP_OT_CancelUpdate(bpy.types.Operator):
+    """Stop the update download started by Update now."""
+
+    bl_idname = "blendermcp.cancel_update"
+    bl_label = "Cancel update"
+    bl_description = "Stop downloading the update; nothing is installed"
+
+    def execute(self, context):
+        from .. import state
+        pf = state._update_prefetch
+        if pf is not None and pf.active:
+            pf.cancel()
+        return {'FINISHED'}
+
+
 class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
     """Sync this addon's extension repo and install the newest version.
 
@@ -498,6 +588,8 @@ class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
     def execute(self, context):
         from ..preferences import EXTENSION_PKG_ID, find_update_repo
 
+        if state._update_prefetch is not None and state._update_prefetch.active:
+            return {'CANCELLED'}  # already downloading
         found = find_update_repo()
         if found is None:
             self.report({'ERROR'}, "No remote extension repository found for Blender MCP")
@@ -519,11 +611,20 @@ class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
             return {'CANCELLED'}
 
         self.report({'INFO'}, "Downloading Blender MCP update")
-        import functools
-        bpy.app.timers.register(
-            functools.partial(_install_update_deferred, repo_index, EXTENSION_PKG_ID),
-            first_interval=0.1,
-        )
+        # Download here, with a progress bar in our banner, while the addon is
+        # still loaded; Blender then installs from its cache in about a second.
+        try:
+            pf, reason = _plan_prefetch(repo_index, repo, EXTENSION_PKG_ID)
+        except Exception as e:  # noqa: BLE001 - never block the update on the prefetch
+            pf, reason = None, f"prefetch setup failed ({e})"
+        if pf is None:
+            print(f"[BlenderMCP] Update: falling back to Blender's download: {reason}")
+            _schedule_install(repo_index, EXTENSION_PKG_ID)
+            return {'FINISHED'}
+        print(f"[BlenderMCP] Update: downloading {pf.url} ({pf.expected_size / 1e6:.1f} MB)")
+        state._update_prefetch = pf
+        pf.start()
+        bpy.app.timers.register(_prefetch_poll, first_interval=0.2)
         return {'FINISHED'}
 
 

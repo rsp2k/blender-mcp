@@ -523,7 +523,21 @@ async def s_update_now(ctx: Ctx, target: str | None):
         return "FAIL", "Blender crash file changed during the update"
     if c.get("uuid") != ctx.uuid:
         return "FAIL", f"uuid changed across update: {c.get('uuid')}"
-    return "PASS", f"{installed} -> {offered} in {time.time() - t0:.0f}s, same uuid, no crash"
+    return "PASS", (f"{installed} -> {offered} in {time.time() - t0:.0f}s, same uuid, no crash; "
+                    f"{update_path(container_logs(ctx, str(int(t0) - 1)))}")
+
+
+def update_path(log: str) -> str:
+    """Which download path the old addon's Update now took, from its log lines.
+    The addon running the click is the one being replaced, so a build that
+    predates the prefetch prints neither line."""
+    m = re.search(r"Update: download verified in ([0-9.]+)s", log)
+    if m:
+        return f"prefetched by the addon ({m.group(1)}s), installed from cache"
+    m = re.search(r"Update: falling back to Blender's download: (.+)", log)
+    if m:
+        return f"Blender's own download ({m.group(1).strip()[:80]})"
+    return "Blender's own download (installed addon predates the prefetch)"
 
 
 HAS_CANCEL = f"""

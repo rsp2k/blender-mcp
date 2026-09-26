@@ -29,6 +29,8 @@ _executor: Optional["BlenderCommandExecutor"] = None
 _supervisor = None
 # addon.identity.StickyUUIDManager holding this process's identity lease.
 _identity = None
+# addon.update_prefetch.Prefetch while Update now downloads the archive itself.
+_update_prefetch = None
 
 # Background workers this GUI Blender spawned: worker uuid -> dict with
 # popen, pid, dir, snapshot, log, deadline, label (see executor handler
