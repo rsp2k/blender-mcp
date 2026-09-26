@@ -1,0 +1,108 @@
+---
+title: "Use Blender MCP from CI or scripts"
+description: "Mint a personal access token, keep it in the BLENDER_MCP_TOKEN environment variable, and point Claude Code, a GitHub Actions job or a script at the server without a browser sign-in."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Interactive clients sign in through OAuth in a browser. That doesn't work for a CI job or a headless script, so the server also accepts **personal access tokens**: a static `Authorization: Bearer bmcp_...` header tied to your account.
+
+A token acts as your LLM client on your buses. It can dispatch to your Blender, list clients and read feedback, exactly like a signed-in Claude session. It can't create, list or revoke other tokens, so a leaked token can't mint replacements for itself.
+
+## Create a token
+
+Pick whichever is handy. Both need a normal OAuth sign-in once.
+
+- **Dashboard:** open [blender.bet/tokens](https://blender.bet/tokens/), sign in, give the token a name such as `github-actions`, choose an expiry, and create it.
+- **From an MCP client that's already signed in:** ask it to call `blender_create_access_token` with a name. `expires_days` defaults to 90 and goes up to 366.
+
+The token is shown **once**. Copy it straight into your secret store. Only its prefix (for example `bmcp_d4l5vV3u`) is kept for display.
+
+## Keep it in an environment variable
+
+Store the token as `BLENDER_MCP_TOKEN`, never in a file you commit.
+
+```bash
+export BLENDER_MCP_TOKEN=bmcp_...your-token...
+```
+
+## Claude Code
+
+Put the server in your project's `.mcp.json` and let Claude Code read the token from the environment. Claude Code expands `${VAR}` in `headers` when it loads the file, so the secret stays out of the config:
+
+```json
+{
+  "mcpServers": {
+    "blender": {
+      "type": "http",
+      "url": "https://mcp.blender.bet/",
+      "headers": {
+        "Authorization": "Bearer ${BLENDER_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Export the variable before starting Claude Code; without it there's no token to send and the server can't let the connection in.
+
+Adding it from the command line works too, but the shell expands `$BLENDER_MCP_TOKEN` right away, so the literal token ends up in your Claude Code config. Prefer the `.mcp.json` form for anything shared:
+
+```bash
+claude mcp add --transport http blender https://mcp.blender.bet/ \
+  --header "Authorization: Bearer $BLENDER_MCP_TOKEN"
+```
+
+## GitHub Actions
+
+Save the token as a repository secret named `BLENDER_MCP_TOKEN` (Settings → Secrets and variables → Actions), then expose it to the step that runs your client:
+
+```yaml
+jobs:
+  render-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the scene check
+        env:
+          BLENDER_MCP_TOKEN: ${{ secrets.BLENDER_MCP_TOKEN }}
+        run: claude -p "Check the scene on the bus and report the object count" --mcp-config .mcp.json --allowedTools "mcp__blender__*"
+```
+
+A Blender with the addon connected to your account has to be online for dispatch tools to do anything; without one they return `no_client`.
+
+## Plain scripts
+
+Any MCP client library that can set a header works. With FastMCP in Python:
+
+```python
+import asyncio, os
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+
+async def main():
+    transport = StreamableHttpTransport(
+        "https://mcp.blender.bet/",
+        headers={"Authorization": f"Bearer {os.environ['BLENDER_MCP_TOKEN']}"},
+    )
+    async with Client(transport) as client:
+        result = await client.call_tool("blender_list_available_clients", {})
+        print(result.content[0].text)
+
+asyncio.run(main())
+```
+
+## Rotate and revoke
+
+<Steps>
+
+1. Create a new token and update the secret wherever it's used.
+2. Revoke the old one from [blender.bet/tokens](https://blender.bet/tokens/), or call `blender_revoke_access_token` with its prefix.
+
+</Steps>
+
+Revocation takes effect within about 30 seconds. Tokens also stop working on their own when they expire; the dashboard shows each token's expiry and when it was last used, which is the quickest way to spot one nobody needs any more.
+
+<Aside type="caution">
+Treat a token like a password for your Blender: anything holding it can run code in a Blender connected to your account. Use a separate token per CI system so you can revoke one without breaking the others.
+</Aside>

@@ -54,12 +54,19 @@ def _resolve_user_id(ctx: Optional[Context]) -> Optional[str]:
     try:
         from fastmcp.server.dependencies import get_access_token
 
-        from .mcp_oauth_provider import BlenderMCPOAuthProvider
-        from .server_proper import mcp
+        from .access_tokens import is_pat
 
         access = get_access_token()
         if access is None:
             return None
+
+        # Personal access token: opaque, not a JWT; the verifier put the
+        # owner's sub in claims.
+        if is_pat(access.token):
+            return (getattr(access, "claims", None) or {}).get("sub")
+
+        from .mcp_oauth_provider import BlenderMCPOAuthProvider
+        from .server_proper import mcp
 
         provider = mcp.auth
         # In-memory provider path: token→user mapping

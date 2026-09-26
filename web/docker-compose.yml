@@ -73,7 +73,7 @@ services:
       # rewritten and the embedded outpost can't match the app) users saw
       # Authentik's 404 instead of "you're signed in". The page renders a
       # generic confirmation without the X-Authentik-* headers.
-      caddy.@protected.path: /buses /buses/* /oauth/* /api/*
+      caddy.@protected.path: /buses /buses/* /tokens /tokens/* /oauth/* /api/*
       caddy.forward_auth: "@protected https://auth.supported.systems"
       caddy.forward_auth.uri: /outpost.goauthentik.io/auth/caddy
       caddy.forward_auth.copy_headers: X-Authentik-Username X-Authentik-Email X-Authentik-Name X-Authentik-Groups X-Authentik-Uid

@@ -32,6 +32,7 @@ from .control_tools import BlenderControlComponent
 from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
 from .extension_tools import BlenderExtensionComponent
+from .access_token_tools import BlenderAccessTokenComponent
 from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
 
@@ -102,6 +103,14 @@ def _build_auth_provider() -> AuthProvider | None:
             validated it against upstream JWKS; we're only extracting display
             fields, not granting any privilege based on them.
             """
+
+            async def verify_token(self, token):
+                # Personal access tokens (CI, scripts) are checked first and
+                # never reach OIDCProxy; every other token takes the
+                # unmodified OAuth path.
+                from .access_tokens import verify_with_pat_first
+
+                return await verify_with_pat_first(token, super().verify_token)
 
             async def _extract_upstream_claims(self, idp_tokens):
                 id_token = idp_tokens.get("id_token")
@@ -320,6 +329,10 @@ def build_http_mcp() -> FastMCP:
     # user can list + read; only submitter_user_id filter for mine_only.
     feedback = BlenderFeedbackComponent()
     feedback.register_tools(mcp_server=server, prefix="blender")
+
+    # Personal access tokens for CI / scripted clients (migration
+    # 20260926_0004). Verification lives in the auth provider above.
+    BlenderAccessTokenComponent().register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain
