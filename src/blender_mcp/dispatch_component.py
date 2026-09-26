@@ -49,6 +49,7 @@ from typing import Any, Optional
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_resource, mcp_tool
 
+from . import jobs
 from .bus_tools import _pending_jobs, _resolve_user_id, resolve_bus
 from .client_role import check_role_or_reject
 from .job_waiter import job_waiter
@@ -150,32 +151,12 @@ def _pick_blender_target(bus, target_uuid: Optional[str]) -> dict:
     return {"ok": True, "uuid": live[0].uuid}
 
 
-async def _dispatch(
-    bus,
-    bus_id_str: str,
-    command: str,
-    params: dict,
-    target_uuid: Optional[str],
-    timeout: float,
-) -> str:
-    """Common send-then-await for every dispatch tool. Returns JSON string."""
-    pick = _pick_blender_target(bus, target_uuid)
-    if not pick["ok"]:
-        return json.dumps(pick | {"ok": False, "command": command})
-
-    chosen_uuid = pick["uuid"]
-    job_id = _new_job_id()
-
-    # Register the Future BEFORE sending so we can't race the reply.
-    # Phase I5: job_waiter is keyed by (bus_id, job_id).
-    future = job_waiter.register(bus_id_str, job_id)
-
+def _route_job(bus, bus_id_str: str, chosen_uuid: str, job_id: str,
+               command: str, params: dict) -> None:
     # Manually populate _pending_jobs so job_update's lookup finds us
     # without having to come back through send_message's tracking (the
     # server doesn't have a from_uuid here — we're the dispatcher itself).
-    # Phase I5: entry is keyed (bus_id_str, originator_uuid).
     _pending_jobs[job_id] = (bus_id_str, f"server-dispatch:{bus_id_str}")
-
     bus.route(
         payload={
             "message_type": "command_dispatch",
@@ -188,6 +169,39 @@ async def _dispatch(
         priority=Priority.INFO,
         job_id=job_id,
     )
+
+
+async def _dispatch(
+    bus,
+    bus_id_str: str,
+    command: str,
+    params: dict,
+    target_uuid: Optional[str],
+    timeout: float,
+    caller_sub: Optional[str] = None,
+) -> str:
+    """Common send-then-await for every dispatch tool. Returns JSON string.
+
+    The job is persisted before routing. If the addon replies within
+    ``timeout`` the caller gets the result as before; if not, the job
+    keeps running in Blender and the caller gets a job_id to poll with
+    blender_job_status instead of a dead end.
+    """
+    pick = _pick_blender_target(bus, target_uuid)
+    if not pick["ok"]:
+        return json.dumps(pick | {"ok": False, "command": command})
+
+    chosen_uuid = pick["uuid"]
+    job_id = _new_job_id()
+    persisted = await jobs.record(
+        job_id, bus_id_str, chosen_uuid, command, params,
+        caller_sub=caller_sub, caller_client=jobs.caller_client_id(),
+    )
+
+    # Register the Future BEFORE sending so we can't race the reply.
+    # Phase I5: job_waiter is keyed by (bus_id, job_id).
+    future = job_waiter.register(bus_id_str, job_id)
+    _route_job(bus, bus_id_str, chosen_uuid, job_id, command, params)
 
     try:
         result = await asyncio.wait_for(future, timeout=timeout)
@@ -243,9 +257,7 @@ async def _dispatch(
                 "addon may have unregistered between dispatch send and "
                 "timeout. Verify with blender_list_available_clients."
             )
-        return json.dumps({
-            "status": "timeout",
-            "command": command,
+        diagnostics = {
             "target_uuid": chosen_uuid,
             "waited_seconds": timeout,
             "target_last_seen_seconds_ago": (
@@ -254,8 +266,28 @@ async def _dispatch(
             "target_heartbeat_healthy": (
                 seen_ago < 60 if seen_ago is not None else False
             ),
-            "hint": hint,
-        })
+        }
+        row = await jobs.get(job_id) if persisted else None
+        if row is None:
+            return json.dumps({"status": "timeout", "command": command, "hint": hint}
+                              | diagnostics)
+        if jobs.is_terminal(row.status):
+            # Reply landed between the wait expiring and this read.
+            return json.dumps({
+                "status": row.status, "command": command, "target_uuid": chosen_uuid,
+                "job_id": job_id, "result": row.result, "error": row.error or "",
+            })
+        return json.dumps({
+            "status": row.status,
+            "job_id": job_id,
+            "command": command,
+            "hint": (
+                f"Still {row.status} in Blender after {timeout:.0f}s; the result "
+                f"will be kept. Poll blender_job_status(job_id=\"{job_id}\", "
+                f"wait_seconds=50) until it finishes, then blender_job_result. "
+                + hint
+            ),
+        } | diagnostics)
 
     return json.dumps({
         "status": result.get("status", "unknown"),
@@ -319,6 +351,7 @@ class BlenderDispatchComponent(MCPMixin):
             params,
             target_uuid,
             timeout,
+            caller_sub=user_id,
         )
 
     # ---- Tier 1: always-on core (7 commands) -----------------------
