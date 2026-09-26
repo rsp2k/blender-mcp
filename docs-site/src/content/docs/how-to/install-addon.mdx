@@ -96,18 +96,22 @@ The legacy path is also available on Blender 4.2+, but you lose the automatic up
 
 ### Extension path
 
-Blender polls the repo you added on startup (and on demand from `Preferences → Get Extensions → Check for Updates`). When a newer version is available, an "Update" button appears next to the extension. Click it. The old wheels are replaced with new ones, and the update takes effect on the next Blender start.
+When the server knows about a newer version, the sidebar and preferences panel show a banner like `Addon update available: 2026.926.0 → 2026.926.1` with an **Update now** button. Clicking it refreshes the Blender MCP repository and starts Blender's own installer in the background, with progress in the status bar. When the install finishes, Blender reloads the addon and it reconnects on its own from your saved login.
 
-Nothing else to do. The addon's own "update available" banner never surfaces for extension-installed clients because Blender is already tracking the version for them.
+You can also update the usual way: `Preferences → Get Extensions → Check for Updates`, then the "Update" button next to Blender MCP.
+
+The one-click button needs online access enabled (Blender offers to turn it on) and arrived in 2026.926.0, so the upgrade *to* that version still goes through the preferences route.
 
 ### Legacy path
 
-When your addon is behind, the BlenderMCP server tells you: on the next `Connect`, the sidebar and preferences panel show a banner like `Addon update available: 1.5.16 → 1.5.17` with a "Get the update" button that opens the GitHub releases page.
+When your addon is behind, the same banner appears, but with a "Get the update" button that opens the download page, because installing from the repository would add a second copy next to a single-file install rather than replace it.
 
 Repeat the install steps from above. Blender's addon installer replaces the old `addon.py` in place. If the new version requires a newer `fastmcp`, redo the pip step too. Restart Blender.
 
 <Aside type="tip">
 The version banner is driven by the server sending its known `latest_addon_version` in the `register_client` response envelope. If you don't see the banner, your addon is either current or your server is on an older build that predates the hint (before addon 1.5.17).
+
+Versions are calendar-based, `YYYY.MDD.N`: `2026.926.1` is the second release on September 26, 2026. Releases before the switch used `1.5.x`.
 </Aside>
 
 ## Reference

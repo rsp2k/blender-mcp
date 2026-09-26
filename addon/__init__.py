@@ -23,8 +23,7 @@ lines as Python. Keep that token off the left margin in this docstring.)
 
 To bump the version across all three files atomically, use::
 
-    scripts/bump_addon_version.py patch    # 1.5.6 → 1.5.7
-    scripts/bump_addon_version.py minor    # 1.5.6 → 1.6.0
+    scripts/bump_addon_version.py              # CalVer YYYY.MDD.N for today
     scripts/bump_addon_version.py 1.7.2    # exact
 
 The script verifies the three files agree before writing, so drift
@@ -48,7 +47,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 5, 32),  # MUST match addon/_version.py:tuple_version
+    "version": (2026, 926, 0),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
