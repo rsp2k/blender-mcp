@@ -215,6 +215,11 @@ class BlenderMCPClient:
         # rotation disabled (best-effort backward compat for older prefs).
         self.refresh_token = refresh_token
         self.jwt_expires_at = jwt_expires_at  # 0 = unknown, treat as no-rotate
+        # Background worker identity (see addon/worker.py). A worker never
+        # reads or writes the user's AddonPreferences.
+        self.role: Optional[str] = None
+        self.parent_uuid: Optional[str] = None
+        self.worker_mode = False
 
         self.client: Optional[Any] = None   # fastmcp.Client (inside worker loop)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -461,6 +466,8 @@ class BlenderMCPClient:
         that's fine to set from any thread (no mesh/scene mutation involved).
         Wrapped in a try anyway so a write failure can't kill the worker.
         """
+        if self.worker_mode:
+            return
         try:
             from ..preferences import get_prefs, persist_prefs
             prefs = get_prefs()
@@ -508,6 +515,10 @@ class BlenderMCPClient:
         # version, which keeps it away from builds whose Update now crashes.
         from .. import _version
         reg_args["addon_version"] = _version.__version__
+        if self.role:
+            reg_args["role"] = self.role
+        if self.parent_uuid:
+            reg_args["parent_uuid"] = self.parent_uuid
         # Per-process disambiguation metadata surfaced on
         # list_available_clients. Optional: never block a register on it.
         try:
@@ -853,17 +864,19 @@ class BlenderMCPClient:
                         # background threads work for AddonPreferences StringProperty
                         # (no mesh/scene mutation), per the convention already used
                         # by _persist_rotated_jwt_to_prefs above.
-                        try:
-                            from ..preferences import get_prefs, persist_prefs
-                            prefs = get_prefs()
-                            prefs.jwt_token = ""
-                            prefs.refresh_token = ""
-                            prefs.jwt_expires_at = "0"
-                            # Persist the cleared state so the "Re-login"
-                            # sidebar prompt survives a Blender restart.
-                            persist_prefs()
-                        except Exception as exc:
-                            print(f"[BlenderMCP] Could not clear stale JWT from prefs: {exc}")
+                        # A worker's token came from its parent, not prefs.
+                        if not self.worker_mode:
+                            try:
+                                from ..preferences import get_prefs, persist_prefs
+                                prefs = get_prefs()
+                                prefs.jwt_token = ""
+                                prefs.refresh_token = ""
+                                prefs.jwt_expires_at = "0"
+                                # Persist the cleared state so the "Re-login"
+                                # sidebar prompt survives a Blender restart.
+                                persist_prefs()
+                            except Exception as exc:
+                                print(f"[BlenderMCP] Could not clear stale JWT from prefs: {exc}")
                         self.running = False
                         return
                 finally:

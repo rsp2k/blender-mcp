@@ -27,6 +27,7 @@ from .handlers.scene import SceneHandlersMixin
 from .handlers.sketchfab import SketchfabHandlersMixin
 from .handlers.view_controls import ViewControlHandlersMixin
 from .handlers.viewport import ViewportHandlersMixin
+from .handlers.workers import WorkerHandlersMixin
 from .registry import COMMAND_REGISTRY, filter_kwargs
 
 
@@ -42,6 +43,7 @@ class BlenderCommandExecutor(
     ExtensionsHandlersMixin,
     AnnotationHandlersMixin,
     ViewControlHandlersMixin,
+    WorkerHandlersMixin,
     SharedHelpersMixin,
 ):
     """Routes incoming `{type, params}` commands to handler methods.

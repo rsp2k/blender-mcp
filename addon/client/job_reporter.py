@@ -75,6 +75,8 @@ def submit_job_update(
     status: str,
     result: str = "",
     error: str = "",
+    progress: float | None = None,
+    progress_message: str | None = None,
 ) -> None:
     """Report a job's status; queue it for later if not connected.
 
@@ -87,6 +89,10 @@ def submit_job_update(
         "result": cap_text(result),
         "error": cap_text(error),
     }
+    if progress is not None:
+        update["progress"] = float(progress)
+    if progress_message is not None:
+        update["progress_message"] = str(progress_message)[:500]
     if not _can_send(client):
         if status == "running":
             return
@@ -94,6 +100,41 @@ def submit_job_update(
         print(f"[BlenderMCP] Not connected; job {job_id} result queued ({status})")
         return
     _send(client, update)
+
+
+PROGRESS_MIN_INTERVAL_S = 0.5
+
+
+def make_progress_reporter(client: "BlenderMCPClient", job_id: str, clock=None):
+    """Build the report_progress(fraction, message="") callable for one job.
+
+    Rate-limited to one update per PROGRESS_MIN_INTERVAL_S; a report of
+    1.0 always goes out. Never raises into the caller's code.
+    """
+    import time as _time
+    clock = clock or _time.monotonic
+    last = [float("-inf")]
+
+    def report_progress(fraction: float, message: str = "") -> bool:
+        """Report how far this job has got (0..1) with an optional note.
+        Returns True if the update was sent, False if rate-limited."""
+        try:
+            fraction = max(0.0, min(1.0, float(fraction)))
+        except (TypeError, ValueError):
+            return False
+        now = clock()
+        if fraction < 1.0 and now - last[0] < PROGRESS_MIN_INTERVAL_S:
+            return False
+        last[0] = now
+        try:
+            submit_job_update(client, job_id, "running",
+                              progress=fraction, progress_message=message or "")
+        except Exception as e:  # noqa: BLE001 - progress must never break the job
+            print(f"[BlenderMCP] report_progress failed: {e}")
+            return False
+        return True
+
+    return report_progress
 
 
 def flush_outbox(client: "BlenderMCPClient") -> int:

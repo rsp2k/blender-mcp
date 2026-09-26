@@ -79,7 +79,10 @@ def start_client() -> tuple[bool, str]:
     from .executor import BlenderCommandExecutor
     from .identity import StickyUUIDManager
     from .preferences import get_client_label, get_prefs, get_server_base_url
+    from .worker import is_worker_mode
 
+    if is_worker_mode():
+        return False, "Background workers connect through run_worker_loop, not Connect."
     if not ensure_fastmcp():
         return False, " ".join(fastmcp_problem_lines())
     prefs = get_prefs()
