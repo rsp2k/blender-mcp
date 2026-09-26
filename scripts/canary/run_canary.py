@@ -25,7 +25,8 @@ Usage (token for the instance's logged-in user in BLENDER_MCP_TOKEN, or in
 <compose-dir>/.env.mcp):
 
     uv run scripts/canary/run_canary.py                      # test what's installed
-    uv run scripts/canary/run_canary.py --zip dist/extensions/blender_mcp-X.zip
+    uv run scripts/canary/run_canary.py --zip dist/extensions   # newest *-linux_x64.zip there
+    uv run scripts/canary/run_canary.py --zip dist/extensions/blender_mcp-X-linux_x64.zip
     uv run scripts/canary/run_canary.py --network            # adds the iptables drop (sudo)
     make canary / make canary-full
 
@@ -321,11 +322,29 @@ async def step(ctx: Ctx, name: str, fn) -> None:
     print(f"[{r.status:4}] {name:16} {r.seconds:6.1f}s  {detail}", flush=True)
 
 
+CONTAINER_PLATFORM = "linux-x64"
+
+
+def pick_archive(path: Path) -> Path:
+    """--zip may name an archive or a build directory; builds make one archive
+    per platform, and the container needs the linux-x64 one."""
+    if path.is_dir():
+        found = sorted(path.glob("blender_mcp-*-linux_x64.zip"), key=lambda p: p.stat().st_mtime)
+        if not found:
+            raise FileNotFoundError(f"no blender_mcp-*-linux_x64.zip in {path}")
+        return found[-1]
+    return path
+
+
 async def s_install(ctx: Ctx, zip_path: Path | None):
     if zip_path is None:
         return "SKIP", "no --zip; testing the installed build"
+    zip_path = pick_archive(zip_path)
     with zipfile.ZipFile(zip_path) as zf:
         manifest = zf.read("blender_manifest.toml").decode()
+    platforms_line = next((ln for ln in manifest.splitlines() if ln.strip().startswith("platforms")), "")
+    if platforms_line and CONTAINER_PLATFORM not in platforms_line:
+        return "FAIL", f"{zip_path.name} is not a {CONTAINER_PLATFORM} archive ({platforms_line.strip()})"
     ctx.expected_version = next(
         line.split("=", 1)[1].strip().strip('"')
         for line in manifest.splitlines() if line.strip().startswith("version")
