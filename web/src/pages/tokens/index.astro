@@ -1,0 +1,155 @@
+---
+/**
+ * /tokens — create, list and revoke personal access tokens for CI and
+ * scripted MCP clients.
+ *
+ * Same gating as /buses: Caddy forward_auth proves an Authentik session,
+ * and the BFF session cookie's mcp.blender.bet bearer is what the server
+ * uses to decide whose tokens these are. Creates and revokes are form
+ * POSTs to this page; the session cookie is SameSite=Lax (so cross-site
+ * forms don't carry it) and the Origin header is checked as well.
+ */
+export const prerender = false;
+
+import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
+import { serializeSession } from '../../lib/session';
+
+interface TokenItem {
+  id: string;
+  name: string;
+  prefix: string;
+  status: 'active' | 'expired' | 'revoked';
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+const username = Astro.request.headers.get('x-authentik-username') ?? '';
+if (!username) return Astro.redirect('/login-complete');
+
+let tokens: TokenItem[] = [];
+let created: (TokenItem & { token: string }) | null = null;
+let notice: string | null = null;
+let loadError: string | null = null;
+const cookies: string[] = [];
+
+async function call(method: string, path: string, body?: unknown) {
+  const { response, refreshedSession } = await mcpFetch(Astro.request, method, path, body);
+  if (refreshedSession) cookies.push(serializeSession(refreshedSession));
+  return response;
+}
+
+try {
+  if (Astro.request.method === 'POST') {
+    const origin = Astro.request.headers.get('origin');
+    if (origin && origin !== Astro.url.origin) {
+      return new Response('Cross-origin form rejected', { status: 403 });
+    }
+    const form = await Astro.request.formData();
+    const action = String(form.get('action') ?? '');
+    if (action === 'create') {
+      const r = await call('POST', '/api/tokens', {
+        name: String(form.get('name') ?? '').trim(),
+        expires_days: Number(form.get('expires_days') ?? 90),
+      });
+      if (r.ok) created = await r.json();
+      else loadError = `Create failed (${r.status}): ${(await r.text()).slice(0, 200)}`;
+    } else if (action === 'revoke') {
+      const id = String(form.get('id') ?? '');
+      const r = await call('DELETE', `/api/tokens/${encodeURIComponent(id)}`);
+      notice = r.ok ? 'Token revoked. It stops working within 30 seconds.' : `Revoke failed (${r.status})`;
+    }
+  }
+  const r = await call('GET', '/api/tokens');
+  if (r.ok) tokens = (await r.json()).tokens;
+  else loadError = `Upstream ${r.status}: ${(await r.text()).slice(0, 200)}`;
+} catch (e: any) {
+  if (e instanceof NeedsAuthError) {
+    return Astro.redirect('/oauth/start?return_to=' + encodeURIComponent('/tokens/'));
+  }
+  loadError = String(e?.message || e);
+}
+
+for (const c of cookies) Astro.response.headers.append('Set-Cookie', c);
+Astro.response.headers.set('Cache-Control', 'no-store');
+
+const fmt = (iso: string | null) => (iso ? iso.slice(0, 16).replace('T', ' ') + ' UTC' : '—');
+---
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Access tokens · BlenderMCP</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/tokens.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Access tokens</h1>
+        <p>For CI jobs and scripts that call the MCP server without a browser sign-in.
+           A token acts as your LLM client on your buses. <a href="/buses/">Your buses</a></p>
+      </header>
+
+      {loadError && <p class="err" role="alert">{loadError}</p>}
+      {notice && <p class="note" role="status">{notice}</p>}
+
+      {created && (
+        <section class="created" aria-labelledby="created-h">
+          <h2 id="created-h">Copy your token now</h2>
+          <p>This is the only time it is shown. Store it as a secret, for example:</p>
+          <pre><code>export BLENDER_MCP_TOKEN={created.token}</code></pre>
+          <p class="meta">{created.prefix} · {created.name} · expires {fmt(created.expires_at)}</p>
+        </section>
+      )}
+
+      <section aria-labelledby="new-h">
+        <h2 id="new-h">New token</h2>
+        <form method="post" class="new">
+          <input type="hidden" name="action" value="create" />
+          <label>Name <input name="name" required maxlength="100" placeholder="github-actions" /></label>
+          <label>Expires in
+            <select name="expires_days">
+              <option value="30">30 days</option>
+              <option value="90" selected>90 days</option>
+              <option value="180">180 days</option>
+              <option value="366">1 year</option>
+            </select>
+          </label>
+          <button type="submit">Create token</button>
+        </form>
+      </section>
+
+      <section aria-labelledby="list-h">
+        <h2 id="list-h">Your tokens</h2>
+        {tokens.length === 0 ? (
+          <p class="empty">No tokens yet.</p>
+        ) : (
+          <ul class="tokens">
+            {tokens.map((t) => (
+              <li class={`token ${t.status}`}>
+                <div>
+                  <strong>{t.name}</strong> <span class={`badge ${t.status}`}>{t.status}</span>
+                  <p class="meta">{t.prefix} · created {fmt(t.created_at)} · expires {fmt(t.expires_at)} · last used {fmt(t.last_used_at)}</p>
+                </div>
+                {t.status === 'active' && (
+                  <form method="post">
+                    <input type="hidden" name="action" value="revoke" />
+                    <input type="hidden" name="id" value={t.id} />
+                    <button type="submit" class="danger" aria-label={`Revoke ${t.name}`}>Revoke</button>
+                  </form>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <p class="help">Setup for Claude Code and CI: <a href="https://docs.blender.bet/how-to/ci-and-scripts/">Use Blender MCP from CI or scripts</a>.</p>
+    </main>
+  </body>
+</html>
