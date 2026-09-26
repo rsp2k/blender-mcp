@@ -615,6 +615,47 @@ print({MARK!r} + json.dumps({{"cleared": True}}))
 """
 
 
+LATENCY_LIMIT_S = 10.0
+
+
+async def s_dispatch_latency(ctx: Ctx):
+    """Time from dispatch to Blender picking the job up, for trivial jobs.
+
+    Dispatches travel as notifications on the addon's event stream; a stalled
+    stream once delayed them by 60 s while pings stayed healthy. The addon now
+    pulls missed dispatches and reconnects a silent stream, so pickup should
+    stay within a few seconds.
+    """
+    if not await has_tool(ctx, "blender_submit"):
+        return "SKIP", "server has no job API yet"
+    times = []
+    for i in range(3):
+        t0 = time.time()
+        sub = await call(ctx, "blender_submit", {
+            "command": "execute_code", "params": {"code": f"print('latency-{i}')"},
+            "target_uuid": ctx.uuid,
+        })
+        job_id = sub.get("job_id") if isinstance(sub, dict) else None
+        if not job_id:
+            return "FAIL", f"blender_submit returned no job_id: {str(sub)[:300]}"
+        picked = None
+        while time.time() - t0 < LATENCY_LIMIT_S + 20:
+            st = await call(ctx, "blender_job_status", {"job_id": job_id, "wait_seconds": 5},
+                            timeout=30)
+            if isinstance(st, dict) and st.get("status") not in ("queued", None):
+                picked = time.time() - t0
+                break
+        if picked is None:
+            return "FAIL", f"job {job_id} still queued after {LATENCY_LIMIT_S + 20:.0f}s"
+        times.append(picked)
+        await asyncio.sleep(1)
+    worst = max(times)
+    detail = "pickup " + ", ".join(f"{t:.1f}s" for t in times)
+    if worst > LATENCY_LIMIT_S:
+        return "FAIL", f"{detail} (limit {LATENCY_LIMIT_S:g}s)"
+    return "PASS", detail
+
+
 async def s_worker(ctx: Ctx):
     """Spawn a background worker, run a progress-reporting job there while the GUI
     stays responsive, offer the result for reload, then stop the worker."""
@@ -747,6 +788,7 @@ async def main() -> int:
         await step(ctx, "network-drop", lambda: s_network(ctx, args.network))
         await step(ctx, "worker-death", lambda: s_worker_death(ctx))
         await step(ctx, "jobs", lambda: s_jobs(ctx))
+        await step(ctx, "dispatch-latency", lambda: s_dispatch_latency(ctx))
         await step(ctx, "worker", lambda: s_worker(ctx))
         await step(ctx, "update-now", lambda: s_update_now(ctx, args.update_to_version))
     await step(ctx, "token-boundary", lambda: s_token_boundary(ctx))
