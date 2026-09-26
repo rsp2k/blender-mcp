@@ -23,15 +23,78 @@ from typing import Any, Optional
 
 import bpy
 
-try:
-    from fastmcp import Client as FastMCPClient
-    from fastmcp.client.transports import StreamableHttpTransport
-    FASTMCP_AVAILABLE = True
-except ImportError:
-    FASTMCP_AVAILABLE = False
-    FastMCPClient = None  # type: ignore[assignment]
-    StreamableHttpTransport = None  # type: ignore[assignment]
-    print("[BlenderMCP] fastmcp not installed - run: <blender_python> -m pip install fastmcp")
+FastMCPClient = None  # type: ignore[assignment]
+StreamableHttpTransport = None  # type: ignore[assignment]
+FASTMCP_AVAILABLE = False
+FASTMCP_IMPORT_ERROR: Optional[str] = None
+_FASTMCP_RETRY_S = 30.0
+_fastmcp_last_attempt = 0.0
+
+
+def _root_import_error(exc: BaseException) -> str:
+    # fastmcp re-wraps dependency failures as "client support is not
+    # installed"; the innermost ImportError names the module that broke.
+    innermost = exc
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ImportError):
+            innermost = cur
+        cur = cur.__cause__ or cur.__context__
+    return f"{type(innermost).__name__}: {innermost}"
+
+
+def ensure_fastmcp(force: bool = False) -> bool:
+    """Import fastmcp on first need; retry failed imports at most every 30 s.
+
+    A first install inside a running Blender can't load the bundled
+    wheels: Blender imported its own older typing_extensions at startup
+    and appends the extension site-packages after its own, so a fastmcp
+    dependency fails on `from typing_extensions import sentinel`. A fresh
+    start puts the extension site-packages first and everything loads.
+    Swapping modules under the live interpreter proved unsafe, so this
+    only retries and records the real error for the UI.
+    """
+    global FastMCPClient, StreamableHttpTransport, FASTMCP_AVAILABLE
+    global FASTMCP_IMPORT_ERROR, _fastmcp_last_attempt
+    if FASTMCP_AVAILABLE:
+        return True
+    import time as _time
+    now = _time.monotonic()
+    if not force and _fastmcp_last_attempt and now - _fastmcp_last_attempt < _FASTMCP_RETRY_S:
+        return False
+    _fastmcp_last_attempt = now
+    try:
+        from fastmcp import Client as _client_cls
+        from fastmcp.client.transports import StreamableHttpTransport as _transport_cls
+    except ImportError as e:
+        FASTMCP_IMPORT_ERROR = _root_import_error(e)
+        return False
+    FastMCPClient, StreamableHttpTransport = _client_cls, _transport_cls
+    FASTMCP_AVAILABLE, FASTMCP_IMPORT_ERROR = True, None
+    return True
+
+
+def fastmcp_problem_lines() -> list[str]:
+    """User-facing explanation when fastmcp isn't importable."""
+    if (__package__ or "").startswith("bl_ext."):
+        lines = [
+            "Blender MCP's bundled libraries aren't loaded.",
+            "Restart Blender; they load at startup.",
+        ]
+    else:
+        lines = [
+            "fastmcp not installed.",
+            "In Blender's Python console:",
+            "  python -m pip install fastmcp",
+        ]
+    if FASTMCP_IMPORT_ERROR:
+        lines.append(FASTMCP_IMPORT_ERROR)
+    return lines
+
+
+ensure_fastmcp(force=True)
 
 
 def _env_seconds(name: str, default: float) -> float:
@@ -199,8 +262,8 @@ class BlenderMCPClient:
         """Start worker thread with its own asyncio loop."""
         if self.running:
             return
-        if not FASTMCP_AVAILABLE:
-            self.last_error = "fastmcp not installed"
+        if not ensure_fastmcp():
+            self.last_error = " ".join(fastmcp_problem_lines())
             print(f"[BlenderMCP] {self.last_error}")
             return
 
