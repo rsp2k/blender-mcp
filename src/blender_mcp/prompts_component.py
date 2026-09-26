@@ -44,7 +44,7 @@ _DISPATCH_RECIPES: dict[str, dict] = {
     "execute_code": {"code": "import bpy\nprint(bpy.data.objects.keys())"},
     "get_viewport_screenshot": {
         "filepath": "/tmp/viewport.png",
-        "max_size": 800,
+        "max_size": 0,
         "format": "png",
     },
     "get_console_output": {"level": "all", "page": 1, "page_size": 50},
@@ -498,15 +498,16 @@ class BlenderPromptsComponent(MCPMixin):
             f"{call}\n"
             "```\n\n"
             "All dispatch tools also accept these optional kwargs:\n"
-            "- ``target_uuid: str`` — explicit Blender client UUID (omit to auto-pick\n"
-            "  if exactly one is connected; required when multiple are)\n"
+            "- ``target_uuid: str`` — Blender client UUID, ``\"latest\"`` (newest\n"
+            "  registration) or ``\"pid:<n>\"``. Omit to auto-pick when exactly one\n"
+            "  live (recently heartbeating) Blender is connected\n"
             "- ``_timeout: float`` — seconds to wait for the addon's reply before\n"
             "  returning ``{\"status\": \"timeout\"}``\n\n"
             "Return shape (JSON string):\n"
             "```json\n"
             "{\n"
             "  \"status\": \"completed\" | \"failed\" | \"timeout\" | \"no_client\" |\n"
-            "             \"ambiguous_target\" | \"unknown_target\",\n"
+            "             \"ambiguous_target\" | \"unknown_target\" | \"no_live_client\",\n"
             f"  \"command\": {json.dumps(normalized)},\n"
             "  \"target_uuid\": \"<chosen Blender client UUID>\",\n"
             "  \"job_id\": \"j-<12 hex chars>\",\n"

@@ -340,16 +340,25 @@ def get_object_info(ctx: Context, object_name: str) -> str:
         logger.error(f"Error getting object info from Blender: {str(e)}")
         return f"Error getting object info: {str(e)}"
 
+# The legacy socket path returns the PNG inline in the MCP response, so a
+# native 4K viewport would balloon the payload. Clamp the long edge here.
+INLINE_SCREENSHOT_MAX = 2048
+
+
 @mcp.tool()
-def get_viewport_screenshot(ctx: Context, max_size: int = 800) -> Image:
+def get_viewport_screenshot(ctx: Context, max_size: int = 1600) -> Image:
     """
     Capture a screenshot of the current Blender 3D viewport.
     
     Parameters:
-    - max_size: Maximum size in pixels for the largest dimension (default: 800)
+    - max_size: Maximum size in pixels for the largest dimension (default:
+      1600). 0 means native viewport size. Clamped to 2048 because the image
+      is returned inline in the MCP response.
     
     Returns the screenshot as an Image.
     """
+    if max_size <= 0 or max_size > INLINE_SCREENSHOT_MAX:
+        max_size = INLINE_SCREENSHOT_MAX
     try:
         blender = get_blender_connection()
         

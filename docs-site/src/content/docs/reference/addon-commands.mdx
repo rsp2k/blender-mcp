@@ -27,7 +27,7 @@ The addon registers commands via `@command(name, gate=...)` on per-domain mixins
 
 | Command | Parameters | Returns | Gate |
 |---|---|---|---|
-| `get_viewport_screenshot` | `max_size=800`, `filepath`, `format="png"` | `{success, width, height, filepath}` | — |
+| `get_viewport_screenshot` | `max_size=0` (native), `filepath`, `format="png"` | `{success, width, height, filepath}` | — |
 
 `filepath` is required despite the default-looking signature — the handler returns `{"error":"No filepath provided"}` if it's empty.
 
