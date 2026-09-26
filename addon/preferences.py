@@ -130,10 +130,15 @@ def _on_auto_connect_changed(self, _context):
     from . import connection
 
     persist_prefs()
+    sup = connection.supervisor()
     if self.auto_connect:
-        connection.supervisor().poke()
+        print("[BlenderMCP] Stay-connected: armed; connecting")
+        sup.poke(reason="armed via toggle")
     else:
         connection.stop_client()
+        print("[BlenderMCP] Stay-connected: off; client stopped")
+        # The next tick would otherwise announce the same state again.
+        sup._last_decision = connection.DISARMED
 
 
 def find_update_repo():
