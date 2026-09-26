@@ -23,6 +23,7 @@ from .handlers.extensions import ExtensionsHandlersMixin
 from .handlers.hyper3d import Hyper3dHandlersMixin
 from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
+from .handlers.analysis import AnalysisHandlersMixin
 from .handlers.scene import SceneHandlersMixin
 from .handlers.sketchfab import SketchfabHandlersMixin
 from .handlers.view_controls import ViewControlHandlersMixin
@@ -43,6 +44,7 @@ class BlenderCommandExecutor(
     ExtensionsHandlersMixin,
     AnnotationHandlersMixin,
     ViewControlHandlersMixin,
+    AnalysisHandlersMixin,
     WorkerHandlersMixin,
     SharedHelpersMixin,
 ):
