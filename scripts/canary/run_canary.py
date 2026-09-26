@@ -9,7 +9,10 @@ real GUI Blender, then check boot auto-connect, uuid stability across
 restart and container recreate, network-drop recovery, worker-death
 recovery, long-running jobs (a dispatch outliving its wait is polled to
 completion and a queued job is cancelled; SKIPs until the server has the
-job API), the one-click Update now path, and the token boundary. Every step
+job API), background workers (spawn, a progress-reporting job on the worker
+while the GUI stays responsive, the reload offer, stop; SKIPs until server
+and addon support them), the one-click Update now path, and the token
+boundary. Every step
 prints PASS / FAIL / SKIP with evidence; the exit code is non-zero on any FAIL.
 
 The Blender is driven through the bus itself: blender_execute_code runs
@@ -517,6 +520,139 @@ async def s_jobs(ctx: Ctx):
                     f"completed after {time.time() - t0:.0f}s; {cancel_note}")
 
 
+async def has_tool(ctx: Ctx, name: str) -> bool:
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    transport = StreamableHttpTransport(MCP_URL, headers={"Authorization": f"Bearer {ctx.token}"})
+    async with Client(transport, timeout=60) as c:
+        return any(t.name == name for t in await c.list_tools())
+
+
+HAS_WORKERS = f"""
+import sys, json
+reg = sys.modules.get({PKG_MODULE!r} + '.executor.registry')
+print({MARK!r} + json.dumps({{"workers": bool(reg and 'spawn_worker' in reg.COMMAND_REGISTRY)}}))
+"""
+
+WORKER_JOB = """
+import os, time
+import bpy
+for i in range(10):
+    time.sleep(2)
+    report_progress((i + 1) / 10, f"step {i + 1}/10")
+out = os.path.join(os.path.dirname(bpy.data.filepath), "canary_result.blend")
+bpy.ops.wm.save_as_mainfile(filepath=out, copy=True)
+print("RESULT " + out)
+"""
+
+
+def gui_worker_state(uuid: str, pid: int) -> str:
+    return f"""
+import sys, json, os
+st = sys.modules.get({PKG_MODULE!r} + '.state')
+pending = getattr(st, '_pending_reload', None) if st else None
+try:
+    os.kill({pid}, 0)
+    alive = True
+except ProcessLookupError:
+    alive = False
+except PermissionError:
+    alive = True
+print({MARK!r} + json.dumps({{
+    'tracked': {uuid!r} in (getattr(st, '_workers', {{}}) or {{}}),
+    'pid_alive': alive,
+    'pending_reload': pending,
+}}))
+"""
+
+
+CLEAR_RELOAD = f"""
+import sys, json
+st = sys.modules.get({PKG_MODULE!r} + '.state')
+st._pending_reload = None
+print({MARK!r} + json.dumps({{"cleared": True}}))
+"""
+
+
+async def s_worker(ctx: Ctx):
+    """Spawn a background worker, run a progress-reporting job there while the GUI
+    stays responsive, offer the result for reload, then stop the worker."""
+    if not await has_tool(ctx, "blender_spawn_worker"):
+        return "SKIP", "server has no worker tools yet"
+    if not (await run_code(ctx, HAS_WORKERS)).get("workers"):
+        return "SKIP", "installed addon predates background workers"
+
+    t0 = time.time()
+    spawn = await call(ctx, "blender_spawn_worker", {"target_uuid": ctx.uuid, "timeout_s": 120},
+                       timeout=180)
+    if not isinstance(spawn, dict) or spawn.get("status") != "ok":
+        return "FAIL", f"spawn failed: {str(spawn)[:300]}"
+    worker_uuid, pid = spawn["worker_uuid"], spawn["pid"]
+    spawned_in = time.time() - t0
+    try:
+        listed = [c for c in await clients(ctx) if c.get("uuid") == worker_uuid]
+        if not listed or listed[0].get("role") != "worker" or listed[0].get("parent_uuid") != ctx.uuid:
+            return "FAIL", f"worker not listed with role/parent: {str(listed)[:300]}"
+
+        job = await call(ctx, "blender_submit", {
+            "command": "execute_code", "params": {"code": WORKER_JOB}, "target_uuid": worker_uuid,
+        })
+        if not isinstance(job, dict) or job.get("status") != "queued":
+            return "FAIL", f"submit to worker failed: {str(job)[:300]}"
+        job_id = job["job_id"]
+
+        await asyncio.sleep(4)
+        g0 = time.time()
+        gui = await call(ctx, "blender_get_scene_info", {"target_uuid": ctx.uuid, "_timeout": 15},
+                         timeout=30)
+        gui_s = time.time() - g0
+        if not isinstance(gui, dict) or gui.get("status") != "completed" or gui_s > 5:
+            return "FAIL", f"GUI not responsive while worker ran ({gui_s:.1f}s): {str(gui)[:200]}"
+
+        progress_seen = None
+        status = {}
+        for _ in range(8):
+            status = await call(ctx, "blender_job_status", {"job_id": job_id, "wait_seconds": 10},
+                                timeout=30)
+            if status.get("progress") and not status.get("done"):
+                progress_seen = progress_seen or status["progress"]
+            if status.get("done"):
+                break
+        result = await call(ctx, "blender_job_result", {"job_id": job_id})
+        text = result.get("result") or ""
+        if result.get("status") != "completed" or "RESULT " not in text:
+            return "FAIL", f"worker job ended {result.get('status')}: {str(result)[:300]}"
+        if not progress_seen:
+            return "FAIL", "job completed but no progress was ever reported"
+        result_path = text.split("RESULT ", 1)[1].split()[0].strip("\\\"'")
+
+        offer = await call(ctx, "blender_offer_reload", {
+            "path": result_path, "message": "canary worker result", "target_uuid": ctx.uuid,
+        })
+        if not isinstance(offer, dict) or offer.get("status") != "completed":
+            return "FAIL", f"offer_reload failed: {str(offer)[:300]}"
+        st = await run_code(ctx, gui_worker_state(worker_uuid, pid))
+        if (st.get("pending_reload") or {}).get("path") != result_path:
+            return "FAIL", f"banner state not set: {st}"
+        await run_code(ctx, CLEAR_RELOAD)
+    finally:
+        stop = await call(ctx, "blender_stop_worker", {"worker_uuid": worker_uuid}, timeout=90)
+
+    if not (isinstance(stop, dict) and stop.get("stopped")):
+        return "FAIL", f"stop failed: {str(stop)[:300]}"
+    await asyncio.sleep(2)
+    if any(c.get("uuid") == worker_uuid for c in await clients(ctx)):
+        return "FAIL", "worker still registered after stop"
+    st = await run_code(ctx, gui_worker_state(worker_uuid, pid))
+    if st.get("pid_alive") or st.get("tracked"):
+        return "FAIL", f"worker process survived stop: {st}"
+    return "PASS", (f"spawned {worker_uuid} in {spawned_in:.0f}s; GUI answered in {gui_s:.1f}s "
+                    f"mid-job; progress {progress_seen.get('fraction')} "
+                    f"'{progress_seen.get('message')}'; result offered; stopped "
+                    f"({stop.get('how')}), process gone")
+
+
 async def s_token_boundary(ctx: Ctx):
     r = await call(ctx, "blender_create_access_token", {"name": "canary-should-be-refused"})
     if isinstance(r, dict) and r.get("error") == "oauth_required":
@@ -563,6 +699,7 @@ async def main() -> int:
         await step(ctx, "network-drop", lambda: s_network(ctx, args.network))
         await step(ctx, "worker-death", lambda: s_worker_death(ctx))
         await step(ctx, "jobs", lambda: s_jobs(ctx))
+        await step(ctx, "worker", lambda: s_worker(ctx))
         await step(ctx, "update-now", lambda: s_update_now(ctx, args.update_to_version))
     await step(ctx, "token-boundary", lambda: s_token_boundary(ctx))
 
