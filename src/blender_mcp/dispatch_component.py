@@ -939,6 +939,8 @@ class BlenderDispatchComponent(MCPMixin):
         before the frame, so baked camera tours step correctly. Returns
         the frame, active camera, previous camera and the marker used.
         Pair with blender_look_through to view the tour in the viewport.
+        Both tools write scene.camera, so call set_frame first, then
+        look_through with the camera it returned.
         """
         return await self._call(
             ctx,
@@ -966,6 +968,8 @@ class BlenderDispatchComponent(MCPMixin):
         toggles "Lock Camera to View" (while on, viewport navigation
         moves the camera). ``shading`` optionally sets WIREFRAME / SOLID /
         MATERIAL / RENDERED in the same call. Needs a GUI viewport.
+        Overrides any marker-bound camera until the next frame change;
+        after blender_set_frame, pass the camera it returned.
         """
         return await self._call(
             ctx,
@@ -986,12 +990,16 @@ class BlenderDispatchComponent(MCPMixin):
         frame: str = "parent",
         track_axis: str = "-Z",
         up_axis: str = "Y",
+        lens: Optional[float] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Place an object using coordinates in its parent's frame.
+
+        ``lens`` (mm, cameras only) sets the focal length in the same call;
+        omitted keeps the camera's current lens.
 
         frame="parent" (default): ``location`` and ``target`` are in the
         local coordinates of ``parent`` (if given; it also re-parents the
@@ -1012,6 +1020,7 @@ class BlenderDispatchComponent(MCPMixin):
                 "frame": frame,
                 "track_axis": track_axis,
                 "up_axis": up_axis,
+                "lens": lens,
             },
             target_uuid,
             _timeout,

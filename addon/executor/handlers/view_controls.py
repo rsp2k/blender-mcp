@@ -157,8 +157,12 @@ class ViewControlHandlersMixin:
         frame: str = "parent",
         track_axis: str = "-Z",
         up_axis: str = "Y",
+        lens: float = None,
     ):
         """Place ``object`` at ``location`` given in a reference frame.
+
+        ``lens`` sets a camera's focal length in mm; the camera's existing
+        lens is kept when omitted.
 
         frame="parent": location (and target) are in the parent's local
         coordinates; the parent is ``parent`` if given, else the object's
@@ -175,6 +179,11 @@ class ViewControlHandlersMixin:
         tgt = _vec3(target, "target") if target is not None else None
         if frame not in ("parent", "world"):
             raise ValueError("frame must be 'parent' or 'world'")
+        if lens is not None:
+            if obj.type != 'CAMERA':
+                raise ValueError(f"lens only applies to cameras; {obj.name!r} is {obj.type}")
+            if lens <= 0:
+                raise ValueError("lens must be positive (mm)")
 
         new_parent = _get_object(parent) if parent else None
         if new_parent is obj:
@@ -199,15 +208,20 @@ class ViewControlHandlersMixin:
             obj.matrix_parent_inverse = mathutils.Matrix.Identity(4)
 
         obj.matrix_world = mathutils.Matrix.LocRotScale(world_loc, rot, scale)
+        if lens is not None:
+            obj.data.lens = float(lens)
         bpy.context.view_layer.update()
 
-        return {
+        result = {
             "object": obj.name,
             "parent": obj.parent.name if obj.parent else None,
             "world_location": list(obj.matrix_world.translation),
             "local_location": list(obj.location),
             "rotation_euler": list(obj.rotation_euler),
         }
+        if obj.type == 'CAMERA':
+            result["lens"] = obj.data.lens
+        return result
 
     @command("world_from_local")
     def world_from_local(self, object: str, point, inverse: bool = False):
