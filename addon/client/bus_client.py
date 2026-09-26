@@ -124,6 +124,30 @@ def _request_ui_redraw() -> None:
     request_ui_redraw()
 
 
+def _tool_payload(result: Any) -> Optional[dict]:
+    """Decode a FastMCP CallToolResult carrying a JSON-encoded dict; None if not."""
+    import json
+
+    text: Any = None
+    content = getattr(result, "content", None)
+    if content:
+        text = getattr(content[0], "text", None)
+    if not text:
+        text = getattr(result, "data", None)
+    if isinstance(text, str):
+        try:
+            text = json.loads(text)
+        except ValueError:
+            return None
+    return text if isinstance(text, dict) else None
+
+
+# Pull fallback cadence for dispatches the event stream missed.
+DISPATCH_PULL_INTERVAL_S = _env_seconds("BLENDER_MCP_DISPATCH_PULL_INTERVAL", 10.0)
+# The stream counts as dead after this many missed keepalives.
+STREAM_SILENCE_KEEPALIVES = 3
+
+
 def _update_state_from_register_response(reg_result: Any) -> None:
     """Read the server's version-hint envelope out of a register_client result.
 
@@ -257,6 +281,13 @@ class BlenderMCPClient:
         self.active_jobs: dict = {}
         # job_updates waiting for a connection (see job_reporter.flush_outbox).
         self.job_outbox = collections.deque()
+        # Event-stream health: the server advertises a keepalive interval at
+        # registration, and message_pump stamps every bus notification.
+        import time as _time
+        self.stream_keepalive_s: Optional[float] = None
+        self.last_stream_message_at = _time.monotonic()
+        # None = not tried yet, False = server has no pending_dispatches tool.
+        self._pull_supported: Optional[bool] = None
         self._timer_registered = False
         # bpy.app.timers compares callables by identity, and every
         # `self._drain_queue` access builds a fresh bound-method object,
@@ -579,6 +610,38 @@ class BlenderMCPClient:
         except Exception as e:
             print(f"[BlenderMCP] Client close error (ignored): {e!r}")
 
+    async def _pull_dispatches(self, client: Any) -> None:
+        """Queue dispatches the event stream missed, and drop held jobs the
+        server says were cancelled. Best-effort: errors just wait for the
+        next round; a server without the tool disables the pull."""
+        from .message_pump import cancel_queued_job, enqueue_pulled, held_job_ids
+
+        try:
+            result = await asyncio.wait_for(
+                client.call_tool(
+                    "blender_pending_dispatches",
+                    {"client_uuid": self.client_uuid, "held_job_ids": held_job_ids(self)},
+                    timeout=REQUEST_TIMEOUT_S,
+                ),
+                REQUEST_TIMEOUT_S + 5.0,
+            )
+        except asyncio.TimeoutError:
+            return
+        except Exception as e:
+            if "unknown tool" in str(e).lower():
+                self._pull_supported = False
+                print("[BlenderMCP] Server has no dispatch pull; using the event stream only")
+            return
+        self._pull_supported = True
+        data = _tool_payload(result) or {}
+        if data.get("status") != "ok":
+            return
+        added = enqueue_pulled(self, data.get("dispatches") or [], str(data.get("bus_id") or ""))
+        if added:
+            print(f"[BlenderMCP] Recovered {added} dispatch(es) the event stream missed")
+        for job_id in data.get("cancelled") or []:
+            cancel_queued_job(self, job_id)
+
     def _thread_main(self) -> None:
         """Run the asyncio loop on this thread."""
         self.loop = asyncio.new_event_loop()
@@ -691,6 +754,13 @@ class BlenderMCPClient:
                             self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
                             _request_ui_redraw()
+                            import time as _t
+                            _reg = _tool_payload(reg_result) or {}
+                            _ka = _reg.get("stream_keepalive_s")
+                            self.stream_keepalive_s = (
+                                float(_ka) if isinstance(_ka, (int, float)) and _ka > 0 else None
+                            )
+                            self.last_stream_message_at = _t.monotonic()
                             # Results of jobs that finished while we were
                             # disconnected go out now that the server knows us.
                             try:
@@ -749,9 +819,29 @@ class BlenderMCPClient:
                                 print(f"[BlenderMCP] Periodic re-register failed: {_rr_exc}")
                             return None
 
+                        last_pull = last_heartbeat
                         while self.running and not self._rotate_requested:
                             await asyncio.sleep(0.2)
                             now = _time.monotonic()
+                            # Dispatches arrive on the event stream; POST pings
+                            # can keep succeeding after it dies. Pull anything
+                            # it missed, and reconnect if it has gone quiet.
+                            if (self._pull_supported is not False
+                                    and now - last_pull >= DISPATCH_PULL_INTERVAL_S):
+                                last_pull = now
+                                await self._pull_dispatches(client)
+                            if self.stream_keepalive_s:
+                                silent = now - self.last_stream_message_at
+                                limit = max(
+                                    self.stream_keepalive_s * STREAM_SILENCE_KEEPALIVES, 30.0
+                                )
+                                if silent > limit:
+                                    self.last_error = (
+                                        f"event stream silent for {silent:.0f}s "
+                                        f"(keepalive every {self.stream_keepalive_s:g}s)"
+                                    )
+                                    print(f"[BlenderMCP] {self.last_error} — reconnecting")
+                                    raise ConnectionError(self.last_error)
                             if now - last_heartbeat >= HEARTBEAT_INTERVAL:
                                 try:
                                     try:

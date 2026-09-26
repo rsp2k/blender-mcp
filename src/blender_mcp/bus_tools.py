@@ -208,10 +208,15 @@ class BlenderBusComponent(MCPMixin):
             parent_uuid=parent_uuid,
         )
         registered = resolved["bus"].register(info)
+        from .stream_keepalive import KEEPALIVE_INTERVAL_S
+
         response: dict[str, Any] = {
             "status": "ok",
             "bus_id": str(resolved["bus_id"]),
             "client": registered.to_dict(),
+            # The addon expects a keepalive this often on its event stream
+            # and reconnects when the stream goes quiet for several of them.
+            "stream_keepalive_s": KEEPALIVE_INTERVAL_S,
         }
         # Version-hint envelope: an addon on an older _version.py than
         # LATEST_ADDON_VERSION renders an "update available" banner. Only

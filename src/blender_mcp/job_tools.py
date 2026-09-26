@@ -220,5 +220,34 @@ class BlenderJobComponent(MCPMixin):
         if jobs.is_terminal(row.status):
             return json.dumps({"status": "error", "error": "already_finished",
                                "job_id": job_id, "job_status": row.status})
-        return json.dumps({"status": "cancel_requested", "job_id": job_id,
-                           "hint": "Blender hasn't acknowledged yet; check blender_job_status."})
+        # No acknowledgement: the cancel notification may have been lost the
+        # same way the dispatch can be. Mark it cancelled here so the addon's
+        # pull fallback never delivers it, and so the addon drops it from its
+        # queue at its next check-in (pending_dispatches reports it).
+        await jobs.finish(job_id, "cancelled",
+                          error="Cancelled; Blender hadn't acknowledged, so it drops "
+                                "the job at its next check-in.")
+        return json.dumps({"status": "ok", "job_id": job_id, "job_status": "cancelled",
+                           "note": "Blender didn't acknowledge within "
+                                   f"{CANCEL_ACK_WAIT_S:g}s; the job is marked cancelled and "
+                                   "will be dropped at its next check-in."})
+
+    @mcp_tool()
+    @require_role("addon")
+    async def pending_dispatches(
+        self,
+        client_uuid: str,
+        held_job_ids: list[str] | None = None,
+        ctx: Context = None,
+    ) -> str:
+        """For the Blender addon: dispatches queued for this client that it
+        hasn't picked up, and which of its held jobs were cancelled.
+
+        A fallback for dispatch notifications lost on the event stream; the
+        addon polls it and dedupes by job_id. Only the calling session's own
+        registered client can be queried.
+        """
+        from .bus_tools import _session_from_ctx
+
+        out = await jobs.pending_dispatches(_session_from_ctx(ctx), client_uuid, held_job_ids)
+        return json.dumps(out)

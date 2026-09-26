@@ -199,6 +199,64 @@ async def handle_update(
     return {"status": "ok", "job_id": job_id, "ignored_status": status}
 
 
+# ---- pull fallback for dispatches the event stream missed ---------------
+
+# A dispatch only counts as missed after this long queued, so the pull
+# doesn't race a notification that's merely in flight.
+PENDING_MIN_AGE = timedelta(seconds=3)
+# Older queued dispatches are left alone: their caller gave up long ago.
+PENDING_MAX_AGE = timedelta(minutes=15)
+
+
+async def pending_dispatches(
+    session: Any,
+    client_uuid: str,
+    held_job_ids: list[str] | None = None,
+) -> dict:
+    """Dispatches still queued for ``client_uuid``, plus which of the jobs
+    the addon is holding were cancelled.
+
+    Server-to-addon dispatches travel as MCP notifications on the session's
+    standalone SSE stream. The MCP client stops reconnecting that stream
+    after two errors, and without an event store a notification sent while
+    it's detached is dropped, so POST requests (pings, results) keep
+    working while dispatches silently stop. The addon polls this to recover.
+    Only the session registered as ``client_uuid`` may ask.
+    """
+    where = bus_manager.lookup_session(session)
+    if where is None or where[1] != client_uuid:
+        return {"status": "error", "error": "not_registered_client", "client_uuid": client_uuid}
+    bus_id = str(where[0])
+    now = job_repo.utcnow()
+    try:
+        async with _sessions() as s:
+            rows = await job_repo.queued_for_target(
+                s, bus_id, client_uuid,
+                older_than=now - PENDING_MIN_AGE, newer_than=now - PENDING_MAX_AGE,
+            )
+            held = await job_repo.statuses(s, held_job_ids or [])
+    except Exception as e:  # noqa: BLE001 - best-effort; the addon just tries again
+        logger.warning("pending_dispatches for %s: DB unavailable: %s", client_uuid, e)
+        return {"status": "error", "error": "unavailable"}
+    dispatches = [
+        {
+            "job_id": r.job_id,
+            "command": r.command,
+            "params": r.params or {},
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+        # Summarized params can't be replayed; the caller sees it stay queued.
+        if not (isinstance(r.params, dict) and (r.params.get("_truncated") or r.params.get("_unserializable")))
+    ]
+    return {
+        "status": "ok",
+        "bus_id": bus_id,
+        "dispatches": dispatches,
+        "cancelled": sorted(j for j, st in held.items() if st == "cancelled"),
+    }
+
+
 # ---- retention -----------------------------------------------------------
 
 async def maybe_prune(force: bool = False) -> None:
