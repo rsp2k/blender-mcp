@@ -61,6 +61,12 @@ A job ends in one of four states: `completed`, `failed` (the error is in `error`
 - **Blender's interface is busy while a job runs.** Jobs run on Blender's main thread, so the viewport doesn't respond until the job finishes.
 - **Jobs are shared with the bus.** Every member of the bus a job ran on can see its status and result.
 
+## When someone is watching the viewport
+
+Because a job holds Blender's main thread, a multi-minute job freezes the interface for whoever is looking at it. When a person is reviewing the scene live while the work happens, run heavy rebuilds in a separate headless Blender instead (`blender -b file.blend --python rebuild.py`), save the result, and reload the saved file into the live session afterwards. The live session stays responsive and the reload takes a second.
+
+Jobs are the better fit for work that takes seconds to a minute or two: exports, scene checks, probe renders, anything that used to run into `execute_code`'s 60 second limit.
+
 <Aside type="note">
 Waiting in slices keeps each tool call short. For a job that takes six minutes, that's about eight `blender_job_status` calls, and each one returns the moment something changes rather than on a fixed timer.
 </Aside>
