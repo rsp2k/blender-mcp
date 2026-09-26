@@ -349,6 +349,56 @@ Download + import by UID. Zip-slip protected.
 
 ---
 
+## Annotations (5)
+
+Read what the user drew with Blender's annotation tool (D-key and drag), and draw marks of your own to point things out. Blender 5.x keeps these strokes in `bpy.data.annotations`; the scene's annotation datablock holds one or more layers.
+
+Write tools draw on their own layer, `LLM` by default, created orange and slightly thicker than the user's default so the two are easy to tell apart. The user's layers are never changed unless you name one. Strokes you draw read back through `blender_list_annotations` and `blender_get_annotation` like anything the user drew.
+
+### `blender_list_annotations`
+
+```python
+blender_list_annotations(include_bbox: bool = True, limit: int = 200, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Every stroke with its id, layer, point count, colour, coordinate `space` and, for 3D strokes, a world-space bounding box. Cheap: no point coordinates.
+
+### `blender_get_annotation`
+
+```python
+blender_get_annotation(annotation_id: str, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Full geometry for one stroke. `world_points` is filled only for `space: "3D"`; view-space strokes return `raw_points` in viewport-percentage units and report their space as `2D-Local`.
+
+### `blender_add_annotation_stroke`
+
+```python
+blender_add_annotation_stroke(points: list[list[float]], layer: str = "LLM", color: list[float] | None = None, thickness: int | None = None, space: str = "3D", cyclic: bool = False, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Draw one stroke. With `space="3D"`, `points` are world coordinates `[x, y, z]` and the mark sits in the scene. With `space="view"`, points are `[x, y]` percentages of the viewport region (0 to 100, origin bottom-left) and the mark stays fixed on screen. `color` (`[r, g, b]`, 0 to 1) and `thickness` (1 to 10) apply to the whole layer, because Blender stores them per layer; use another layer name for another colour. `cyclic` closes the stroke. Returns the stroke `id`.
+
+Arguments are checked before anything is sent to Blender: fewer than two points, wrong point shapes, colours outside 0 to 1 or thickness outside 1 to 10 return `invalid_argument` immediately.
+
+### `blender_annotate_object`
+
+```python
+blender_annotate_object(object: str, style: str = "box", label: str | None = None, layer: str = "LLM", color: list[float] | None = None, thickness: int | None = None, padding: float = 0.05, target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Mark an object so the user can see which one you mean. `box` outlines its world-space bounding box (six strokes), `circle` rings it at mid height, `arrow` comes down at an angle and stops just above its top. `padding` grows the outline by that fraction of the object's largest side. Annotations can't hold text, so `label` is echoed back with `label_drawn: false`; put it in your reply instead.
+
+### `blender_clear_annotations`
+
+```python
+blender_clear_annotations(layer: str = "LLM", target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Remove every stroke on one layer and report how many. Other layers are untouched and the layer itself is kept. A missing layer returns `found: false`, not an error.
+
+Marks are drawn on the layer's earliest frame so they stay visible while the timeline moves, and the annotation overlay is switched on in every 3D viewport.
+
 ## Gates: how Tier-3 disablement works
 
 <Aside type="caution">
