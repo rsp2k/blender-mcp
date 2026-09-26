@@ -6,6 +6,7 @@ log notification routed to subscribed clients on the right user bus.
 """
 
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -18,6 +19,31 @@ from .message_router import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_seconds(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# A client whose last_seen is older than this is "stale": hidden from
+# list_available_clients by default and skipped by implicit target
+# selection, but still routable by explicit uuid. The addon heartbeats
+# every 30s, so 180s is six missed beats. Soft rather than hard because
+# a Blender running a long GIL-holding operator (exact booleans, big
+# bakes) can starve its heartbeat thread for minutes while still alive.
+CLIENT_STALE_SECONDS = _env_seconds("BLENDER_MCP_CLIENT_STALE_SECONDS", 180.0)
+
+# Blender clients silent for this long are unregistered outright, which
+# is what finally clears dead relaunches out of memory. Only applied to
+# client_type == "blender": LLM clients don't heartbeat, and evicting an
+# idle LLM would break reply routing to it.
+CLIENT_EVICT_SECONDS = _env_seconds("BLENDER_MCP_CLIENT_EVICT_SECONDS", 3600.0)
+
+TARGET_LATEST = "latest"
+TARGET_PID_PREFIX = "pid:"
 
 
 @dataclass
@@ -66,6 +92,12 @@ class ClientInfo:
             return False
         return (now if now is not None else time.time()) < self.control_expires_at
 
+    def seen_ago(self, now: Optional[float] = None) -> float:
+        return (now if now is not None else time.time()) - self.last_seen
+
+    def is_stale(self, now: Optional[float] = None) -> bool:
+        return self.seen_ago(now) > CLIENT_STALE_SECONDS
+
     def clear_lock(self) -> None:
         self.control_holder_uuid = None
         self.control_holder_label = None
@@ -85,6 +117,8 @@ class ClientInfo:
             "group_id": self.group_id,
             "connected_at": self.connected_at,
             "last_seen": self.last_seen,
+            "last_seen_seconds_ago": round(self.seen_ago(), 1),
+            "stale": self.is_stale(),
         }
         # Advertise the lock only when active so list_available_clients
         # payloads stay small for the common no-lock case.
@@ -209,6 +243,49 @@ class MessageBus:
         if c:
             c.last_seen = time.time()
 
+    def evict_dead(self, now: Optional[float] = None) -> list[str]:
+        """Unregister Blender clients silent for CLIENT_EVICT_SECONDS.
+
+        Lazy: called from the list/target-selection paths rather than a
+        background sweep, so an idle bus costs nothing.
+        """
+        now = now if now is not None else time.time()
+        dead = [
+            c.uuid for c in self.all_clients()
+            if c.client_type == "blender" and c.seen_ago(now) > CLIENT_EVICT_SECONDS
+        ]
+        for client_uuid in dead:
+            self.unregister(client_uuid)
+        return dead
+
+    def blender_clients(self, include_stale: bool = False) -> list[ClientInfo]:
+        now = time.time()
+        return [
+            c for c in self.all_clients()
+            if c.client_type == "blender" and (include_stale or not c.is_stale(now))
+        ]
+
+    def resolve_target(self, spec: str) -> Optional[ClientInfo]:
+        """Resolve a target spec to a client.
+
+        Accepts a client uuid, ``"latest"`` (the newest-registered live
+        Blender client, falling back to the newest stale one so a Blender
+        busy in a long operator is still reachable), or ``"pid:<n>"``
+        (newest Blender client reporting that pid). uuids change on every
+        Blender relaunch; pid is what callers tend to know.
+        """
+        if spec == TARGET_LATEST:
+            candidates = self.blender_clients() or self.blender_clients(include_stale=True)
+            return max(candidates, key=lambda c: c.connected_at, default=None)
+        if spec.startswith(TARGET_PID_PREFIX):
+            try:
+                pid = int(spec[len(TARGET_PID_PREFIX):])
+            except ValueError:
+                return None
+            matches = [c for c in self.blender_clients(include_stale=True) if c.pid == pid]
+            return max(matches, key=lambda c: c.connected_at, default=None)
+        return self.get(spec)
+
     # ---- routing ----
 
     def _resolve_targets(self, routing: dict[str, Any], from_uuid: str) -> list[ClientInfo]:
@@ -217,7 +294,7 @@ class MessageBus:
 
         if mode == "direct":
             target = routing.get("target_uuid")
-            c = self.get(target) if target else None
+            c = self.resolve_target(target) if target else None
             return [c] if c else []
 
         if mode == "group":

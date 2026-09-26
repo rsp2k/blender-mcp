@@ -240,6 +240,10 @@ class BlenderBusComponent(MCPMixin):
         """Route a message on a bus. Mode picked by which targeting arg is set.
         Precedence: target_uuid > group_id > client_type > broadcast.
 
+        ``target_uuid`` also accepts ``"latest"`` (newest registered live
+        Blender client) or ``"pid:<n>"``; ``targets`` in the reply holds
+        the resolved uuid.
+
         ``bus_id`` defaults to the caller's personal bus.
         """
         user_id = _resolve_user_id(ctx)
@@ -354,10 +358,22 @@ class BlenderBusComponent(MCPMixin):
     @mcp_tool()
     async def list_available_clients(
         self,
+        include_stale: bool = False,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """List persistent + ephemeral clients on the given bus.
+
+        Stale clients (no heartbeat or traffic within
+        ``BLENDER_MCP_CLIENT_STALE_SECONDS``, default 180s; typically dead
+        Blender relaunches that never unregistered) are omitted unless
+        ``include_stale=True``; ``stale_hidden`` reports how many were
+        filtered. Blender clients silent past
+        ``BLENDER_MCP_CLIENT_EVICT_SECONDS`` (default 1h) are unregistered.
+        Each entry carries ``last_seen_seconds_ago`` and ``stale``.
+
+        Dispatch tools accept ``target_uuid="latest"`` (newest registered
+        live Blender) or ``target_uuid="pid:<n>"`` in place of a uuid.
 
         ``bus_id`` defaults to the caller's personal bus. Returns
         ``not_a_member`` if the caller isn't a member of the bus.
@@ -369,11 +385,26 @@ class BlenderBusComponent(MCPMixin):
         if not resolved["ok"]:
             return json.dumps(resolved)
         bus = resolved["bus"]
+        bus.evict_dead()
+
+        hidden = 0
+
+        def _visible(clients):
+            nonlocal hidden
+            out = []
+            for c in clients:
+                if include_stale or not c.is_stale():
+                    out.append(c.to_dict())
+                else:
+                    hidden += 1
+            return out
+
         return json.dumps({
             "status": "ok",
             "user_id": user_id,
-            "persistent": [c.to_dict() for c in bus.persistent_clients.values()],
-            "ephemeral": [c.to_dict() for c in bus.ephemeral_clients.values()],
+            "persistent": _visible(bus.persistent_clients.values()),
+            "ephemeral": _visible(bus.ephemeral_clients.values()),
+            "stale_hidden": hidden,
         })
 
     @mcp_resource(uri="blender://bus/clients")

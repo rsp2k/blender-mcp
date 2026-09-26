@@ -13,8 +13,11 @@ that handles the round-trip internally:
 
 The dispatch tools share a common ``_dispatch`` helper that:
 
-1. Picks a target blender client (explicit ``target_uuid`` or
-   auto-pick if exactly one ``client_type=="blender"`` is registered).
+1. Picks a target blender client: explicit ``target_uuid`` (a uuid,
+   ``"latest"`` for the newest registration, or ``"pid:<n>"``), else
+   auto-pick when exactly one live ``client_type=="blender"`` is
+   registered. Stale clients (no heartbeat for
+   ``BLENDER_MCP_CLIENT_STALE_SECONDS``) don't count toward ambiguity.
 2. Generates a fresh ``job_id`` and registers an ``asyncio.Future``
    via :class:`JobWaiter`.
 3. Routes a ``command_dispatch`` payload through the user's bus.
@@ -70,27 +73,55 @@ def _new_job_id() -> str:
 def _pick_blender_target(bus, target_uuid: Optional[str]) -> dict:
     """Resolve a target Blender client on ``bus`` or return a structured error.
 
+    ``target_uuid`` may be a client uuid, ``"latest"`` (newest-registered
+    live Blender) or ``"pid:<n>"``. With no target, auto-picks when exactly
+    one LIVE Blender client is registered; stale entries (dead relaunches
+    that never unregistered) no longer make the pick ambiguous.
+
     Returns ``{"ok": True, "uuid": ...}`` on success, or
     ``{"ok": False, "status": "...", ...}`` for the various failure modes
     so the caller can convert to JSON wire output without branching on
     multiple exception types.
     """
-    blender_clients = [
-        c for c in bus.all_clients() if c.client_type == "blender"
-    ]
+    bus.evict_dead()
 
     if target_uuid:
-        for c in blender_clients:
-            if c.uuid == target_uuid:
-                return {"ok": True, "uuid": target_uuid}
+        c = bus.resolve_target(target_uuid)
+        if c is not None and c.client_type == "blender":
+            return {"ok": True, "uuid": c.uuid}
         return {
             "ok": False,
             "status": "unknown_target",
             "target_uuid": target_uuid,
-            "hint": "No registered Blender client has that UUID on this bus.",
+            "hint": (
+                "No registered Blender client matches that target. Pass a "
+                "uuid from blender_list_available_clients, \"latest\", or "
+                "\"pid:<n>\"."
+            ),
         }
 
-    if not blender_clients:
+    live = bus.blender_clients()
+    if not live:
+        stale = bus.blender_clients(include_stale=True)
+        if len(stale) == 1:
+            # Only one candidate, just quiet (likely busy in a long op).
+            return {"ok": True, "uuid": stale[0].uuid}
+        if stale:
+            return {
+                "ok": False,
+                "status": "no_live_client",
+                "candidates": [
+                    {"uuid": c.uuid, "label": c.label, "pid": c.pid,
+                     "last_seen_seconds_ago": round(c.seen_ago(), 1)}
+                    for c in stale
+                ],
+                "hint": (
+                    "Blender clients are registered but none has "
+                    "heartbeated recently. If one is busy in a long "
+                    "operation, target it explicitly (uuid, \"latest\" or "
+                    "\"pid:<n>\"); otherwise reconnect from the addon sidebar."
+                ),
+            }
         return {
             "ok": False,
             "status": "no_client",
@@ -101,20 +132,22 @@ def _pick_blender_target(bus, target_uuid: Optional[str]) -> dict:
             ),
         }
 
-    if len(blender_clients) > 1:
+    if len(live) > 1:
         return {
             "ok": False,
             "status": "ambiguous_target",
             "candidates": [
-                {"uuid": c.uuid, "label": c.label} for c in blender_clients
+                {"uuid": c.uuid, "label": c.label, "pid": c.pid,
+                 "hostname": c.hostname, "blend_file": c.blend_file}
+                for c in live
             ],
             "hint": (
-                "Multiple Blender clients connected; pass target_uuid="
-                "<one of candidates> to disambiguate."
+                "Multiple live Blender clients connected; pass target_uuid="
+                "<uuid>, \"pid:<n>\", or \"latest\" (newest registration)."
             ),
         }
 
-    return {"ok": True, "uuid": blender_clients[0].uuid}
+    return {"ok": True, "uuid": live[0].uuid}
 
 
 async def _dispatch(
@@ -244,7 +277,7 @@ class BlenderDispatchComponent(MCPMixin):
     Common signature shape:
 
         - <handler-specific kwargs>
-        - target_uuid: Optional[str]  — explicit override
+        - target_uuid: Optional[str]  — uuid, "latest", or "pid:<n>"
         - _timeout: float             — override per-tool default
         - ctx: Context = None         — MCP plumbing
     """
@@ -362,14 +395,20 @@ class BlenderDispatchComponent(MCPMixin):
     async def get_viewport_screenshot(
         self,
         filepath: str,
-        max_size: int = 800,
+        max_size: int = 0,
         format: str = "png",
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Save a 3D viewport screenshot to ``filepath`` (resized to ``max_size``)."""
+        """Save a 3D viewport screenshot to ``filepath`` on the Blender host.
+
+        ``max_size`` caps the longest edge in pixels; 0 (default) keeps the
+        viewport region's native resolution. The image is written on the
+        Blender machine and only its path and size travel over the bus, so
+        there is no payload ceiling here.
+        """
         return await self._call(
             ctx,
             "get_viewport_screenshot",

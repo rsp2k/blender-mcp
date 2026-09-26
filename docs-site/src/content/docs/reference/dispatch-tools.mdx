@@ -15,7 +15,7 @@ Every dispatch tool accepts the same two infrastructure parameters in addition t
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `target_uuid` | `None` | Specific Blender client UUID. If omitted and the user's bus has exactly one Blender peer, that one is used. Otherwise returns `ambiguous_target` or `no_client`. |
+| `target_uuid` | `None` | A Blender client UUID, `"latest"` (newest registration among live clients) or `"pid:<n>"`. If omitted and exactly one live Blender peer is connected, that one is used. Peers with no heartbeat for `BLENDER_MCP_CLIENT_STALE_SECONDS` (default 180) don't count. Otherwise returns `ambiguous_target`, `no_live_client` or `no_client`. |
 | `_timeout` | varies | Seconds to wait for the addon's reply. Underscore-prefixed so it doesn't leak into the addon-side `params` dict. |
 
 Tools also receive a `ctx: Context` injected by FastMCP for auth.
@@ -42,6 +42,7 @@ Every dispatch tool returns a JSON string with this shape:
 | `timeout` | `_timeout` elapsed without an addon reply |
 | `no_client` | No Blender peer on the user's bus could be targeted |
 | `ambiguous_target` | Multiple Blender peers, no `target_uuid` to disambiguate |
+| `no_live_client` | Several Blender peers are registered but none has heartbeated recently; `candidates` lists them |
 | `unknown_target` | `target_uuid` was set but no matching client is registered |
 
 ---
@@ -95,14 +96,14 @@ Execute arbitrary Python in the Blender main thread. Captures stdout and returns
 ```python
 blender_get_viewport_screenshot(
     filepath: str,
-    max_size: int = 800,
+    max_size: int = 0,
     format: str = "png",
     target_uuid: str | None = None,
     _timeout: float = 30,
 ) -> str
 ```
 
-Save a 3D viewport screenshot to `filepath`. The image is resized so its longest edge is `max_size`. `format` is `png` or `jpg`.
+Save a 3D viewport screenshot to `filepath` on the Blender host. `max_size` caps the longest edge in pixels; `0` (the default) keeps the viewport's native resolution. `format` is `png` or `jpg`.
 
 ### `blender_get_console_output`
 

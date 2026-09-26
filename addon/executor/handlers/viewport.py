@@ -28,7 +28,7 @@ class ViewportHandlersMixin:
     """`get_viewport_screenshot` command."""
 
     @command("get_viewport_screenshot")
-    def get_viewport_screenshot(self, max_size=800, filepath=None, format="png"):
+    def get_viewport_screenshot(self, max_size=0, filepath=None, format="png"):
         """
         Render the current 3D viewport to an image file.
 
@@ -43,7 +43,8 @@ class ViewportHandlersMixin:
         the compositor is drawing there (i.e. any window on top of Blender).
 
         Parameters:
-        - max_size: Maximum size in pixels for the largest dimension
+        - max_size: Maximum size in pixels for the largest dimension.
+          0 (the default) keeps the viewport region's native size.
         - filepath: Path to write the image to
         - format: Image format (png, jpg, etc.)
         """
@@ -111,7 +112,7 @@ class ViewportHandlersMixin:
             return {"error": f"capture written but not re-loadable: {e}"}
         try:
             width, height = img.size
-            if max(width, height) > max_size:
+            if max_size and max_size > 0 and max(width, height) > max_size:
                 scale = max_size / max(width, height)
                 new_width = int(width * scale)
                 new_height = int(height * scale)
