@@ -22,8 +22,12 @@ that layer. If the user deletes strokes above it, indices shift and
 IDs go stale — callers should re-list rather than re-get after any
 known user edit.
 
-Write side (LLM creates annotations for the user) is deferred to a
-follow-up. This module is intentionally read-only.
+Write side: ``add_annotation_stroke``, ``annotate_object`` and
+``clear_annotations`` let an LLM draw on the scene's annotation
+datablock to point things out. They write to their own layer ("LLM" by
+default) so the user's strokes are never touched unless a layer is
+named explicitly, and strokes they create read back through
+list/get_annotation like anything the user drew.
 """
 
 from __future__ import annotations
@@ -129,8 +133,196 @@ def _stroke_color(stroke, layer):
     return None
 
 
+LLM_LAYER_COLOR = (1.0, 0.35, 0.0)  # orange, distinct from the user's default gray
+LLM_LAYER_THICKNESS = 4
+MAX_STROKE_POINTS = 10000
+
+
+def _scene_annotation():
+    """The scene's annotation datablock, created and assigned if missing."""
+    scene = bpy.context.scene
+    ann = getattr(scene, "annotation", None)
+    if ann is None:
+        ann = bpy.data.annotations.new("Annotations")
+        scene.annotation = ann
+    return ann
+
+
+def _find_layer(ann, name):
+    for i, layer in enumerate(ann.layers):
+        if layer.info == name:
+            return i, layer
+    return None, None
+
+
+def _ensure_layer(ann, name):
+    idx, layer = _find_layer(ann, name)
+    if layer is not None:
+        return idx, layer, False
+    layer = ann.layers.new(name)
+    layer.color = LLM_LAYER_COLOR
+    layer.thickness = LLM_LAYER_THICKNESS
+    idx, _ = _find_layer(ann, name)
+    return idx, layer, True
+
+
+def _drawing_frame(layer):
+    """Frame to draw on. Annotations display the latest keyframe at or before
+    the current frame, so drawing on the layer's earliest frame (or the
+    earlier of scene start and current frame) keeps marks visible while the
+    user scrubs the timeline."""
+    frames = list(layer.frames)
+    if frames:
+        return min(frames, key=lambda f: f.frame_number)
+    scene = bpy.context.scene
+    return layer.frames.new(min(scene.frame_start, scene.frame_current))
+
+
+def _show_annotations_in_viewports():
+    """Turn on the annotation overlay in every 3D viewport. Returns how many."""
+    count = 0
+    wm = bpy.context.window_manager
+    for window in getattr(wm, "windows", []) or []:
+        for area in window.screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for space in area.spaces:
+                if space.type == 'VIEW_3D' and hasattr(space, "overlay"):
+                    space.overlay.show_annotation = True
+                    count += 1
+            area.tag_redraw()
+    return count
+
+
+def _source_label(ann):
+    from .._shared import SharedHelpersMixin
+
+    for src, gp in SharedHelpersMixin._grease_pencil_datablocks():
+        if gp == ann:
+            return src
+    return "ann"
+
+
+def _apply_layer_style(layer, color, thickness):
+    if color is not None:
+        layer.color = tuple(float(c) for c in color[:3])
+    if thickness is not None:
+        layer.thickness = max(1, min(10, int(thickness)))
+
+
 class AnnotationHandlersMixin:
-    """Read-only annotation handlers (list + get)."""
+    """Annotation handlers: list/get (read) and add/annotate/clear (write)."""
+
+    def _write_strokes(self, strokes, layer, color, thickness, display_mode):
+        ann = _scene_annotation()
+        layer_idx, lyr, created = _ensure_layer(ann, layer)
+        _apply_layer_style(lyr, color, thickness)
+        frame = _drawing_frame(lyr)
+        src = _source_label(ann)
+        ids = []
+        for pts in strokes:
+            stroke = frame.strokes.new()
+            stroke.display_mode = display_mode
+            stroke.points.add(len(pts))
+            for p, co in zip(stroke.points, pts):
+                p.co = co
+            ids.append(f"{src}:{ann.name}:{layer_idx}:{frame.frame_number}:{len(frame.strokes) - 1}")
+        return {
+            "ids": ids,
+            "layer": lyr.info,
+            "layer_created": created,
+            "frame": frame.frame_number,
+            "color": [round(c, 4) for c in lyr.color],
+            "thickness": lyr.thickness,
+            "viewports_showing_annotations": _show_annotations_in_viewports(),
+        }
+
+    @command("add_annotation_stroke")
+    def add_annotation_stroke(
+        self,
+        points,
+        layer: str = "LLM",
+        color=None,
+        thickness=None,
+        space: str = "3D",
+        cyclic: bool = False,
+    ):
+        """Draw one annotation stroke.
+
+        space="3D": points are world coordinates [x, y, z].
+        space="view": points are [x, y] (or [x, y, 0]) as percentages of
+        the viewport region, 0-100, origin bottom-left; the mark stays
+        fixed on screen as the view moves.
+        color/thickness apply to the whole layer (Blender stores them per
+        layer, not per stroke). cyclic=True closes the stroke.
+        """
+        if space not in ("3D", "view"):
+            raise ValueError("space must be '3D' or 'view'")
+        pts = [tuple(float(c) for c in (list(p) + [0.0])[:3]) for p in points]
+        if len(pts) < 2:
+            raise ValueError("a stroke needs at least 2 points")
+        if len(pts) > MAX_STROKE_POINTS:
+            raise ValueError(f"at most {MAX_STROKE_POINTS} points per stroke")
+        if cyclic and pts[0] != pts[-1]:
+            pts.append(pts[0])
+        out = self._write_strokes([pts], layer, color, thickness,
+                                  "3DSPACE" if space == "3D" else "2DSPACE")
+        out["id"] = out["ids"][0]
+        out["point_count"] = len(pts)
+        out["space"] = space
+        return out
+
+    @command("annotate_object")
+    def annotate_object(
+        self,
+        object: str,
+        style: str = "box",
+        label=None,
+        layer: str = "LLM",
+        color=None,
+        thickness=None,
+        padding: float = 0.05,
+    ):
+        """Mark an object with a box around its world bounds, a ring around
+        it, or an arrow pointing down at it. Blender annotations can't hold
+        text, so ``label`` is echoed back but not drawn."""
+        from ...annotation_geometry import STYLES, bounds_of, pad_bounds
+
+        if style not in STYLES:
+            raise ValueError(f"style must be one of {sorted(STYLES)}")
+        obj = bpy.data.objects.get(object)
+        if obj is None:
+            raise ValueError(f"no object named {object!r}")
+        corners = [tuple(obj.matrix_world @ mathutils.Vector(c)) for c in obj.bound_box]
+        lo, hi = pad_bounds(*bounds_of(corners), float(padding))
+        out = self._write_strokes(STYLES[style](lo, hi), layer, color, thickness, "3DSPACE")
+        out.update({"object": obj.name, "style": style,
+                    "bounds_min": list(lo), "bounds_max": list(hi)})
+        if label:
+            out["label"] = label
+            out["label_drawn"] = False
+            out["label_note"] = "Blender annotations can't hold text; label not drawn."
+        return out
+
+    @command("clear_annotations")
+    def clear_annotations(self, layer: str = "LLM"):
+        """Remove every stroke on one layer of the scene's annotations. Other
+        layers (the user's own marks) are left alone; the layer itself is kept."""
+        ann = getattr(bpy.context.scene, "annotation", None)
+        if ann is None:
+            return {"layer": layer, "removed": 0, "found": False}
+        _, lyr = _find_layer(ann, layer)
+        if lyr is None:
+            return {"layer": layer, "removed": 0, "found": False}
+        removed = 0
+        for frame in lyr.frames:
+            for stroke in list(frame.strokes):
+                frame.strokes.remove(stroke)
+                removed += 1
+        for area in (a for w in bpy.context.window_manager.windows for a in w.screen.areas):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        return {"layer": layer, "removed": removed, "found": True}
 
     @command("list_annotations")
     def list_annotations(

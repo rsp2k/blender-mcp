@@ -341,6 +341,9 @@ def build_http_mcp() -> FastMCP:
     BlenderJobComponent().register_tools(mcp_server=server, prefix="blender")
     # Headless background workers spawned by a GUI Blender.
     BlenderWorkerComponent().register_tools(mcp_server=server, prefix="blender")
+    # Annotation write tools (the read side lives in the dispatch component).
+    from .annotation_tools import BlenderAnnotationWriteComponent
+    BlenderAnnotationWriteComponent().register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain
