@@ -7,8 +7,9 @@
  * identity comes from Authentik's proxy outpost via Caddy forward_auth:
  * the outpost validates the user's .blender.bet session cookie and
  * forwards X-Authentik-Username / -Email / -Name headers to this
- * upstream when authenticated. Unauthenticated users get redirected
- * to Authentik for SSO before they ever hit this page.
+ * upstream when authenticated. The route is not gated (see the
+ * @protected matcher in docker-compose.yml): without those headers it
+ * renders a plain "You're signed in" so login never ends on an error.
  *
  * Addon-side context (server URL, client_id, addon version, timestamp)
  * arrives via query string — non-secret values, OK to render directly.
@@ -127,7 +128,7 @@ const ctx = {
           <path d="M20 6 9 17l-5-5" />
         </svg>
       </div>
-      <h1>Welcome, {user.greet}</h1>
+      <h1>{user.username || user.name ? `Welcome, ${user.greet}` : "You're signed in"}</h1>
       <p class="lede">
         Your BlenderMCP addon is authorized. You can close this tab and return to Blender.
       </p>
