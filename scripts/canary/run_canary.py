@@ -49,6 +49,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -143,6 +144,39 @@ async def call(ctx: Ctx, tool: str, args: dict | None = None, timeout: float = 6
         return json.loads(text)
     except (TypeError, ValueError):
         return text
+
+
+def _version_tuple(v: str | None) -> tuple[int, ...]:
+    try:
+        return tuple(int(p) for p in str(v).split("."))
+    except (TypeError, ValueError):
+        return ()
+
+
+async def bus_addon_version(ctx: Ctx) -> tuple[int, ...]:
+    """The target client's addon version as the bus reports it; () if unknown.
+    Read from the bus rather than via execute_code so a busy GUI can't block it."""
+    for c in await clients(ctx):
+        if c.get("uuid") == ctx.uuid:
+            return _version_tuple(c.get("addon_version"))
+    return ()
+
+
+async def drain_job(ctx: Ctx, job_id: str | None, max_wait: float = 60) -> None:
+    """Wait for a job this step started, so a failed step can't leave work queued
+    in the GUI that stalls the steps after it."""
+    if not job_id:
+        return
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            s = await call(ctx, "blender_job_status", {"job_id": job_id, "wait_seconds": 20}, timeout=40)
+        except Exception:  # noqa: BLE001 - best-effort cleanup
+            return
+        if not isinstance(s, dict) or s.get("done") or s.get("status") in (
+            "completed", "failed", "cancelled", "lost",
+        ):
+            return
 
 
 async def clients(ctx: Ctx) -> list[dict]:
@@ -502,8 +536,14 @@ async def s_jobs(ctx: Ctx):
             "command": "execute_code", "params": {"code": "print('should not run')"},
             "target_uuid": ctx.uuid,
         })
-        c = await call(ctx, "blender_job_cancel", {"job_id": queued.get("job_id", "")})
+        queued_id = queued.get("job_id") if isinstance(queued, dict) else None
+        if not queued_id:
+            await drain_job(ctx, job_id)
+            return "FAIL", f"blender_submit returned no job_id: {str(queued)[:300]}"
+        c = await call(ctx, "blender_job_cancel", {"job_id": queued_id})
         if not (isinstance(c, dict) and c.get("job_status") == "cancelled"):
+            await drain_job(ctx, job_id)
+            await drain_job(ctx, queued_id)
             return "FAIL", f"cancel of queued job failed: {str(c)[:200]}"
         cancel_note = "queued job cancelled"
 
@@ -580,7 +620,10 @@ async def s_worker(ctx: Ctx):
     stays responsive, offer the result for reload, then stop the worker."""
     if not await has_tool(ctx, "blender_spawn_worker"):
         return "SKIP", "server has no worker tools yet"
-    if not (await run_code(ctx, HAS_WORKERS)).get("workers"):
+    version = await bus_addon_version(ctx)
+    if version and version < (2026, 926, 11):
+        return "SKIP", "installed addon predates background workers"
+    if not version and not (await run_code(ctx, HAS_WORKERS)).get("workers"):
         return "SKIP", "installed addon predates background workers"
 
     t0 = time.time()
@@ -625,7 +668,12 @@ async def s_worker(ctx: Ctx):
             return "FAIL", f"worker job ended {result.get('status')}: {str(result)[:300]}"
         if not progress_seen:
             return "FAIL", "job completed but no progress was ever reported"
-        result_path = text.split("RESULT ", 1)[1].split()[0].strip("\\\"'")
+        # The result is JSON-encoded, so the print's newline arrives as a
+        # literal backslash-n; capture exactly up to the .blend suffix.
+        m = re.search(r"RESULT (\S+?\.blend)", text)
+        if not m:
+            return "FAIL", f"no .blend path in worker output: {text[:300]}"
+        result_path = m.group(1)
 
         offer = await call(ctx, "blender_offer_reload", {
             "path": result_path, "message": "canary worker result", "target_uuid": ctx.uuid,

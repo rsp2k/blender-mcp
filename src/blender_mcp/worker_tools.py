@@ -74,13 +74,26 @@ async def stop_worker_process(bus, bus_id_str: str, worker, caller_sub: str | No
     from .dispatch_component import _dispatch
 
     worker_uuid = worker.uuid
+    parent_uuid = worker.parent_uuid
     if graceful:
         await _dispatch(bus, bus_id_str, "worker_exit", {}, worker_uuid,
                         GRACEFUL_EXIT_WAIT_S, caller_sub=caller_sub)
         if await _wait_until(lambda: bus.get(worker_uuid) is None, GRACEFUL_EXIT_WAIT_S):
-            return {"worker_uuid": worker_uuid, "stopped": True, "how": "graceful"}
+            # Unregistering happens before the process finishes exiting, so
+            # have the parent reap it (or terminate it if it lingers); the
+            # tool then only reports stopped once the process is gone.
+            parent = bus.get(parent_uuid) if parent_uuid else None
+            if parent is None:
+                return {"worker_uuid": worker_uuid, "stopped": True, "how": "graceful"}
+            ok, inner, _reply = _parse_result(await _dispatch(
+                bus, bus_id_str, "stop_worker", {"worker_uuid": worker_uuid},
+                parent.uuid, timeout, caller_sub=caller_sub,
+            ))
+            exited = bool(inner.get("exited")) if ok and isinstance(inner, dict) else False
+            return {"worker_uuid": worker_uuid, "stopped": exited, "how": "graceful",
+                    "process_exited": exited}
 
-    parent = bus.get(worker.parent_uuid) if worker.parent_uuid else None
+    parent = bus.get(parent_uuid) if parent_uuid else None
     if parent is None:
         # Parent is gone; the worker notices within ~10 s and exits by itself.
         bus.unregister(worker_uuid)

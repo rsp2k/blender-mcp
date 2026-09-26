@@ -118,14 +118,22 @@ def test_offer_reload_refuses_a_worker_target(env, wtools):
 def test_stop_idle_worker_gracefully(env, wtools):
     env.worker_session = add_worker(env)
 
+    seen = []
+
     def handler(command, params, target):
-        assert command == "worker_exit" and target == WORKER
-        asyncio.get_running_loop().call_later(0.05, env.bus.unregister, WORKER)
-        return "completed", {"exiting": True}
+        seen.append((command, target))
+        if command == "worker_exit":
+            assert target == WORKER
+            asyncio.get_running_loop().call_later(0.05, env.bus.unregister, WORKER)
+            return "completed", {"exiting": True}
+        # After the worker unregisters, the parent confirms the process exited.
+        assert command == "stop_worker" and target == TARGET
+        return "completed", {"exited": True, "returncode": 0}
     reply_to(env, handler)
     out = json.loads(run(wtools.stop_worker(worker_uuid=WORKER)))
-    assert out["stopped"] and out["how"] == "graceful"
+    assert out["stopped"] and out["how"] == "graceful" and out["process_exited"]
     assert env.bus.get(WORKER) is None
+    assert [c for c, _ in seen] == ["worker_exit", "stop_worker"]
 
 
 def test_stop_busy_worker_kills_through_parent(env, wtools, tools):
