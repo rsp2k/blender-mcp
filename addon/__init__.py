@@ -152,6 +152,25 @@ def _uninstall_lifecycle_handlers() -> None:
         print(f"[BlenderMCP] Could not remove load_post handler: {e}")
 
 
+def _line_buffer_stdout() -> None:
+    """Flush Python stdout per line so [BlenderMCP] logs appear when printed.
+
+    Blender runs its embedded Python with ignore_environment set, so
+    PYTHONUNBUFFERED has no effect, and when stdout is a pipe (docker
+    logs, a service manager, `blender > file`) it's block-buffered: log
+    lines surfaced minutes late or not at all, which made connection
+    problems look silent. Line buffering only changes flush timing.
+    """
+    import sys
+
+    for stream in (sys.__stdout__, sys.stdout):
+        try:
+            if stream is not None and not stream.line_buffering:
+                stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def register():
     """Blender entry point — register all classes + properties.
 
@@ -160,6 +179,8 @@ def register():
     bpy.types.Operator / Panel references at module load time.
     """
     import bpy
+
+    _line_buffer_stdout()
 
     from . import state  # noqa: F401  (re-imported here to make the symbol exist on `addon`)
     from .client.bus_client import FASTMCP_AVAILABLE

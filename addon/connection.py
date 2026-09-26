@@ -128,6 +128,36 @@ def stop_client() -> None:
         except Exception as e:
             print(f"[BlenderMCP] Error stopping client: {e}")
     _set_scene_hints(False)
+    request_ui_redraw()
+
+
+def request_ui_redraw() -> None:
+    """Tag the 3D-view sidebar and Preferences for redraw. Any thread.
+
+    Blender only redraws a region on input events or an explicit tag, so a
+    state change made off the main thread (worker connects, heartbeat
+    fails) stays invisible until the user moves the mouse over the panel.
+    The tag has to happen on the main thread, hence the timer hop.
+    """
+    try:
+        import bpy
+    except ImportError:
+        return
+
+    def _tag():
+        try:
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type in {'VIEW_3D', 'PREFERENCES'}:
+                        area.tag_redraw()
+        except Exception:
+            pass
+        return None
+
+    try:
+        bpy.app.timers.register(_tag, first_interval=0.0)
+    except Exception:
+        pass
 
 
 def _set_scene_hints(running: bool, client_id: Optional[str] = None) -> None:
@@ -165,6 +195,7 @@ class ConnectionSupervisor:
         self.next_attempt_at = 0.0
         self._last_decision: Optional[str] = None
         self._watched_client: Any = None
+        self._start_reason: Optional[str] = None
 
     # --- lifecycle ---
 
@@ -181,9 +212,10 @@ class ConnectionSupervisor:
         except Exception:
             pass
 
-    def poke(self) -> None:
+    def poke(self, reason: str = "armed") -> None:
         """Run a decision now and clear any restart backoff."""
         self.reset_backoff()
+        self._start_reason = reason
         self._tick()
 
     def check_now(self) -> None:
@@ -206,6 +238,11 @@ class ConnectionSupervisor:
             self._evaluate()
         except Exception as e:
             print(f"[BlenderMCP] Connection supervisor error (non-fatal): {e}")
+        # While waiting out a restart backoff the panel shows a countdown,
+        # so tick (and redraw) every second instead of every ten.
+        if self._last_decision == BACKOFF:
+            request_ui_redraw()
+            return 1.0
         return SUPERVISOR_INTERVAL_S
 
     def _evaluate(self) -> None:
@@ -233,11 +270,17 @@ class ConnectionSupervisor:
         if decision != START:
             return
 
+        reason = self._start_reason or "no live client"
+        self._start_reason = None
         ok, message = start_client()
         self._watched_client = state._client if ok else None
-        if not ok:
+        if ok:
+            print(f"[BlenderMCP] Stay-connected: starting client ({reason}); {message}")
+        else:
             self._record_failure(now)
-        print(f"[BlenderMCP] Stay-connected: {message}")
+            print(f"[BlenderMCP] Stay-connected: could not start ({message}); "
+                  f"next try in {int(self.seconds_until_next_attempt() or 0)}s")
+        request_ui_redraw()
 
     def _account_for_previous_client(self, client: Any, alive: bool) -> None:
         # A client this supervisor started has ended. If it registered at
@@ -249,10 +292,18 @@ class ConnectionSupervisor:
                 self.reset_backoff()
             return
         self._watched_client = None
+        last_error = getattr(watched, "last_error", None) or "no error recorded"
         if getattr(watched, "ever_connected", False):
             self.reset_backoff()
+            self._start_reason = "previous client ended"
+            print(f"[BlenderMCP] Stay-connected: client ended after connecting "
+                  f"({last_error}); restarting")
         else:
             self._record_failure(time.time())
+            print(f"[BlenderMCP] Stay-connected: client ended before registering "
+                  f"({last_error}); restarting in "
+                  f"{int(self.seconds_until_next_attempt() or 0)}s")
+        request_ui_redraw()
 
     def _record_failure(self, now: float) -> None:
         self.consecutive_failures += 1
@@ -262,6 +313,7 @@ class ConnectionSupervisor:
         if decision == self._last_decision or decision == START:
             return
         self._last_decision = decision
+        request_ui_redraw()
         reasons = {
             DISARMED: "off (click Connect to stay connected)",
             NO_TOKEN: "waiting for Login",

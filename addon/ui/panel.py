@@ -307,7 +307,15 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                     header = "Status: Connecting..."
                 col.label(text=header, icon='TIME')
                 next_at = getattr(client, "next_retry_at", None)
-                if next_at is not None:
+                if next_at is None:
+                    # Mid-attempt: connect is bounded (~20 s) but offer the
+                    # escape hatch anyway rather than a bare spinner.
+                    col.operator(
+                        "blendermcp.reconnect_now",
+                        text="Retry now",
+                        icon='FILE_REFRESH',
+                    )
+                else:
                     remaining = int(max(0, next_at - _time.time()))
                     # Countdown + escape hatch on the same row: skips
                     # the current backoff sleep AND the heartbeat

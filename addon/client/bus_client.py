@@ -34,6 +34,32 @@ except ImportError:
     print("[BlenderMCP] fastmcp not installed - run: <blender_python> -m pip install fastmcp")
 
 
+def _env_seconds(name: str, default: float) -> float:
+    import os
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# Every await on the network is bounded. The MCP streamable-HTTP client's
+# read timeout defaults to 300 s, so without these a stalled initialize or
+# ping sat for five minutes (the "Connecting..." that never moved) and a
+# dead peer was never noticed. The client-wide `timeout` option isn't used
+# because it also becomes the read timeout of the long-lived notification
+# stream, which would drop whenever the bus is quiet.
+CONNECT_TIMEOUT_S = _env_seconds("BLENDER_MCP_CONNECT_TIMEOUT", 20.0)
+REQUEST_TIMEOUT_S = _env_seconds("BLENDER_MCP_REQUEST_TIMEOUT", 30.0)
+HEARTBEAT_TIMEOUT_S = _env_seconds("BLENDER_MCP_HEARTBEAT_TIMEOUT", 15.0)
+HEARTBEAT_INTERVAL_S = _env_seconds("BLENDER_MCP_HEARTBEAT_INTERVAL", 30.0)
+CLOSE_TIMEOUT_S = 5.0
+
+
+def _request_ui_redraw() -> None:
+    from ..connection import request_ui_redraw
+    request_ui_redraw()
+
+
 def _update_state_from_register_response(reg_result: Any) -> None:
     """Read the server's version-hint envelope out of a register_client result.
 
@@ -444,7 +470,10 @@ class BlenderMCPClient:
             return False
         reg_args = self._registration_args(blend_file_if_empty="")
         future = asyncio.run_coroutine_threadsafe(
-            client.call_tool("blender_register_client", reg_args), loop
+            client.call_tool(
+                "blender_register_client", reg_args, timeout=REQUEST_TIMEOUT_S
+            ),
+            loop,
         )
 
         def _log_err(fut):
@@ -458,21 +487,42 @@ class BlenderMCPClient:
 
     # --- Worker thread / asyncio loop --------------------------------------
 
+    async def _close_client(self, client: Any) -> None:
+        """Exit a FastMCP client without hanging on a dead socket."""
+        try:
+            await asyncio.wait_for(
+                client.__aexit__(None, None, None), CLOSE_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            print(f"[BlenderMCP] Client close timed out after {CLOSE_TIMEOUT_S:g}s; abandoning")
+        except Exception as e:
+            print(f"[BlenderMCP] Client close error (ignored): {e!r}")
+
     def _thread_main(self) -> None:
         """Run the asyncio loop on this thread."""
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        stopped_on_request = False
         try:
             self.loop.run_until_complete(self._run())
+            stopped_on_request = not self.running
         except Exception as e:
             self.last_error = f"Worker crashed: {e}"
             print(f"[BlenderMCP] {self.last_error}")
             traceback.print_exc()
         finally:
+            if stopped_on_request and not self.fatal_error:
+                print(f"[BlenderMCP] Worker exited: stopped ({self.client_uuid})")
+            elif self.fatal_error:
+                print(f"[BlenderMCP] Worker exited: {self.fatal_error}")
+            else:
+                print(f"[BlenderMCP] Worker exited unexpectedly "
+                      f"({self.last_error or 'no error recorded'})")
             # Whatever ended the loop, this client is done; clear the flags so
             # the panel and the connection supervisor don't see it as alive.
             self.running = False
             self.connected = False
+            _request_ui_redraw()
             try:
                 self.loop.close()
             except Exception:
@@ -516,20 +566,41 @@ class BlenderMCPClient:
                 )
 
                 try:
-                    async with FastMCPClient(
-                        transport, message_handler=self._on_message,
-                    ) as client:
+                    client = FastMCPClient(
+                        transport,
+                        message_handler=self._on_message,
+                        init_timeout=CONNECT_TIMEOUT_S,
+                    )
+                    # init_timeout bounds the MCP handshake; the outer
+                    # wait_for also covers TCP/TLS connect and anything
+                    # fastmcp does before initialize.
+                    try:
+                        await asyncio.wait_for(
+                            client.__aenter__(), CONNECT_TIMEOUT_S + 5.0
+                        )
+                    except asyncio.TimeoutError:
+                        await self._close_client(client)
+                        raise ConnectionError(
+                            f"connect timed out after {CONNECT_TIMEOUT_S:g}s"
+                        ) from None
+                    except BaseException:
+                        await self._close_client(client)
+                        raise
+                    try:
                         self.client = client
 
                         try:
-                            await client.set_logging_level("debug")
+                            await asyncio.wait_for(
+                                client.set_logging_level("debug"), REQUEST_TIMEOUT_S
+                            )
                         except Exception as e:
-                            print(f"[BlenderMCP] set_logging_level failed: {e}")
+                            print(f"[BlenderMCP] set_logging_level failed: {e!r}")
 
                         try:
                             reg_args = self._registration_args()
                             reg_result = await client.call_tool(
-                                "blender_register_client", reg_args
+                                "blender_register_client", reg_args,
+                                timeout=REQUEST_TIMEOUT_S,
                             )
                             self.connected = True
                             self.ever_connected = True
@@ -538,6 +609,7 @@ class BlenderMCPClient:
                             self.next_retry_at = None
                             self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
+                            _request_ui_redraw()
                             # Server-advertised update hint. Failures here are
                             # never fatal — a missing envelope just means the
                             # server predates the version-hint field.
@@ -573,7 +645,7 @@ class BlenderMCPClient:
                         # reconnect path.
                         import time as _time
                         last_heartbeat = _time.monotonic()
-                        HEARTBEAT_INTERVAL = 30.0
+                        HEARTBEAT_INTERVAL = HEARTBEAT_INTERVAL_S
                         # The server evicts Blender clients silent for an
                         # hour, and touch() on an evicted uuid is a no-op,
                         # so a client whose transport survived a long stall
@@ -594,7 +666,15 @@ class BlenderMCPClient:
                             now = _time.monotonic()
                             if now - last_heartbeat >= HEARTBEAT_INTERVAL:
                                 try:
-                                    await client.ping()
+                                    try:
+                                        await asyncio.wait_for(
+                                            client.ping(), HEARTBEAT_TIMEOUT_S
+                                        )
+                                    except asyncio.TimeoutError:
+                                        raise ConnectionError(
+                                            f"heartbeat timed out after "
+                                            f"{HEARTBEAT_TIMEOUT_S:g}s"
+                                        ) from None
                                     last_heartbeat = now
                                     if now - last_reregister >= REREGISTER_INTERVAL:
                                         last_reregister = now
@@ -645,11 +725,16 @@ class BlenderMCPClient:
                                 await client.call_tool(
                                     "blender_unregister_client",
                                     {"client_uuid": self.client_uuid},
+                                    timeout=CLOSE_TIMEOUT_S,
                                 )
                             except Exception as e:
-                                print(f"[BlenderMCP] unregister_client failed: {e}")
+                                print(f"[BlenderMCP] unregister_client failed: {e!r}")
+                    finally:
+                        await self._close_client(client)
                 except Exception as e:
-                    self.last_error = f"Connection failed: {e}"
+                    # Some transport errors stringify to "" (TimeoutError,
+                    # anyio's ClosedResourceError); fall back to the type.
+                    self.last_error = f"Connection failed: {str(e) or type(e).__name__}"
                     print(f"[BlenderMCP] {self.last_error}")
 
                     # 401 paths split into three cases:
@@ -705,8 +790,11 @@ class BlenderMCPClient:
                         self.running = False
                         return
                 finally:
+                    was_connected = self.connected
                     self.connected = False
                     self.client = None
+                    if was_connected:
+                        _request_ui_redraw()
 
                 if not self.running:
                     break
@@ -723,13 +811,19 @@ class BlenderMCPClient:
                         f"[BlenderMCP] Reconnect attempt {self.reconnect_attempt} in "
                         f"{backoff:.0f}s"
                     )
+                    _request_ui_redraw()
                     sleep_remaining = backoff
                     # Sleep in 0.5s chunks so stop() takes effect promptly
                     # without making the user wait for the full backoff.
+                    # Redraw each second so the panel countdown moves.
+                    ticks = 0
                     while sleep_remaining > 0 and self.running:
                         chunk = min(0.5, sleep_remaining)
                         await asyncio.sleep(chunk)
                         sleep_remaining -= chunk
+                        ticks += 1
+                        if ticks % 2 == 0:
+                            _request_ui_redraw()
                     # Sleep is over; the loop iterates and either succeeds
                     # (clearing next_retry_at above) or lands back here.
                     self.next_retry_at = None
