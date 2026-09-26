@@ -94,6 +94,32 @@ async def mark_running(s: AsyncSession, job_id: str) -> BusJob | None:
     return row
 
 
+PROGRESS_MESSAGE_CAP = 500
+
+
+async def set_progress(
+    s: AsyncSession,
+    job_id: str,
+    fraction: float | None,
+    message: str | None = None,
+) -> BusJob | None:
+    """Record the latest progress report. Implies running; ignored once terminal."""
+    row = await s.get(BusJob, job_id)
+    if row is None or row.status in JOB_TERMINAL:
+        return row
+    now = utcnow()
+    if row.status == "queued":
+        row.status = "running"
+        row.started_at = now
+    if fraction is not None:
+        row.progress = max(0.0, min(1.0, float(fraction)))
+    if message is not None:
+        row.progress_message = str(message)[:PROGRESS_MESSAGE_CAP]
+    row.progress_at = now
+    await s.commit()
+    return row
+
+
 async def finish_job(
     s: AsyncSession,
     job_id: str,
@@ -160,6 +186,12 @@ def to_dict(row: BusJob, include_output: bool = True) -> dict:
         "finished_at": _iso(row.finished_at),
         "expires_at": _iso(row.expires_at),
     }
+    if row.progress is not None or row.progress_message:
+        d["progress"] = {
+            "fraction": row.progress,
+            "message": row.progress_message or "",
+            "updated_at": _iso(row.progress_at),
+        }
     if include_output:
         d["result"] = row.result
         d["error"] = row.error or ""

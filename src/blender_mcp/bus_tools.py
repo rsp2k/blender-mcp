@@ -159,6 +159,8 @@ class BlenderBusComponent(MCPMixin):
         hostname: Optional[str] = None,
         blend_file: Optional[str] = None,
         addon_version: Optional[str] = None,
+        role: Optional[str] = None,
+        parent_uuid: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Join the caller's user bus. Returns JSON {status, client}.
@@ -174,6 +176,9 @@ class BlenderBusComponent(MCPMixin):
                 label is preserved; if omitted on first registration,
                 the client appears with just its uuid.
             is_persistent, capabilities, group_id: as before.
+            role: ``"interactive"`` (a user's Blender) or ``"worker"`` (a
+                headless Blender spawned by one); ``parent_uuid`` names the
+                spawner. Workers are skipped by implicit target selection.
 
         Gated to ``addon`` role (phase H): only the BlenderMCP addon should
         register as a bus participant. LLM clients drive the addon via
@@ -199,6 +204,8 @@ class BlenderBusComponent(MCPMixin):
             hostname=hostname,
             blend_file=blend_file,
             addon_version=addon_version,
+            role=role,
+            parent_uuid=parent_uuid,
         )
         registered = resolved["bus"].register(info)
         response: dict[str, Any] = {
@@ -313,9 +320,14 @@ class BlenderBusComponent(MCPMixin):
         status: str,
         result: str = "",
         error: str = "",
+        progress: Optional[float] = None,
+        progress_message: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Client -> server reply. Routed back to the originator via the bus.
+
+        ``progress`` (0..1) and ``progress_message`` ride on a ``running``
+        update from report_progress() in job code.
 
         Bus is inferred from ``_pending_jobs[job_id]`` (which holds the
         bus_id the original send_message used). If no entry exists, falls
@@ -331,6 +343,7 @@ class BlenderBusComponent(MCPMixin):
         from . import jobs
         tracked = await jobs.handle_update(
             job_id, status, result, error, session=_session_from_ctx(ctx),
+            progress=progress, progress_message=progress_message,
         )
         if tracked is not None:
             return json.dumps(tracked)
@@ -398,6 +411,10 @@ class BlenderBusComponent(MCPMixin):
         Dispatch tools accept ``target_uuid="latest"`` (newest registered
         live Blender) or ``target_uuid="pid:<n>"`` in place of a uuid.
 
+        Background workers (``role="worker"``, see blender_spawn_worker)
+        carry ``parent_uuid``; ``orphaned: true`` means their parent is
+        gone and they are about to exit on their own.
+
         ``bus_id`` defaults to the caller's personal bus. Returns
         ``not_a_member`` if the caller isn't a member of the bus.
         """
@@ -417,7 +434,10 @@ class BlenderBusComponent(MCPMixin):
             out = []
             for c in clients:
                 if include_stale or not c.is_stale():
-                    out.append(c.to_dict())
+                    d = c.to_dict()
+                    if bus.is_orphaned(c):
+                        d["orphaned"] = True
+                    out.append(d)
                 else:
                     hidden += 1
             return out

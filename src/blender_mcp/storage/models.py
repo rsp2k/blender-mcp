@@ -23,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     JSON,
     ForeignKey,
     Index,
@@ -411,6 +412,10 @@ class BusJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Latest report_progress() from the job's code: 0..1 plus a short note.
+    progress: Mapped[float | None] = mapped_column(Float)
+    progress_message: Mapped[str | None] = mapped_column(String(500))
+    progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_bus_job_status_created", "status", "created_at"),
