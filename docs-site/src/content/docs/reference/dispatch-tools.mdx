@@ -26,7 +26,7 @@ Every dispatch tool returns a JSON string with this shape:
 
 ```json
 {
-  "status": "completed" | "failed" | "timeout" | "no_client" | "ambiguous_target" | "unknown_target",
+  "status": "completed" | "failed" | "queued" | "running" | "timeout" | "no_client" | "ambiguous_target" | "unknown_target",
   "command": "<command name>",
   "target_uuid": "<chosen client>",
   "job_id": "j-<12 hex>",
@@ -39,7 +39,8 @@ Every dispatch tool returns a JSON string with this shape:
 |---|---|
 | `completed` | Addon handler returned successfully; `result` holds its output |
 | `failed` | Addon handler raised; `error` holds the message |
-| `timeout` | `_timeout` elapsed without an addon reply |
+| `queued` / `running` | `_timeout` elapsed but the job is still waiting or still running in Blender. It keeps going and its result is kept; poll it with `job_id` (see [Long-running jobs](/how-to/long-running-jobs/)) |
+| `timeout` | `_timeout` elapsed without an addon reply and the job store was unavailable, so there is no `job_id` to follow |
 | `no_client` | No Blender peer on the user's bus could be targeted |
 | `ambiguous_target` | Multiple Blender peers, no `target_uuid` to disambiguate |
 | `no_live_client` | Several Blender peers are registered but none has heartbeated recently; `candidates` lists them |
