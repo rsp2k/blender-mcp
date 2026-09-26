@@ -75,13 +75,20 @@ PLATFORMS = [
 # who to offer the extension to.
 BLENDER_PLATFORMS = ["linux-x64", "linux-arm64", "windows-x64", "macos-x64", "macos-arm64"]
 
-# Python versions Blender ships across the 4.2+ range we support. 3.11 =
-# Blender 4.2 - 4.5 LTS. 3.14 = Blender 5.x (verified: install failure
-# from Blender 5.2 reported "This Python version (3.14) isn't compatible
-# with (3.11)"). One zip contains the union of wheels across every
-# (platform, python) tuple; Blender picks the subset matching the host's
-# tags at install time.
-PYTHON_VERSIONS = ["3.11", "3.14"]
+# Python versions Blender ships across the 4.2+ range we support:
+#   3.11 — Blender 4.2 through 4.5 LTS
+#   3.13 — Blender 5.2 (verified 2026-09-26 against Ubuntu 24.04 Blender
+#          5.2.2, which rejected a cp311/cp314-only build with "This
+#          Python version (3.13) isn't compatible with (3.14, 3.11)")
+#   3.14 — future-proof for Blender 5.x releases that bump Python; kept
+#          in the set because the wheels exist for our RUNTIME_DEPS and
+#          the cost of shipping them is a few hundred KB
+# One zip contains the union of wheels across every (platform, python)
+# tuple; Blender picks the subset matching the host's tags at install
+# time. An earlier version of this file listed only ["3.11", "3.14"]
+# after Blender 5.0-preview reported it wanted 3.14; that assumption
+# went stale when the shipped 5.2 LTS settled on 3.13 instead.
+PYTHON_VERSIONS = ["3.11", "3.13", "3.14"]
 
 
 def _read_addon_version() -> str:
