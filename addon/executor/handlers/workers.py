@@ -1,6 +1,6 @@
-"""Background worker commands: spawn / stop / offer_reload / worker_exit.
+"""Background worker commands: spawn / stop / offer_reload / offer_merge / worker_exit.
 
-spawn_worker, stop_worker and offer_reload run in the user's GUI Blender;
+spawn_worker, stop_worker, offer_reload and offer_merge run in the user's GUI Blender;
 worker_exit runs inside a worker. Each refuses to run on the wrong side,
 so a worker can't spawn workers of its own.
 """
@@ -218,6 +218,37 @@ class WorkerHandlersMixin:
             from ...client.bus_client import _request_ui_redraw
             _request_ui_redraw()
         return {"offered": True, "path": str(p), "unsaved_changes": bool(bpy.data.is_dirty)}
+
+    @command("offer_merge")
+    def offer_merge(self, path: str, collections: list, message: str = "", mode: str = "replace"):
+        """Show a banner offering to merge ``collections`` from ``path`` into
+        this scene. Never merges on its own; the user clicks Merge or Dismiss."""
+        from ...worker_merge import MODES
+        _require_gui("offer_merge")
+        p = Path(path)
+        if p.suffix.lower() != ".blend":
+            raise ValueError("path must be a .blend file")
+        if not p.is_file():
+            raise FileNotFoundError(f"{path} doesn't exist on this machine")
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}")
+        names = [str(n) for n in (collections or []) if str(n)]
+        if not names:
+            raise ValueError("collections must name at least one collection")
+        state._pending_merge = {"path": str(p), "collections": names, "mode": mode,
+                                "message": message or "", "offered_at": time.time()}
+        with contextlib.suppress(Exception):  # the redraw is cosmetic
+            from ...client.bus_client import _request_ui_redraw
+            _request_ui_redraw()
+        live = [n for n in names if bpy.data.collections.get(n) is not None]
+        return {"offered": True, "path": str(p), "collections": names, "mode": mode,
+                "present_in_scene": live}
+
+    @command("get_merge_result")
+    def get_merge_result(self):
+        """The pending merge offer (if not yet answered) and the last merge's report."""
+        _require_gui("get_merge_result")
+        return {"pending": state._pending_merge, "last_result": state._last_merge_result}
 
     @command("worker_exit")
     def worker_exit(self):

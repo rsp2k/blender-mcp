@@ -38,6 +38,10 @@ _workers: dict = {}
 _worker_stop_requested: bool = False
 # Pending "background result ready" offer: {path, message, offered_at}.
 _pending_reload: Optional[dict] = None
+# Pending per-collection merge offer: {path, collections, mode, message,
+# offered_at}; and the report of the last merge (see addon.worker_merge).
+_pending_merge: Optional[dict] = None
+_last_merge_result: Optional[dict] = None
 # report_progress callable for the job currently executing on the main
 # thread (set by the drainer around each job), or None.
 _current_progress = None

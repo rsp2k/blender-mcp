@@ -94,6 +94,23 @@ def _draw_pending_reload(layout) -> None:
     row.operator("blendermcp.dismiss_worker_result", text="Dismiss", icon='X')
 
 
+def _draw_pending_merge(layout) -> None:
+    """Consent banner for merging collections from a background result."""
+    from ..worker_merge import merge_banner_lines
+    lines = merge_banner_lines(state._pending_merge)
+    if not lines:
+        return
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text=lines[0][:80], icon='OUTLINER_COLLECTION')
+    for line in lines[1:]:
+        icon = 'INFO' if line.startswith("These collections") else 'NONE'
+        col.label(text=line[:80], icon=icon)
+    row = col.row(align=True)
+    row.operator("blendermcp.merge_worker_result", text="Merge", icon='CHECKMARK')
+    row.operator("blendermcp.dismiss_worker_merge", text="Dismiss", icon='X')
+
+
 def _draw_active_lock_header(layout) -> None:
     """Header + Take-back for an active control lock. Countdown auto-updates."""
     if state._lock_expires_at is None:
@@ -176,6 +193,7 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         # the control-lock request — both are consent prompts.
         _draw_pending_extension_install(layout)
         _draw_pending_reload(layout)
+        _draw_pending_merge(layout)
 
         # Version-mismatch banner — no-op unless the server told us we're
         # behind on the last register_client. Drawn before login so users

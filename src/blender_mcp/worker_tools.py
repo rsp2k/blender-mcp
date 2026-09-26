@@ -9,6 +9,8 @@ the user's viewport stays responsive. The caller orchestrates:
     blender_submit(..., target_uuid=worker_uuid) -> job_id
     blender_job_status(job_id, wait_seconds=50)  (report_progress shows up here)
     blender_offer_reload(path=...)               -> banner in the GUI Blender
+      or blender_offer_merge(path=..., collections=[...])  (keeps other edits)
+    blender_get_merge_result()                   -> what the merge changed
     blender_stop_worker(worker_uuid)
 
 Workers are never picked implicitly; target them by uuid. A worker exits
@@ -245,6 +247,86 @@ class BlenderWorkerComponent(MCPMixin):
         return await _dispatch(bus, bus_id_str, "offer_reload",
                                {"path": path, "message": message or ""},
                                pick["uuid"], TIMEOUT_FAST, caller_sub=user_id)
+
+    @mcp_tool()
+    @require_role("llm-client")
+    async def offer_merge(
+        self,
+        path: str,
+        collections: list[str],
+        message: str | None = None,
+        mode: str = "replace",
+        target_uuid: str | None = None,
+        bus_id: str | None = None,
+        ctx: Context = None,
+    ) -> str:
+        """Offer to merge named collections from a background result into the live scene.
+
+        Unlike blender_offer_reload, which replaces the whole file, this
+        brings in only ``collections`` from ``path`` so edits the user made
+        elsewhere survive. mode="replace" swaps each one for the live
+        collection of the same name, in the same place in the hierarchy;
+        mode="add" brings them in alongside. The GUI Blender shows a Merge /
+        Dismiss banner and nothing changes until the user clicks Merge.
+        Check the outcome with blender_get_merge_result.
+        """
+        from .dispatch_component import TIMEOUT_FAST, _dispatch
+
+        if mode not in ("replace", "add"):
+            return _err("bad_mode", hint='mode must be "replace" or "add"')
+        if not collections:
+            return _err("no_collections", hint="Name at least one collection to merge.")
+        target = await self._gui_target(ctx, target_uuid, bus_id, "offer_merge")
+        if isinstance(target, str):
+            return target
+        bus, bus_id_str, uuid, user_id = target
+        return await _dispatch(bus, bus_id_str, "offer_merge",
+                               {"path": path, "collections": list(collections),
+                                "message": message or "", "mode": mode},
+                               uuid, TIMEOUT_FAST, caller_sub=user_id)
+
+    @mcp_tool()
+    @require_role("llm-client")
+    async def get_merge_result(
+        self,
+        target_uuid: str | None = None,
+        bus_id: str | None = None,
+        ctx: Context = None,
+    ) -> str:
+        """The GUI Blender's pending merge offer and the report of its last merge.
+
+        After blender_offer_merge, ``pending`` stays set until the user
+        answers. ``last_result`` then lists what was replaced, added or
+        skipped (with object counts), or ``dismissed: true``.
+        """
+        from .dispatch_component import TIMEOUT_FAST, _dispatch
+
+        target = await self._gui_target(ctx, target_uuid, bus_id, "get_merge_result")
+        if isinstance(target, str):
+            return target
+        bus, bus_id_str, uuid, user_id = target
+        return await _dispatch(bus, bus_id_str, "get_merge_result", {},
+                               uuid, TIMEOUT_FAST, caller_sub=user_id)
+
+    async def _gui_target(self, ctx, target_uuid, bus_id, command):
+        """Resolve the user's GUI Blender, or a JSON error string."""
+        from .dispatch_component import _pick_blender_target
+
+        user_id = _resolve_user_id(ctx)
+        if not user_id:
+            return _err("unauthenticated")
+        resolved = await resolve_bus(user_id, bus_id)
+        if not resolved["ok"]:
+            return json.dumps(resolved)
+        bus, bus_id_str = resolved["bus"], str(resolved["bus_id"])
+        pick = _pick_blender_target(bus, target_uuid)
+        if not pick["ok"]:
+            return json.dumps(pick | {"ok": False, "command": command})
+        target = bus.get(pick["uuid"])
+        if target is not None and target.is_worker:
+            return _err("target_is_worker", target_uuid=target.uuid,
+                        hint="Send this to the user's Blender (the worker's parent_uuid).")
+        return bus, bus_id_str, pick["uuid"], user_id
 
 
 async def _worker_busy(bus_id_str: str, worker_uuid: str) -> bool:
