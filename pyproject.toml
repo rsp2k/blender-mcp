@@ -80,7 +80,18 @@ package-dir = {"" = "src"}
 [dependency-groups]
 dev = [
     "fake-bpy-module-latest>=20260501",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "aiosqlite>=0.22.1",
+    "ruff>=0.16.9",
 ]
+
+[tool.pytest.ini_options]
+# The test_*.py files at the repo root are legacy manual scripts, not tests.
+testpaths = ["tests"]
+# The addon package lives at the repo root, outside the src/ layout.
+pythonpath = ["."]
+asyncio_mode = "auto"
 
 [project.urls]
 "Homepage" = "https://github.com/yourusername/blender-mcp"
