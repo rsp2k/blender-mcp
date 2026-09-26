@@ -349,6 +349,98 @@ Download + import by UID. Zip-slip protected.
 
 ---
 
+## Assembly analysis and keyframes (5, ungated)
+
+For physical assemblies and keyframed configurations, where bounding boxes overlap far more often than parts actually intersect, and where Blender 5.x removed `action.fcurves`. Every tool evaluates the scene as shown (modifiers, animation), and any `frame` argument puts the scene back on its original frame afterwards.
+
+### `blender_check_interference`
+
+```python
+blender_check_interference(
+    objects: list[str] | str | None = None,   # None = visible geometry, "all" includes hidden
+    frame: int | None = None,
+    frames: list[int] | None = None,          # sweep up to 50 frames
+    ignore_pairs: list[list[str]] | None = None,
+    include_hidden: bool = False,
+    tolerance: float = 0.0,
+    check_containment: bool = True,
+    sample_points: int = 3,
+    target_uuid: str | None = None,
+    _timeout: float = 60,
+) -> str
+```
+
+Tests every pair whose world bounds overlap for real triangle intersection on evaluated, world-space meshes. Returns `intersecting` pairs with a `triangle_pairs` count and sample points, `contained` pairs (a part entirely inside another crosses no triangles, so it's found by an inside test that needs closed meshes with outward normals), and `bbox_overlap_pairs` so you can see how many box overlaps were false alarms. Faces that only touch coplanar don't count as intersecting; raise `tolerance` (scene units) to catch near or touching contact. Use `ignore_pairs` for intended contact such as snap fits. Up to 300 objects per call; a long sweep comes back as a job to follow with `blender_job_status`.
+
+### `blender_world_bounds`
+
+```python
+blender_world_bounds(
+    objects: list[str] | str | None = None,
+    frame: int | None = None,
+    include_hidden: bool = False,
+    exact: bool = False,
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+World-space `min`, `max`, `size` and `center` per object, plus their `union`. The default transforms the evaluated local bound box, which never under-reports but can over-report for rotated parts; `exact=True` uses evaluated vertices for tight bounds.
+
+### `blender_get_keyframes`
+
+```python
+blender_get_keyframes(object: str, data_path: str | None = None, owner: str = "object",
+                      target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Channels of the object's assigned action with each key's `frame`, `value` and `interpolation`. Reads Blender 5.x slotted Actions through the assigned slot's channelbag and falls back to legacy actions; `api` in the result says which. `owner` is `"object"`, `"data"` (a light's energy, a camera's lens) or `"shape_keys"`.
+
+### `blender_insert_keyframe`
+
+```python
+blender_insert_keyframe(
+    object: str,
+    data_path: str,
+    frame: float,
+    value: float | list[float] | bool | str | None = None,
+    index: int = -1,
+    overwrite: bool = False,
+    interpolation: str | None = None,
+    owner: str = "object",
+    target_uuid: str | None = None,
+    _timeout: float = 30,
+) -> str
+```
+
+Sets the frame, then the value, then inserts the key. That order matters: setting a value and then changing frame re-evaluates the animation and silently discards the value. An existing key on the same channel and frame is **never replaced** unless `overwrite=True`, and replaced values come back in `replaced`, so an authored pose can't be destroyed by accident. Omit `value` to key the property's current value.
+
+### `blender_set_interpolation`
+
+```python
+blender_set_interpolation(object: str, interpolation: str, data_path: str | None = None,
+                          frames: list[float] | None = None, owner: str = "object",
+                          target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Sets `CONSTANT`, `LINEAR`, `BEZIER` or any other Blender interpolation on the object's keys, optionally for one property and/or specific frames.
+
+---
+
+## Job-pump health
+
+The addon reports its job queue about every 10 seconds from its network thread, so a report still arrives while Blender's main thread is busy. `blender_list_available_clients` shows it as `health` (`queue_depth`, `active_jobs` with `running_seconds`, `drain_timer_registered`, `last_drain_seconds_ago`, `reported_seconds_ago`), and a dispatch that times out or comes back `queued` includes it as `target_health`, with a hint that tells the three usual causes apart: Blender busy with a long job, a stalled job pump, or a dispatch that hasn't arrived yet.
+
+### `blender_reset_pump`
+
+```python
+blender_reset_pump(target_uuid: str | None = None, bus_id: str | None = None) -> str
+```
+
+Restarts the addon's job pump over the bus, for the "connected, jobs queued, nothing running" stall that used to need a click on Disconnect and Connect in the sidebar. The request travels with the addon's next check-in (up to about 10 seconds) and runs on its network thread, so it works even when no dispatched command can. It can't help when Blender's main thread is busy with a long job; `health` in the reply shows which case you're in.
+
+---
+
 ## Gates: how Tier-3 disablement works
 
 <Aside type="caution">
