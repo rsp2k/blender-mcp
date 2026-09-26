@@ -97,16 +97,18 @@ class BlenderJobComponent(MCPMixin):
         on it until status is completed, failed, cancelled or lost, then
         read the output with blender_job_result.
         """
-        _user, row, error = await _authorized_job(ctx, job_id)
-        if error:
-            return error
-        if not jobs.is_terminal(row.status) and wait_seconds > 0:
-            before = row.status
-            if await jobs.wait_for_change(job_id, wait_seconds):
+        # Subscribe before reading so an update between the read and the wait
+        # wakes us instead of costing the whole wait.
+        ev = jobs.subscribe(job_id)
+        try:
+            _user, row, error = await _authorized_job(ctx, job_id)
+            if error:
+                return error
+            if (not jobs.is_terminal(row.status) and wait_seconds > 0
+                    and await jobs.wait_for_change(job_id, wait_seconds, ev=ev)):
                 row = await jobs.get(job_id) or row
-            if row.status == before and not jobs.is_terminal(row.status):
-                # A change may have landed just before we started waiting.
-                row = await jobs.get(job_id) or row
+        finally:
+            jobs.unsubscribe(job_id, ev)
         out = job_repo.to_dict(row, include_output=False)
         out["done"] = jobs.is_terminal(row.status)
         return json.dumps(out)

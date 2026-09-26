@@ -89,24 +89,39 @@ def _signal(job_id: str) -> None:
         ev.set()
 
 
-async def wait_for_change(job_id: str, timeout: float) -> bool:
-    """Wait until an update for ``job_id`` arrives or ``timeout`` passes."""
-    timeout = max(0.0, min(float(timeout), MAX_WAIT_S))
-    if timeout == 0:
-        return False
+def subscribe(job_id: str) -> asyncio.Event:
+    """Register interest in ``job_id`` updates. Subscribe BEFORE reading the
+    row, so an update landing between the read and the wait isn't missed."""
     ev = asyncio.Event()
     _waiters.setdefault(job_id, set()).add(ev)
+    return ev
+
+
+def unsubscribe(job_id: str, ev: asyncio.Event) -> None:
+    bucket = _waiters.get(job_id)
+    if bucket is not None:
+        bucket.discard(ev)
+        if not bucket:
+            _waiters.pop(job_id, None)
+
+
+async def wait_for_change(job_id: str, timeout: float, ev: asyncio.Event | None = None) -> bool:
+    """Wait until an update for ``job_id`` arrives or ``timeout`` passes.
+    With ``ev`` from subscribe(), an update since subscribing counts."""
+    timeout = max(0.0, min(float(timeout), MAX_WAIT_S))
+    if timeout == 0:
+        return bool(ev and ev.is_set())
+    owned = ev is None
+    if owned:
+        ev = subscribe(job_id)
     try:
         await asyncio.wait_for(ev.wait(), timeout)
         return True
     except TimeoutError:
         return False
     finally:
-        bucket = _waiters.get(job_id)
-        if bucket is not None:
-            bucket.discard(ev)
-            if not bucket:
-                _waiters.pop(job_id, None)
+        if owned:
+            unsubscribe(job_id, ev)
 
 
 # ---- persistence ---------------------------------------------------------
