@@ -30,6 +30,18 @@ _supervisor = None
 # addon.identity.StickyUUIDManager holding this process's identity lease.
 _identity = None
 
+# Background workers this GUI Blender spawned: worker uuid -> dict with
+# popen, pid, dir, snapshot, log, deadline, label (see executor handler
+# spawn_worker).
+_workers: dict = {}
+# Set inside a worker process when a stop arrives; run_worker_loop exits.
+_worker_stop_requested: bool = False
+# Pending "background result ready" offer: {path, message, offered_at}.
+_pending_reload: Optional[dict] = None
+# report_progress callable for the job currently executing on the main
+# thread (set by the drainer around each job), or None.
+_current_progress = None
+
 # Phase I7: cached list of buses the user is a member of (populated by
 # BLENDERMCP_OT_RefreshBuses, read by the sidebar panel to render the bus
 # picker dropdown). Each entry is the dict shape returned by the

@@ -1,0 +1,79 @@
+---
+title: "Run heavy work in a background worker"
+description: "Start a headless Blender on a copy of the user's scene, run heavy jobs there with progress while the viewport stays responsive, offer the result for reload, and stop the worker."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A job on the user's Blender holds its main thread, so a multi-minute rebuild freezes the viewport for as long as it runs. A **background worker** avoids that. It's a headless `blender -b` that the user's Blender starts on a saved copy of its scene. The worker joins the bus as its own client, heavy jobs go to it, and the user keeps working.
+
+## The sequence
+
+<Steps>
+
+1. **Spawn the worker.**
+
+   ```
+   blender_spawn_worker()
+   → {"status": "ok", "worker_uuid": "blender-worker-3f9a1c…", "pid": 48213,
+      "worker_dir": "/tmp/blender_mcp_workers/blender-worker-3f9a1c…",
+      "snapshot_path": ".../snapshot.blend", "expires_at": 1790461234}
+   ```
+
+   The user's Blender saves a copy of the current scene, unsaved changes included, into a private directory and starts the worker on it. The call returns once the worker has joined the bus. Pass `target_uuid` when more than one Blender is connected.
+
+2. **Send the heavy work to the worker.** Target it by uuid:
+
+   ```
+   blender_submit(command="execute_code",
+                  params={"code": "..."},
+                  target_uuid="blender-worker-3f9a1c…")
+   ```
+
+   Inside the code, call `report_progress(fraction, message)` as the work moves along:
+
+   ```python
+   for i, part in enumerate(parts):
+       rebuild(part)
+       report_progress((i + 1) / len(parts), f"boolean {i + 1} of {len(parts)}")
+   ```
+
+   Save the result inside the worker's directory, for example with `bpy.ops.wm.save_as_mainfile(filepath=..., copy=True)`, and print its path.
+
+3. **Follow the job.** `blender_job_status(job_id, wait_seconds=50)` returns when the job reports progress or finishes, with the latest report under `progress`:
+
+   ```json
+   {"status": "running", "progress": {"fraction": 0.4, "message": "boolean 3 of 7"}}
+   ```
+
+   Read the output with `blender_job_result(job_id)` when `done` is true.
+
+4. **Offer the result to the user.**
+
+   ```
+   blender_offer_reload(path=".../attic.blend", message="attic rebuild finished")
+   ```
+
+   The user's sidebar shows a **Background result ready** banner with **Reload** and **Dismiss**. Nothing is loaded until they click Reload. If they have unsaved changes, the banner warns that reloading discards them.
+
+5. **Stop the worker** with `blender_stop_worker(worker_uuid)` once you're done with it.
+
+</Steps>
+
+## How workers behave
+
+- **Never picked by accident.** Workers are reached only by uuid or `pid:`. Calls without a target, and `target_uuid="latest"`, still go to the user's Blender. `blender_list_available_clients` shows workers with `role: "worker"` and the `parent_uuid` that spawned them.
+- **Cancel works.** A worker is a separate process, so `blender_job_cancel` on a running worker job stops the worker. A running job on the user's own Blender still can't be interrupted.
+- **They clean up after themselves.** A worker exits when its parent Blender goes away, when it's stopped, or when its time runs out. Files in its directory (snapshot, results, log) stay on disk.
+- **One at a time by default.** The addon preference *Max workers* allows up to four.
+
+## Limits
+
+- **Memory roughly doubles** while a worker runs, since it holds a full copy of the scene. GPU renders on a worker compete with the user's viewport.
+- **At most two hours.** A worker uses the user's current access token and can't refresh it, so it also stops five minutes before that token expires. Spawning refreshes the token first when it has less than 30 minutes left.
+- **The snapshot is a point in time.** Edits the user makes after the spawn aren't in the worker's copy, which is why reloading is always the user's choice.
+- **Paths.** Relative texture paths are remapped when the copy is saved; absolute paths and packed data carry over. External caches with unusual paths may need checking.
+
+<Aside type="note">
+Workers load the user's installed addons, so scripts that depend on them work. The Blender MCP addon inside a worker never touches the user's stored login or preferences.
+</Aside>

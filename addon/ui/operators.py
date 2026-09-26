@@ -1016,3 +1016,58 @@ class BLENDERMCP_OT_AlwaysAllowExtensionInstall(bpy.types.Operator):
         )
         self.report({'INFO'}, "Installed + trust extended for future requests from this LLM + repo")
         return {'FINISHED'}
+
+
+# ---- Background worker result: consent-gated reload -----------------------
+
+def _reload_deferred(path: str):
+    """Timer callback: open the worker's result file after the operator has
+    returned, so nothing of ours is mid-execute while the file loads."""
+    try:
+        wm = bpy.context.window_manager
+        window = wm.windows[0] if wm and wm.windows else None
+        if window is not None:
+            with bpy.context.temp_override(window=window, screen=window.screen):
+                bpy.ops.wm.open_mainfile(filepath=path)
+        else:
+            bpy.ops.wm.open_mainfile(filepath=path)
+    except Exception as e:
+        print(f"[BlenderMCP] Could not open background result {path}: {e}")
+    return None
+
+
+class BLENDERMCP_OT_ReloadWorkerResult(bpy.types.Operator):
+    """Open the background worker's result file in this Blender."""
+
+    bl_idname = "blendermcp.reload_worker_result"
+    bl_label = "Reload background result"
+    bl_description = (
+        "Open the file a background worker produced. Unsaved changes in "
+        "this session are discarded"
+    )
+
+    def execute(self, context):
+        pending = state._pending_reload
+        if not pending:
+            return {'CANCELLED'}
+        path = pending.get("path", "")
+        state._pending_reload = None
+        import functools
+        bpy.app.timers.register(functools.partial(_reload_deferred, path), first_interval=0.1)
+        self.report({'INFO'}, "Opening background result")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DismissWorkerResult(bpy.types.Operator):
+    """Dismiss the background result offer without loading it."""
+
+    bl_idname = "blendermcp.dismiss_worker_result"
+    bl_label = "Dismiss background result"
+    bl_description = "Keep working in the current scene; the result file stays on disk"
+
+    def execute(self, context):
+        state._pending_reload = None
+        for area in getattr(context.screen, "areas", []):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        return {'FINISHED'}

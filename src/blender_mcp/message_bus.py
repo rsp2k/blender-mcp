@@ -42,6 +42,9 @@ CLIENT_STALE_SECONDS = _env_seconds("BLENDER_MCP_CLIENT_STALE_SECONDS", 180.0)
 # idle LLM would break reply routing to it.
 CLIENT_EVICT_SECONDS = _env_seconds("BLENDER_MCP_CLIENT_EVICT_SECONDS", 3600.0)
 
+ROLE_WORKER = "worker"
+ROLE_INTERACTIVE = "interactive"
+
 TARGET_LATEST = "latest"
 TARGET_PID_PREFIX = "pid:"
 
@@ -86,6 +89,14 @@ class ClientInfo:
     blend_file: Optional[str] = None
     # Reported by addons from 2026.926.7 on; None for older builds.
     addon_version: Optional[str] = None
+    # "interactive" for a user's Blender, "worker" for a headless Blender
+    # spawned by one (parent_uuid names the spawner). None = not reported.
+    role: Optional[str] = None
+    parent_uuid: Optional[str] = None
+
+    @property
+    def is_worker(self) -> bool:
+        return self.role == ROLE_WORKER
 
     def lock_is_active(self, now: Optional[float] = None) -> bool:
         """True iff a non-expired lock is held. Lazy-expiry: callers that
@@ -142,6 +153,10 @@ class ClientInfo:
             d["blend_file"] = self.blend_file
         if self.addon_version is not None:
             d["addon_version"] = self.addon_version
+        if self.role is not None:
+            d["role"] = self.role
+        if self.parent_uuid is not None:
+            d["parent_uuid"] = self.parent_uuid
         return d
 
 
@@ -206,6 +221,10 @@ class MessageBus:
                 existing.blend_file = client_info.blend_file
             if client_info.addon_version is not None:
                 existing.addon_version = client_info.addon_version
+            if client_info.role is not None:
+                existing.role = client_info.role
+            if client_info.parent_uuid is not None:
+                existing.parent_uuid = client_info.parent_uuid
             if client_info.session is not None:
                 # Session changed → re-index. Drop the old session's entry
                 # (whatever it was pointing to is stale) and add the new
@@ -264,12 +283,21 @@ class MessageBus:
             self.unregister(client_uuid)
         return dead
 
-    def blender_clients(self, include_stale: bool = False) -> list[ClientInfo]:
+    def blender_clients(self, include_stale: bool = False, include_workers: bool = True) -> list[ClientInfo]:
         now = time.time()
         return [
             c for c in self.all_clients()
-            if c.client_type == "blender" and (include_stale or not c.is_stale(now))
+            if c.client_type == "blender"
+            and (include_stale or not c.is_stale(now))
+            and (include_workers or not c.is_worker)
         ]
+
+    def workers_of(self, parent_uuid: str) -> list[ClientInfo]:
+        return [c for c in self.all_clients() if c.is_worker and c.parent_uuid == parent_uuid]
+
+    def is_orphaned(self, client: ClientInfo) -> bool:
+        """A worker whose parent is no longer registered on this bus."""
+        return client.is_worker and (client.parent_uuid is None or self.get(client.parent_uuid) is None)
 
     def resolve_target(self, spec: str) -> Optional[ClientInfo]:
         """Resolve a target spec to a client.
@@ -281,7 +309,12 @@ class MessageBus:
         Blender relaunch; pid is what callers tend to know.
         """
         if spec == TARGET_LATEST:
-            candidates = self.blender_clients() or self.blender_clients(include_stale=True)
+            # "latest" means the newest interactive Blender; workers are only
+            # reached by uuid or pid.
+            candidates = (
+                self.blender_clients(include_workers=False)
+                or self.blender_clients(include_stale=True, include_workers=False)
+            )
             return max(candidates, key=lambda c: c.connected_at, default=None)
         if spec.startswith(TARGET_PID_PREFIX):
             try:

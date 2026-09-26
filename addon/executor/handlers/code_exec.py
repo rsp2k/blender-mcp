@@ -96,6 +96,19 @@ def _strip_addon_frames(tb: str) -> str:
     return "".join(out)
 
 
+def _current_progress_reporter():
+    """report_progress for the job being executed, or a no-op outside one."""
+    from ... import state
+    reporter = getattr(state, "_current_progress", None)
+    if reporter is not None:
+        return reporter
+
+    def report_progress(fraction, message=""):
+        return False
+
+    return report_progress
+
+
 class CodeExecHandlersMixin:
     """`execute_code` command."""
 
@@ -107,7 +120,7 @@ class CodeExecHandlersMixin:
         # printed (even if it later crashed) in the result.
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
-        namespace = {"bpy": bpy}
+        namespace = {"bpy": bpy, "report_progress": _current_progress_reporter()}
 
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):

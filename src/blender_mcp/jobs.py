@@ -158,6 +158,8 @@ async def handle_update(
     result: str,
     error: str,
     session: Any,
+    progress: float | None = None,
+    progress_message: str | None = None,
 ) -> dict | None:
     """Persist an addon's job_update. Returns None when the job isn't a
     tracked dispatch job (caller falls back to the legacy routing path)."""
@@ -180,7 +182,10 @@ async def handle_update(
 
     if status == "running":
         async with _sessions() as s:
-            await job_repo.mark_running(s, job_id)
+            if progress is not None or progress_message is not None:
+                await job_repo.set_progress(s, job_id, progress, progress_message)
+            else:
+                await job_repo.mark_running(s, job_id)
         _signal(job_id)
         return {"status": "ok", "job_id": job_id, "recorded": "running"}
 

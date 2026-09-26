@@ -24,7 +24,7 @@ import bpy
 import mathutils
 
 from .. import state
-from .job_reporter import submit_job_update
+from .job_reporter import make_progress_reporter, submit_job_update
 
 if TYPE_CHECKING:
     from .bus_client import BlenderMCPClient
@@ -101,8 +101,11 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
     """Execute a dispatched script in Blender's main thread, report result."""
     client.active_jobs[job_id] = time.time()
     output = io.StringIO()
+    reporter = make_progress_reporter(client, job_id)
+    state._current_progress = reporter
 
     exec_globals = {
+        "report_progress": reporter,
         "bpy": bpy,
         "bmesh": bmesh,
         "mathutils": mathutils,
@@ -128,6 +131,7 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
         )
     finally:
         client.active_jobs.pop(job_id, None)
+        state._current_progress = None
 
 
 def execute_command(
@@ -152,6 +156,8 @@ def execute_command(
     """
     client.active_jobs[job_id] = time.time()
     output = io.StringIO()
+    # execute_code exposes this to the job's code as report_progress().
+    state._current_progress = make_progress_reporter(client, job_id)
 
     try:
         with redirect_stdout(output):
@@ -183,6 +189,7 @@ def execute_command(
         )
     finally:
         client.active_jobs.pop(job_id, None)
+        state._current_progress = None
 
 
 def _pre_authorized(prefs_uuids: str, requester_uuid: str) -> bool:

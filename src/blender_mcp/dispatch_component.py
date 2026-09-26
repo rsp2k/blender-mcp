@@ -101,9 +101,11 @@ def _pick_blender_target(bus, target_uuid: Optional[str]) -> dict:
             ),
         }
 
-    live = bus.blender_clients()
+    # Background workers are only reached by explicit target; they must
+    # never make the implicit pick ambiguous.
+    live = bus.blender_clients(include_workers=False)
     if not live:
-        stale = bus.blender_clients(include_stale=True)
+        stale = bus.blender_clients(include_stale=True, include_workers=False)
         if len(stale) == 1:
             # Only one candidate, just quiet (likely busy in a long op).
             return {"ok": True, "uuid": stale[0].uuid}

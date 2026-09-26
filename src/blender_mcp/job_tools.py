@@ -172,15 +172,30 @@ class BlenderJobComponent(MCPMixin):
         if jobs.is_terminal(row.status):
             return json.dumps({"status": "error", "error": "already_finished",
                                "job_id": job_id, "job_status": row.status})
+        resolved = await resolve_bus(user_id, row.bus_id)
+        bus = resolved["bus"] if resolved.get("ok") else None
+
         if row.status == "running":
+            target = bus.get(row.target_uuid) if bus is not None else None
+            if target is not None and target.is_worker:
+                # A worker is its own process, so a running job there can be
+                # stopped: the parent kills the worker.
+                from .worker_tools import stop_worker_process
+                stopped = await stop_worker_process(bus, row.bus_id, target, user_id,
+                                                    graceful=False)
+                if stopped.get("stopped"):
+                    await jobs.finish(job_id, "cancelled",
+                                      error="Cancelled by stopping its background worker.")
+                    return json.dumps({"status": "ok", "job_id": job_id,
+                                       "job_status": "cancelled", "worker_stopped": stopped})
+                return json.dumps({"status": "error", "error": "worker_stop_failed",
+                                   "job_id": job_id, "detail": stopped})
             return json.dumps({
                 "status": "error", "error": "job_running", "job_id": job_id,
                 "message": "The job is already running in Blender and can't be "
-                           "interrupted; it will finish on its own.",
+                           "interrupted; it will finish on its own. Jobs sent to a "
+                           "background worker (blender_spawn_worker) can be cancelled.",
             })
-
-        resolved = await resolve_bus(user_id, row.bus_id)
-        bus = resolved["bus"] if resolved.get("ok") else None
         if bus is None or bus.get(row.target_uuid) is None:
             await jobs.finish(job_id, "cancelled",
                               error="Cancelled while the target Blender was disconnected.")

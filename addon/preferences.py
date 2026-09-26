@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 
 if TYPE_CHECKING:
     pass
@@ -59,6 +59,11 @@ def persist_prefs() -> None:
     for the current session.
     """
     import threading
+
+    from .worker import is_worker_mode
+    if is_worker_mode():
+        # Workers share the user's config dir; they must never rewrite it.
+        return
 
     if threading.current_thread() is threading.main_thread():
         _persist_prefs_now()
@@ -297,6 +302,17 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         default=True,
         update=_on_auto_connect_changed,
     )
+    max_workers: IntProperty(
+        name="Max workers",
+        description=(
+            "How many headless background workers this Blender may run at "
+            "once. Each one loads a full copy of the scene, so memory use "
+            "grows with every worker"
+        ),
+        default=1,
+        min=1,
+        max=4,
+    )
     client_label: StringProperty(
         name="Client label",
         description=(
@@ -466,6 +482,7 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         # multiple Blenders are distinguishable. Empty = auto-derive at
         # connect-time (see get_client_label below).
         col.prop(self, "client_label")
+        col.prop(self, "max_workers")
 
         # --- Login / Logout ---
         col.separator()

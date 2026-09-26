@@ -99,6 +99,12 @@ def _on_blend_load_post(_dummy):
        its next tick (connects if Stay connected is on and logged in).
     """
     from . import connection, state
+    from .worker import is_worker_mode
+
+    if is_worker_mode():
+        # A worker's connection is driven by run_worker_loop, never by the
+        # supervisor (which would log in with the user's stored token).
+        return
 
     try:
         client = state._client
@@ -238,12 +244,18 @@ def register():
     # (once the initial scene has loaded) and keeps a client alive while
     # prefs.auto_connect is on and a token is stored.
     from . import connection
-    try:
-        connection.supervisor().install()
-    except Exception as e:
-        print(f"[BlenderMCP] Could not start connection supervisor: {e}")
-
-    print(f"[BlenderMCP] Addon v{__version__} registered")
+    from .worker import is_worker_mode
+    if is_worker_mode():
+        # Headless worker: worker_main.py connects with the parent's token
+        # and an ephemeral uuid. No supervisor, no stored token, no slot
+        # lease, no preference writes.
+        print(f"[BlenderMCP] Addon v{__version__} registered (background worker mode)")
+    else:
+        try:
+            connection.supervisor().install()
+        except Exception as e:
+            print(f"[BlenderMCP] Could not start connection supervisor: {e}")
+        print(f"[BlenderMCP] Addon v{__version__} registered")
     if not ensure_fastmcp(force=True):
         for line in fastmcp_problem_lines():
             print(f"[BlenderMCP] {line}")
@@ -263,6 +275,14 @@ def unregister():
     if state._supervisor is not None:
         state._supervisor.uninstall()
         state._supervisor = None
+
+    # Kill background workers this Blender spawned; they would otherwise
+    # outlive the addon until their parent-pid check noticed.
+    try:
+        from .executor.handlers.workers import stop_all_workers
+        stop_all_workers()
+    except Exception as e:
+        print(f"[BlenderMCP] Error stopping background workers: {e}")
 
     # Stop any running client; state owns the singletons since phase 6.
     if state._client is not None:
