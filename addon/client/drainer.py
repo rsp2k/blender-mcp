@@ -68,12 +68,15 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
         script = payload.get("script", "")
         if not script:
             return 0.0
+        submit_job_update(client, job_id, "running")
         execute_script(client, job_id, script)
     elif msg_type == "command_dispatch":
         command = payload.get("command", "")
         params = payload.get("params") or {}
         if not command:
             return 0.0
+        # Lets the server tell "waiting in the queue" from "Blender is on it".
+        submit_job_update(client, job_id, "running")
         execute_command(client, job_id, command, params)
     elif msg_type == "control_request":
         # Cooperative advisory lock. Auto-grants if the requester is

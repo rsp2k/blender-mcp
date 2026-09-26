@@ -65,6 +65,41 @@ async def handle_message(client: "BlenderMCPClient", message: Any) -> None:
 
 
 def enqueue_job(client: "BlenderMCPClient", priority: int, log_data: dict) -> None:
-    """Push a job onto the client's priority queue (thread-safe)."""
+    """Push a job onto the client's priority queue (thread-safe).
+
+    A ``job_cancel`` message is acted on here instead of being queued, so it
+    doesn't wait behind the very job it's trying to cancel.
+    """
+    payload = log_data.get("payload", log_data) if isinstance(log_data, dict) else {}
+    if isinstance(payload, dict) and payload.get("message_type") == "job_cancel":
+        target = log_data.get("target_uuid")
+        if not target or target == getattr(client, "client_uuid", None):
+            cancel_queued_job(client, payload.get("job_id"))
+        return
     with client.queue_lock:
         heapq.heappush(client.job_queue, (priority, time.time(), log_data))
+
+
+def cancel_queued_job(client: "BlenderMCPClient", job_id) -> bool:
+    """Remove a not-yet-started job from the queue and report it cancelled.
+
+    A job that's already running or finished is left alone: the drainer
+    has reported "running" for it, which is how the server learns the
+    cancel came too late.
+    """
+    if not job_id:
+        return False
+    with client.queue_lock:
+        kept = [
+            item for item in client.job_queue
+            if (item[2].get("payload", item[2]) or {}).get("job_id") != job_id
+        ]
+        removed = len(kept) != len(client.job_queue)
+        if removed:
+            client.job_queue[:] = kept
+            heapq.heapify(client.job_queue)
+    if removed:
+        from .job_reporter import submit_job_update
+        submit_job_update(client, job_id, "cancelled", error="Cancelled before it started.")
+        print(f"[BlenderMCP] Cancelled queued job {job_id}")
+    return removed

@@ -6,15 +6,67 @@ worker thread. Non-blocking: errors are logged when the future resolves.
 
 Server derives the caller identity from the JWT in the bearer header on
 the worker's persistent MCP session — the addon only sends four fields.
+
+Results are kept in an in-memory outbox when the connection is down (a
+server deploy, a network blip) and re-sent after the next registration,
+so a job that finishes while disconnected still reports. The server
+ignores repeats for jobs it has already recorded as finished.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .bus_client import BlenderMCPClient
+
+RESULT_CAP = 1_000_000
+OUTBOX_MAX = 200
+_MARKER = "\n[... truncated by BlenderMCP: {n} more characters]"
+
+
+def cap_text(text: str, cap: int = RESULT_CAP) -> str:
+    if not text or len(text) <= cap:
+        return text
+    return text[:cap] + _MARKER.format(n=len(text) - cap)
+
+
+def _outbox(client: "BlenderMCPClient") -> deque:
+    box = getattr(client, "job_outbox", None)
+    if box is None:
+        box = deque()
+        client.job_outbox = box
+    return box
+
+
+def _queue(client: "BlenderMCPClient", update: dict) -> None:
+    box = _outbox(client)
+    if len(box) >= OUTBOX_MAX:
+        dropped = box.popleft()
+        print(f"[BlenderMCP] Job outbox full; dropped update for {dropped['job_id']}")
+    box.append(update)
+
+
+def _can_send(client: "BlenderMCPClient") -> bool:
+    return bool(client.loop and client.client and client.loop.is_running()
+                and getattr(client, "connected", True))
+
+
+def _send(client: "BlenderMCPClient", update: dict) -> None:
+    coro = client.client.call_tool("blender_job_update", update)
+    future = asyncio.run_coroutine_threadsafe(coro, client.loop)
+
+    def _done(fut):
+        try:
+            fut.result(timeout=0)
+        except Exception as e:
+            print(f"[BlenderMCP] job_update for {update['job_id']} failed: {e}")
+            if update["status"] != "running":
+                _queue(client, update)
+
+    future.add_done_callback(_done)
 
 
 def submit_job_update(
@@ -24,26 +76,37 @@ def submit_job_update(
     result: str = "",
     error: str = "",
 ) -> None:
-    """Schedule a `blender_job_update` tool call on the worker loop."""
-    if not (client.loop and client.client and client.loop.is_running()):
-        print(f"[BlenderMCP] Cannot report job {job_id}: client not connected")
-        return
+    """Report a job's status; queue it for later if not connected.
 
-    coro = client.client.call_tool("blender_job_update", {
+    "running" updates are only useful live, so they're dropped rather
+    than queued when the connection is down.
+    """
+    update = {
         "job_id": job_id,
         "status": status,
-        "result": result,
-        "error": error,
-    })
-    future = asyncio.run_coroutine_threadsafe(coro, client.loop)
+        "result": cap_text(result),
+        "error": cap_text(error),
+    }
+    if not _can_send(client):
+        if status == "running":
+            return
+        _queue(client, update)
+        print(f"[BlenderMCP] Not connected; job {job_id} result queued ({status})")
+        return
+    _send(client, update)
 
-    def _log_err(fut):
-        try:
-            fut.result(timeout=0)
-        except Exception as e:
-            print(f"[BlenderMCP] job_update for {job_id} failed: {e}")
 
-    future.add_done_callback(_log_err)
+def flush_outbox(client: "BlenderMCPClient") -> int:
+    """Re-send queued job updates. Call after a successful registration."""
+    box = _outbox(client)
+    if not box or not _can_send(client):
+        return 0
+    pending = list(box)
+    box.clear()
+    for update in pending:
+        _send(client, update)
+    print(f"[BlenderMCP] Re-sent {len(pending)} queued job update(s)")
+    return len(pending)
 
 
 def submit_force_release_control(client: "BlenderMCPClient", target_uuid: str) -> None:
@@ -54,7 +117,7 @@ def submit_force_release_control(client: "BlenderMCPClient", target_uuid: str) -
     expiry. Same asyncio-marshal pattern as ``submit_job_update``.
     """
     if not (client.loop and client.client and client.loop.is_running()):
-        print(f"[BlenderMCP] Cannot force-release: client not connected")
+        print("[BlenderMCP] Cannot force-release: client not connected")
         return
 
     coro = client.client.call_tool("blender_force_release_control", {
