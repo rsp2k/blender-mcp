@@ -501,6 +501,10 @@ class BlenderMCPClient:
             reg_args["label"] = self.label
         if self.bus_id:
             reg_args["bus_id"] = self.bus_id
+        # The server sends the update hint only to clients that report a
+        # version, which keeps it away from builds whose Update now crashes.
+        from .. import _version
+        reg_args["addon_version"] = _version.__version__
         # Per-process disambiguation metadata surfaced on
         # list_available_clients. Optional: never block a register on it.
         try:

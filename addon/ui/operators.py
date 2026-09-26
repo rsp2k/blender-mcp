@@ -450,15 +450,45 @@ class BLENDERMCP_OT_ReconnectNow(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _install_update_deferred(repo_index: int, pkg_id: str):
+    """Timer callback that starts the install once the operator has returned.
+
+    package_install disables the addon being upgraded synchronously, before
+    it returns, which unregisters this module's classes. Called from inside
+    an operator's execute(), the next touch of ``self`` hit a freed class
+    and segfaulted Blender. From a timer nothing of ours is on the stack
+    except this function, which touches no addon objects after the call.
+    A window context is needed for the install to run as a modal
+    (non-blocking) operator with status-bar progress.
+    """
+    try:
+        wm = bpy.context.window_manager
+        window = wm.windows[0] if wm and wm.windows else None
+        if window is not None:
+            with bpy.context.temp_override(window=window, screen=window.screen):
+                bpy.ops.extensions.package_install(
+                    'INVOKE_DEFAULT', repo_index=repo_index, pkg_id=pkg_id,
+                    enable_on_install=True,
+                )
+        else:
+            bpy.ops.extensions.package_install(
+                'EXEC_DEFAULT', repo_index=repo_index, pkg_id=pkg_id,
+                enable_on_install=True,
+            )
+    except Exception as e:
+        print(f"[BlenderMCP] Update failed to start: {e}")
+    return None
+
+
 class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
     """Sync this addon's extension repo and install the newest version.
 
     Blender's package_install doesn't sync first outside the drag-and-drop
     path, so it would install whatever version the cached index knew about.
     The sync is run blocking (a small index.json fetch); the install is
-    invoked non-blocking so the download shows in Blender's status bar.
-    When the install finishes Blender disables and re-enables the addon,
-    and register() auto-reconnects from the persisted token.
+    started from a timer after this operator returns (see
+    _install_update_deferred for why). When the install finishes Blender
+    re-enables the addon and register() auto-reconnects from the saved token.
     """
 
     bl_idname = "blendermcp.install_update"
@@ -488,18 +518,12 @@ class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
             self.report({'ERROR'}, f"Could not refresh {repo.name}; see the Extensions panel")
             return {'CANCELLED'}
 
-        try:
-            bpy.ops.extensions.package_install(
-                'INVOKE_DEFAULT',
-                repo_index=repo_index,
-                pkg_id=EXTENSION_PKG_ID,
-                enable_on_install=True,
-            )
-        except Exception as e:
-            self.report({'ERROR'}, f"Update failed to start: {e}")
-            traceback.print_exc()
-            return {'CANCELLED'}
         self.report({'INFO'}, "Downloading Blender MCP update")
+        import functools
+        bpy.app.timers.register(
+            functools.partial(_install_update_deferred, repo_index, EXTENSION_PKG_ID),
+            first_interval=0.1,
+        )
         return {'FINISHED'}
 
 

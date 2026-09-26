@@ -158,6 +158,7 @@ class BlenderBusComponent(MCPMixin):
         pid: Optional[int] = None,
         hostname: Optional[str] = None,
         blend_file: Optional[str] = None,
+        addon_version: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Join the caller's user bus. Returns JSON {status, client}.
@@ -205,9 +206,13 @@ class BlenderBusComponent(MCPMixin):
             "client": registered.to_dict(),
         }
         # Version-hint envelope: an addon on an older _version.py than
-        # LATEST_ADDON_VERSION renders an "update available" banner. Absent
-        # field = "server doesn't know" (old-shape clients ignore it).
-        if LATEST_ADDON_VERSION:
+        # LATEST_ADDON_VERSION renders an "update available" banner. Only
+        # sent to clients that report addon_version: addons 2026.926.0-.6
+        # don't, and their banner's "Update now" segfaults Blender (the
+        # install unregisters the addon while its own operator is still
+        # running). Those installs still update through Blender's own
+        # Extensions updater, which calls from Blender's code, not ours.
+        if LATEST_ADDON_VERSION and addon_version:
             response["server"] = {
                 "latest_addon_version": LATEST_ADDON_VERSION,
                 "addon_download_url": ADDON_DOWNLOAD_URL,
