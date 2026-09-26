@@ -158,6 +158,11 @@ class BlenderMCPClient:
         self.queue_lock = threading.Lock()
         self.active_jobs: dict = {}
         self._timer_registered = False
+        # bpy.app.timers compares callables by identity, and every
+        # `self._drain_queue` access builds a fresh bound-method object,
+        # so is_registered(self._drain_queue) is always False. Hold one
+        # reference and use it for every register/is_registered/unregister.
+        self._drain_timer_fn = self._drain_queue
 
     # --- Lifecycle ----------------------------------------------------------
 
@@ -174,12 +179,27 @@ class BlenderMCPClient:
         self.thread = threading.Thread(target=self._thread_main, daemon=True)
         self.thread.start()
 
-        # Register the queue drain timer on Blender's main thread.
-        if not self._timer_registered:
-            bpy.app.timers.register(self._drain_queue, first_interval=0.1)
-            self._timer_registered = True
+        self.ensure_drain_timer()
 
         print(f"[BlenderMCP] Client starting: {self.client_uuid} -> {self.server_url}")
+
+    def ensure_drain_timer(self) -> bool:
+        """Register the queue drain timer if it isn't already. Returns True
+        if a registration happened.
+
+        persistent=True because Blender drops non-persistent timers on every
+        file load, which silently stopped job dispatch after File > Open or
+        a bus-driven wm.open_mainfile. bpy.app.timers.register is documented
+        thread-safe, so the heartbeat watchdog can call this from the worker.
+        """
+        if bpy.app.timers.is_registered(self._drain_timer_fn):
+            self._timer_registered = True
+            return False
+        bpy.app.timers.register(
+            self._drain_timer_fn, first_interval=0.1, persistent=True
+        )
+        self._timer_registered = True
+        return True
 
     def stop(self) -> None:
         """Signal worker to exit, then join."""
@@ -198,7 +218,14 @@ class BlenderMCPClient:
         self.thread = None
         self.loop = None
         self.client = None
-        self._timer_registered = False  # timer self-removes when running flips
+        # drain_queue also self-removes once running is False; unregistering
+        # here just makes a quick stop()/start() cycle deterministic.
+        try:
+            if bpy.app.timers.is_registered(self._drain_timer_fn):
+                bpy.app.timers.unregister(self._drain_timer_fn)
+        except Exception:
+            pass
+        self._timer_registered = False
         print(f"[BlenderMCP] Client stopped: {self.client_uuid}")
 
     # --- Delegated callbacks (called by Blender / FastMCP) -----------------
@@ -359,6 +386,73 @@ class BlenderMCPClient:
         from .drainer import drain_queue
         return drain_queue(self)
 
+    # --- Registration ------------------------------------------------------
+
+    def _registration_args(self, blend_file_if_empty: Optional[str] = None) -> dict:
+        """Build blender_register_client arguments.
+
+        ``blend_file_if_empty`` is what to send when bpy.data.filepath is
+        empty: None (omit, server keeps the old value) on initial connect,
+        "" on a metadata refresh so switching to an unsaved file clears it.
+        """
+        reg_args = {
+            "client_uuid": self.client_uuid,
+            "client_type": "blender",
+            "is_persistent": True,
+            "capabilities": [
+                "python_execution", "modeling", "rendering",
+                "scene_management", "asset_processing",
+            ],
+        }
+        # Server treats a missing label on re-registration as "keep it".
+        if self.label:
+            reg_args["label"] = self.label
+        if self.bus_id:
+            reg_args["bus_id"] = self.bus_id
+        # Per-process disambiguation metadata surfaced on
+        # list_available_clients. Optional: never block a register on it.
+        try:
+            import os as _os
+            import socket as _socket
+            reg_args["pid"] = _os.getpid()
+            reg_args["hostname"] = _socket.gethostname()
+            blend = getattr(bpy.data, "filepath", "") or blend_file_if_empty
+            if blend is not None:
+                reg_args["blend_file"] = blend
+        except Exception as meta_exc:
+            print(f"[BlenderMCP] Metadata build failed (non-fatal): {meta_exc}")
+        return reg_args
+
+    def refresh_registration(self) -> bool:
+        """Re-send registration metadata over the live connection.
+
+        Used after a .blend load so the server's ClientInfo.blend_file
+        follows the open file. The server updates a same-uuid registration
+        in place, so this replaces the old stop()/start() soft-reconnect,
+        which ran inside wm.open_mainfile (load_post fires synchronously
+        there) and tore down the loop before the drainer could send the
+        job reply for the very call that opened the file.
+
+        Must be called on the main thread (reads bpy.data). Returns False
+        if there is no live connection to send on.
+        """
+        loop, client = self.loop, self.client
+        if not (self.connected and loop and client and loop.is_running()):
+            return False
+        reg_args = self._registration_args(blend_file_if_empty="")
+        future = asyncio.run_coroutine_threadsafe(
+            client.call_tool("blender_register_client", reg_args), loop
+        )
+
+        def _log_err(fut):
+            try:
+                fut.result(timeout=0)
+            except Exception as e:
+                print(f"[BlenderMCP] Metadata refresh failed: {e}")
+
+        future.add_done_callback(_log_err)
+        return True
+
     # --- Worker thread / asyncio loop --------------------------------------
 
     def _thread_main(self) -> None:
@@ -426,40 +520,7 @@ class BlenderMCPClient:
                             print(f"[BlenderMCP] set_logging_level failed: {e}")
 
                         try:
-                            reg_args = {
-                                "client_uuid": self.client_uuid,
-                                "client_type": "blender",
-                                "is_persistent": True,
-                                "capabilities": [
-                                    "python_execution", "modeling", "rendering",
-                                    "scene_management", "asset_processing",
-                                ],
-                            }
-                            # Only send `label` if we have one — the server
-                            # treats None on re-registration as "keep the
-                            # existing label."
-                            if self.label:
-                                reg_args["label"] = self.label
-                            if self.bus_id:
-                                reg_args["bus_id"] = self.bus_id
-                            # Per-process disambiguation metadata: pid,
-                            # hostname, current .blend filepath. Server
-                            # exposes these on list_available_clients so
-                            # LLMs facing multiple concurrent Blenders
-                            # can filter/pick unambiguously (e.g., by
-                            # blend_file endswith "myscene.blend").
-                            try:
-                                import os as _os
-                                import socket as _socket
-                                reg_args["pid"] = _os.getpid()
-                                reg_args["hostname"] = _socket.gethostname()
-                                _blend = getattr(bpy.data, "filepath", "") or None
-                                if _blend:
-                                    reg_args["blend_file"] = _blend
-                            except Exception as _meta_exc:
-                                # Metadata is optional; a failure here
-                                # shouldn't block a working register.
-                                print(f"[BlenderMCP] Metadata build failed (non-fatal): {_meta_exc}")
+                            reg_args = self._registration_args()
                             reg_result = await client.call_tool(
                                 "blender_register_client", reg_args
                             )
@@ -525,11 +586,7 @@ class BlenderMCPClient:
                                     # — bpy.app.timers.register is documented
                                     # thread-safe.
                                     try:
-                                        if not bpy.app.timers.is_registered(self._drain_queue):
-                                            bpy.app.timers.register(
-                                                self._drain_queue, first_interval=0.1
-                                            )
-                                            self._timer_registered = True
+                                        if self.ensure_drain_timer():
                                             print(
                                                 "[BlenderMCP] Drainer timer was "
                                                 "not registered; re-registered "

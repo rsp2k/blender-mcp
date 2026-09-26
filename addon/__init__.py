@@ -144,29 +144,28 @@ def _on_blend_load_post(_dummy):
     """Persistent handler: fires on every .blend file open.
 
     Two responsibilities:
-    1. If the client is running, soft-reconnect so the fresh blend_file
-       lands in the server-side ClientInfo (LLMs see the file the user
-       is now editing).
+    1. If the client is running, re-send registration metadata over the
+       live connection so the server-side ClientInfo.blend_file follows
+       the file now open. Deliberately NOT a stop/start: load_post fires
+       synchronously inside wm.open_mainfile, so when a bus job opens a
+       file, tearing the client down here dropped that job's reply and
+       the caller timed out after 60 s even though the load took ~2 s.
     2. If we have credentials but no live client, this is the auto-
        reconnect entry point for "reopen Blender" (register()'s timer
        covers process startup; this handler covers File > Open cases
        inside a running Blender). Same _try_autoconnect logic.
     """
-    import bpy
-
     from . import state
 
     try:
         client = state._client
         if client is not None and getattr(client, "running", False):
-            # Soft reconnect: teardown + fresh start. Delegates via
-            # bpy.ops so the operator's error handling applies.
-            print("[BlenderMCP] .blend load detected — soft-reconnect to refresh metadata")
-            try:
-                bpy.ops.blendermcp.stop_server('EXEC_DEFAULT')
-                bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
-            except Exception as e:
-                print(f"[BlenderMCP] Soft-reconnect failed (non-fatal): {e}")
+            # Timer is persistent now; this only matters for a client
+            # started by an older addon build still in memory.
+            client.ensure_drain_timer()
+            if not client.refresh_registration():
+                print("[BlenderMCP] .blend loaded while not yet registered; "
+                      "metadata goes out with the pending register")
         else:
             _try_autoconnect()
     except Exception as e:
