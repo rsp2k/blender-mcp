@@ -1,8 +1,8 @@
 # Blender 4.2+ extension manifest.
 #
-# This is a TEMPLATE. scripts/build_extension.py substitutes the version
-# and wheels placeholders below at build time; never hand-edit those two
-# lines. Everything else is authored here.
+# This is a TEMPLATE. scripts/build_extension.py substitutes the version,
+# wheels and platforms placeholders below at build time; never hand-edit
+# those lines. Everything else is authored here.
 #
 # Coexists with bl_info in addon.py (legacy install path) for as long as we
 # support Blender 3.2 through 4.1. The two systems read different files, so
@@ -31,6 +31,9 @@ license = ["SPDX:MIT"]
 # Kept above the [permissions] section — TOML tables absorb every key
 # after their header, and Blender requires wheels at the top level.
 wheels = __WHEELS__
+
+# One archive per platform; the build fills in this archive's platform.
+platforms = __PLATFORMS__
 
 [permissions]
 # Shown verbatim in the extension installer's permission prompt so the
