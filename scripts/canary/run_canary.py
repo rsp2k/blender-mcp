@@ -1,0 +1,542 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fastmcp>=3.3.1,<4"]
+# ///
+"""GUI canary for the Blender MCP addon against a live containerized Blender.
+
+Replaces the manual rounds run by hand on 2026-09-26: install a build into a
+real GUI Blender, then check boot auto-connect, uuid stability across
+restart and container recreate, network-drop recovery, worker-death
+recovery, the one-click Update now path, and the token boundary. Every step
+prints PASS / FAIL / SKIP with evidence; the exit code is non-zero on any FAIL.
+
+The Blender is driven through the bus itself: blender_execute_code runs
+Python in the GUI Blender's main thread. Anything that disables or reloads
+the addon is scheduled from a bpy.app.timers callback defined in the
+executed snippet, never called inline, because an addon unregistering while
+its own job is on the stack segfaults Blender.
+
+Usage (token for the instance's logged-in user in BLENDER_MCP_TOKEN, or in
+<compose-dir>/.env.mcp):
+
+    uv run scripts/canary/run_canary.py                      # test what's installed
+    uv run scripts/canary/run_canary.py --zip dist/extensions/blender_mcp-X.zip
+    uv run scripts/canary/run_canary.py --network            # adds the iptables drop (sudo)
+    make canary / make canary-full
+
+Targets ~/claude/blender-docker (service blender-desktop) by default; override
+with --compose-dir/--service or CANARY_COMPOSE_DIR/CANARY_SERVICE. For a
+dedicated instance instead of the shared reference one:
+
+    blender-instance new <dir>/blender --name canary \\
+        --repos "blender_mcp=https://mcp.blender.bet/extensions/index.json" --up
+
+then log in once in that container's Firefox as the token's user.
+
+Only `docker compose restart`, `docker compose up -d --force-recreate` and
+`docker compose exec` are run in the compose directory; nothing there is
+edited or rebuilt.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+import zipfile
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+MCP_URL = os.environ.get("CANARY_MCP_URL", "https://mcp.blender.bet/")
+INDEX_URL = os.environ.get("CANARY_INDEX_URL", "https://mcp.blender.bet/extensions/index.json")
+PKG_MODULE = "bl_ext.blender_mcp.blender_mcp"
+MARK = "CANARY_JSON:"
+
+
+# ---------------------------------------------------------------- helpers
+
+def vtuple(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in v.split("."))
+
+
+def now_utc() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass
+class Result:
+    name: str
+    status: str  # PASS / FAIL / SKIP
+    detail: str
+    seconds: float
+
+
+@dataclass
+class Ctx:
+    compose_dir: Path
+    service: str
+    token: str
+    artifacts: Path
+    uuid: str | None = None
+    hostname: str | None = None
+    expected_version: str | None = None
+    results: list[Result] = field(default_factory=list)
+
+
+def compose(ctx: Ctx, *args: str, timeout: float = 600) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["docker", "compose", *args], cwd=ctx.compose_dir,
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+
+
+def container_name(ctx: Ctx) -> str:
+    out = compose(ctx, "ps", "-q", ctx.service).stdout.strip()
+    if not out:
+        raise RuntimeError(f"service {ctx.service} is not running in {ctx.compose_dir}")
+    return subprocess.run(
+        ["docker", "inspect", "-f", "{{.Name}}", out], capture_output=True, text=True, check=False
+    ).stdout.strip().lstrip("/")
+
+
+def container_logs(ctx: Ctx, since: str) -> str:
+    name = container_name(ctx)
+    r = subprocess.run(["docker", "logs", "--since", since, name], capture_output=True, text=True, check=False)
+    return r.stdout + r.stderr
+
+
+def container_hostname(ctx: Ctx) -> str:
+    return compose(ctx, "exec", "-T", ctx.service, "hostname").stdout.strip()
+
+
+def crash_file_stat(ctx: Ctx) -> str:
+    r = compose(ctx, "exec", "-T", ctx.service, "sh", "-c",
+                "stat -c '%s %Y' /tmp/blender.crash.txt 2>/dev/null || echo none")
+    return r.stdout.strip()
+
+
+# ------------------------------------------------------------- bus access
+
+async def call(ctx: Ctx, tool: str, args: dict | None = None, timeout: float = 60) -> Any:
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    transport = StreamableHttpTransport(MCP_URL, headers={"Authorization": f"Bearer {ctx.token}"})
+    async with Client(transport, timeout=timeout) as c:
+        r = await c.call_tool(tool, args or {}, raise_on_error=False)
+        text = r.content[0].text if r.content else json.dumps(r.data)
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return text
+
+
+async def clients(ctx: Ctx) -> list[dict]:
+    data = await call(ctx, "blender_list_available_clients", {"include_stale": True})
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key in ("persistent", "ephemeral", "clients"):
+        out.extend(c for c in data.get(key, []) or [] if isinstance(c, dict))
+    return [c for c in out if c.get("client_type", "blender") == "blender"]
+
+
+def is_live(c: dict) -> bool:
+    if c.get("stale"):
+        return False
+    ago = c.get("last_seen_seconds_ago")
+    return ago is None or ago < 90
+
+
+async def find_client(ctx: Ctx) -> dict | None:
+    live = [c for c in await clients(ctx) if is_live(c)]
+    if ctx.hostname:
+        by_host = [c for c in live if c.get("hostname") == ctx.hostname]
+        if by_host:
+            live = by_host
+    if ctx.uuid:
+        by_uuid = [c for c in live if c.get("uuid") == ctx.uuid]
+        if by_uuid:
+            return by_uuid[0]
+        return None
+    return max(live, key=lambda c: c.get("last_seen", 0) or 0) if live else None
+
+
+async def run_code(ctx: Ctx, code: str, timeout: float = 60) -> dict:
+    """Run code in the GUI Blender; the snippet prints MARK + json on one line."""
+    data = await call(ctx, "blender_execute_code",
+                      {"code": code, "target_uuid": ctx.uuid, "_timeout": timeout},
+                      timeout=timeout + 15)
+    if not isinstance(data, dict) or data.get("status") not in ("completed", "success", "ok"):
+        raise RuntimeError(f"execute_code failed: {str(data)[:300]}")
+
+    def strings(obj):
+        if isinstance(obj, str):
+            if obj.lstrip().startswith(("{", "[")):
+                try:
+                    yield from strings(json.loads(obj))
+                    return
+                except ValueError:
+                    pass
+            yield obj
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                yield from strings(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                yield from strings(v)
+
+    for text in strings(data.get("result")):
+        for line in reversed(text.splitlines()):
+            if line.startswith(MARK):
+                return json.loads(line[len(MARK):])
+    raise RuntimeError(f"no {MARK} in result: {str(data.get('result'))[:300]}")
+
+
+ADDON_STATE = f"""
+import sys, json, os
+def _proc_start():
+    try:
+        with open('/proc/stat') as f:
+            btime = next(int(l.split()[1]) for l in f if l.startswith('btime '))
+        with open('/proc/self/stat') as f:
+            ticks = int(f.read().rsplit(')', 1)[1].split()[19])
+        return btime + ticks / os.sysconf('SC_CLK_TCK')
+    except Exception:
+        return None
+m = sys.modules.get({PKG_MODULE!r})
+st = sys.modules.get({PKG_MODULE!r} + '.state')
+ver = sys.modules.get({PKG_MODULE!r} + '._version')
+c = getattr(st, '_client', None) if st else None
+print({MARK!r} + json.dumps({{
+    'version': getattr(ver, '__version__', None),
+    'client_id': id(c) if c is not None else None,
+    'uuid': getattr(c, 'client_uuid', None),
+    'running': bool(getattr(c, 'running', False)),
+    'connected': bool(getattr(c, 'connected', False)),
+    'proc_start': _proc_start(),
+}}))
+"""
+
+
+async def addon_state(ctx: Ctx, timeout: float = 60) -> dict:
+    return await run_code(ctx, ADDON_STATE, timeout=timeout)
+
+
+async def wait_for_client(ctx: Ctx, timeout: float, version: str | None = None,
+                          started_after: float = 0.0) -> dict | None:
+    """Poll until the expected client is live on the bus and answers a job.
+
+    ``started_after``: require the Blender process to have started after
+    this epoch time (proves a fresh process registered, since connected_at
+    survives re-registration). ``version``: require that addon version.
+    Returns the bus client dict merged with the in-process addon state.
+    """
+    deadline = time.monotonic() + timeout
+    last: Any = None
+    while time.monotonic() < deadline:
+        try:
+            c = await find_client(ctx)
+            if c:
+                saved, ctx.uuid = ctx.uuid, c["uuid"]
+                try:
+                    # Short: a job sent while Blender restarts waits the full
+                    # timeout, and the old registration still looks live.
+                    st = await addon_state(ctx, timeout=8)
+                finally:
+                    ctx.uuid = saved
+                merged = {**c, "addon": st}
+                last = merged
+                ok = st.get("connected") and st.get("uuid") == c["uuid"]
+                if started_after:
+                    ok = ok and (st.get("proc_start") or 0) >= started_after - 2
+                if version:
+                    ok = ok and st.get("version") == version
+                if ok:
+                    return merged
+        except Exception as e:  # server/bus hiccups while Blender restarts
+            last = {"error": str(e)[:200]}
+        await asyncio.sleep(3)
+    return {"_timeout_last_seen": last}
+
+
+# ------------------------------------------------------------------ steps
+
+async def step(ctx: Ctx, name: str, fn) -> None:
+    t0 = time.monotonic()
+    try:
+        status, detail = await fn()
+    except Exception as e:
+        status, detail = "FAIL", f"{type(e).__name__}: {e}"
+    r = Result(name, status, detail, time.monotonic() - t0)
+    ctx.results.append(r)
+    print(f"[{r.status:4}] {name:16} {r.seconds:6.1f}s  {detail}", flush=True)
+
+
+async def s_install(ctx: Ctx, zip_path: Path | None):
+    if zip_path is None:
+        return "SKIP", "no --zip; testing the installed build"
+    with zipfile.ZipFile(zip_path) as zf:
+        manifest = zf.read("blender_manifest.toml").decode()
+    ctx.expected_version = next(
+        line.split("=", 1)[1].strip().strip('"')
+        for line in manifest.splitlines() if line.strip().startswith("version")
+    )
+    projects = ctx.compose_dir / "projects"
+    rel = f"projects/{zip_path.name}"
+    ig = subprocess.run(["git", "-C", str(ctx.compose_dir), "check-ignore", "-q", rel], check=False)
+    if ig.returncode not in (0, 128):  # 128: not a git repo
+        return "FAIL", f"{rel} is not gitignored in {ctx.compose_dir}; refusing to copy"
+    dest = projects / zip_path.name
+    shutil.copy2(zip_path, dest)
+    try:
+        r = compose(ctx, "exec", "-T", ctx.service, "blender", "-b", "--command",
+                    "extension", "install-file", "-r", "blender_mcp", "--enable",
+                    f"/home/blender/projects/{zip_path.name}")
+        out = (r.stdout + r.stderr)[-400:]
+        if r.returncode != 0 or ("Installed" not in out and "Reinstalled" not in out):
+            return "FAIL", f"install-file rc={r.returncode}: {out.strip()}"
+    finally:
+        dest.unlink(missing_ok=True)
+    compose(ctx, "restart", ctx.service)
+    return "PASS", f"installed {ctx.expected_version} into repo slot blender_mcp, restarted"
+
+
+async def s_boot(ctx: Ctx):
+    t0 = time.time()
+    ctx.hostname = container_hostname(ctx)
+    c = await wait_for_client(ctx, 90, version=ctx.expected_version)
+    if "_timeout_last_seen" in c:
+        return "FAIL", f"no live client (hostname={ctx.hostname}) within 90s; last={c}"
+    ctx.uuid = c["uuid"]
+    st = await addon_state(ctx)
+    scene = await call(ctx, "blender_get_scene_info", {"target_uuid": ctx.uuid})
+    ok = isinstance(scene, dict) and scene.get("status") in ("completed", "success", "ok")
+    if not ok:
+        return "FAIL", f"dispatch failed: {str(scene)[:200]}"
+    return "PASS", (f"uuid={ctx.uuid} version={st.get('version')} host={ctx.hostname} "
+                    f"live after {time.time() - t0:.0f}s, get_scene_info ok")
+
+
+async def _identity_after(ctx: Ctx, action: list[str], label: str):
+    before = ctx.uuid
+    t_action = time.time()
+    r = compose(ctx, *action)
+    if r.returncode != 0:
+        return "FAIL", f"{' '.join(action)} rc={r.returncode}: {r.stderr[-200:]}"
+    ctx.hostname = container_hostname(ctx)
+    ctx.uuid = None  # accept whatever registers, then compare
+    c = await wait_for_client(ctx, 120, started_after=t_action)
+    ctx.uuid = before
+    if "_timeout_last_seen" in c:
+        return "FAIL", f"no re-registration within 120s after {label}; last={c}"
+    if c["uuid"] != before:
+        return "FAIL", f"uuid changed across {label}: {before} -> {c['uuid']}"
+    return "PASS", f"same uuid after {label}, re-registered in {time.time() - t_action:.0f}s"
+
+
+async def s_restart(ctx: Ctx):
+    return await _identity_after(ctx, ["restart", ctx.service], "restart")
+
+
+async def s_recreate(ctx: Ctx):
+    return await _identity_after(ctx, ["up", "-d", "--force-recreate", ctx.service], "recreate")
+
+
+async def s_network(ctx: Ctx, enabled: bool):
+    if not enabled:
+        return "SKIP", "pass --network to run (needs passwordless sudo)"
+    if subprocess.run(["sudo", "-n", "true"], capture_output=True, check=False).returncode != 0:
+        return "SKIP", "passwordless sudo unavailable"
+    ip = socket.gethostbyname(MCP_URL.split("//", 1)[1].split("/", 1)[0])
+    pid = subprocess.run(["docker", "inspect", "-f", "{{.State.Pid}}", container_name(ctx)],
+                         capture_output=True, text=True, check=False).stdout.strip()
+    rule = ["OUTPUT", "-d", ip, "-j", "DROP"]
+    nsenter = ["sudo", "-n", "nsenter", "-t", pid, "-n", "iptables"]
+    since = now_utc()
+    subprocess.run(nsenter + ["-A", *rule], check=True)
+    try:
+        deadline = time.monotonic() + 90
+        seen = False
+        while time.monotonic() < deadline and not seen:
+            await asyncio.sleep(5)
+            seen = "heartbeat timed out" in container_logs(ctx, since)
+    finally:
+        subprocess.run(nsenter + ["-D", *rule], check=False)
+    if not seen:
+        return "FAIL", f"no 'heartbeat timed out' within 90s of dropping {ip}"
+    t_restore = time.time()
+    restore_since = now_utc()
+    want = f"Registered as {ctx.uuid}"
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        await asyncio.sleep(3)
+        if want in container_logs(ctx, restore_since):
+            st = await addon_state(ctx)
+            if st.get("connected") and st.get("uuid") == ctx.uuid:
+                return "PASS", (f"heartbeat timeout detected, re-registered "
+                                f"{time.time() - t_restore:.0f}s after restoring {ip}")
+    return "FAIL", f"no '{want}' within 120s of restoring {ip}"
+
+
+KILL_WORKER = f"""
+import sys, json, bpy
+st = sys.modules[{PKG_MODULE!r} + '.state']
+old = st._client
+def _kill():
+    try:
+        old.running = False
+    except Exception as e:
+        print('kill failed', e)
+    return None
+bpy.app.timers.register(_kill, first_interval=0.5)
+print({MARK!r} + json.dumps({{'old_client_id': id(old)}}))
+"""
+
+
+async def s_worker_death(ctx: Ctx):
+    before = await run_code(ctx, KILL_WORKER)
+    t0 = time.time()
+    deadline = time.monotonic() + 90
+    st = {}
+    while time.monotonic() < deadline:
+        await asyncio.sleep(3)
+        try:
+            st = await addon_state(ctx)
+        except Exception:
+            continue
+        if st.get("client_id") and st["client_id"] != before["old_client_id"] and st.get("connected"):
+            break
+    else:
+        return "FAIL", f"supervisor did not replace the client within 90s; state={st}"
+    if st.get("uuid") != ctx.uuid:
+        return "FAIL", f"replacement client has a different uuid: {st.get('uuid')}"
+    scene = await call(ctx, "blender_get_scene_info", {"target_uuid": ctx.uuid})
+    if not (isinstance(scene, dict) and scene.get("status") in ("completed", "success", "ok")):
+        return "FAIL", f"dispatch after restart failed: {str(scene)[:200]}"
+    return "PASS", f"new client object, same uuid, connected in {time.time() - t0:.0f}s, dispatch ok"
+
+
+def published_version() -> str | None:
+    try:
+        with urllib.request.urlopen(INDEX_URL, timeout=15) as r:
+            data = json.load(r)
+        return next(e["version"] for e in data["data"] if e["id"] == "blender_mcp")
+    except Exception:
+        return None
+
+
+UPDATE_NOW = f"""
+import sys, json, bpy
+def _click():
+    try:
+        bpy.ops.blendermcp.install_update()
+    except Exception as e:
+        print('install_update failed', e)
+    return None
+bpy.app.timers.register(_click, first_interval=0.5)
+print({MARK!r} + json.dumps({{'scheduled': True}}))
+"""
+
+
+async def s_update_now(ctx: Ctx, target: str | None):
+    installed = (await addon_state(ctx)).get("version")
+    offered = target or published_version()
+    if not offered:
+        return "SKIP", "could not read the published version"
+    if not installed or vtuple(offered) <= vtuple(installed):
+        return "SKIP", f"no newer version to update to (installed {installed}, published {offered})"
+    crash_before = crash_file_stat(ctx)
+    t0 = time.time()
+    await run_code(ctx, UPDATE_NOW)
+    c = await wait_for_client(ctx, 240, version=offered)
+    if "_timeout_last_seen" in c:
+        return "FAIL", f"did not come back on {offered} within 240s; last={c}"
+    if crash_file_stat(ctx) != crash_before:
+        return "FAIL", "Blender crash file changed during the update"
+    if c.get("uuid") != ctx.uuid:
+        return "FAIL", f"uuid changed across update: {c.get('uuid')}"
+    return "PASS", f"{installed} -> {offered} in {time.time() - t0:.0f}s, same uuid, no crash"
+
+
+async def s_token_boundary(ctx: Ctx):
+    r = await call(ctx, "blender_create_access_token", {"name": "canary-should-be-refused"})
+    if isinstance(r, dict) and r.get("error") == "oauth_required":
+        return "PASS", "token-authenticated mint refused (oauth_required)"
+    return "FAIL", f"expected oauth_required, got {str(r)[:200]}"
+
+
+# ------------------------------------------------------------------- main
+
+def load_token(compose_dir: Path) -> str:
+    tok = os.environ.get("BLENDER_MCP_TOKEN")
+    env_file = compose_dir / ".env.mcp"
+    if not tok and env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if line.startswith("BLENDER_MCP_TOKEN="):
+                tok = line.split("=", 1)[1].strip()
+    if not tok:
+        sys.exit(f"no BLENDER_MCP_TOKEN in env or {env_file}")
+    return tok
+
+
+async def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--compose-dir", default=os.environ.get("CANARY_COMPOSE_DIR", "~/claude/blender-docker"))
+    ap.add_argument("--service", default=os.environ.get("CANARY_SERVICE", "blender-desktop"))
+    ap.add_argument("--zip", type=Path, help="extension zip to install first")
+    ap.add_argument("--network", action="store_true", help="run the iptables network-drop step (sudo)")
+    ap.add_argument("--update-to-version", help="version Update now should reach (default: published index)")
+    ap.add_argument("--artifacts", default=os.environ.get("CANARY_ARTIFACTS", "artifacts/canary"))
+    args = ap.parse_args()
+
+    compose_dir = Path(args.compose_dir).expanduser().resolve()
+    run_dir = Path(args.artifacts) / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ctx = Ctx(compose_dir, args.service, load_token(compose_dir), run_dir)
+    since = now_utc()
+    t_all = time.monotonic()
+
+    await step(ctx, "install", lambda: s_install(ctx, args.zip.resolve() if args.zip else None))
+    await step(ctx, "boot", lambda: s_boot(ctx))
+    if ctx.uuid:
+        await step(ctx, "restart-uuid", lambda: s_restart(ctx))
+        await step(ctx, "recreate-uuid", lambda: s_recreate(ctx))
+        await step(ctx, "network-drop", lambda: s_network(ctx, args.network))
+        await step(ctx, "worker-death", lambda: s_worker_death(ctx))
+        await step(ctx, "update-now", lambda: s_update_now(ctx, args.update_to_version))
+    await step(ctx, "token-boundary", lambda: s_token_boundary(ctx))
+
+    logs = container_logs(ctx, since)
+    (run_dir / "container.log").write_text(logs)
+    tb = [ln for ln in logs.splitlines() if "Traceback" in ln]
+    addon_tb = "blender_mcp" in logs and tb
+    ctx.results.append(Result(
+        "log-scan", "FAIL" if addon_tb else "PASS",
+        f"{len(tb)} Traceback line(s) in container log" if tb else "no tracebacks in container log",
+        0.0,
+    ))
+    print(f"[{ctx.results[-1].status:4}] {'log-scan':16} {'':>6}   {ctx.results[-1].detail}")
+
+    summary = {
+        "started": since, "seconds": round(time.monotonic() - t_all, 1),
+        "compose_dir": str(compose_dir), "uuid": ctx.uuid,
+        "results": [r.__dict__ for r in ctx.results],
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    fails = [r for r in ctx.results if r.status == "FAIL"]
+    print(f"\n{len(ctx.results) - len(fails)} ok, {len(fails)} failed in {summary['seconds']}s; artifacts: {run_dir}")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))

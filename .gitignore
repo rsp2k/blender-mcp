@@ -11,3 +11,6 @@ wheels/
 
 # Local environment / secrets (template lives in .env.example)
 .env
+
+# canary run logs and summaries
+artifacts/
