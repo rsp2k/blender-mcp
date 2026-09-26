@@ -332,9 +332,64 @@ def _register_client(server_url: str, redirect_uri: str, timeout: float = 10.0) 
     return body
 
 
+def _authorize_params(client_id: str, redirect_uri: str, challenge: str, state: str) -> dict:
+    return {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        # OIDC scopes so the /token response carries identity claims for
+        # the sidebar's "Logged in as <name>". Must match what DCR declared.
+        "scope": "openid email profile",
+    }
+
+
+def _client_is_registered(
+    server_url: str, client_id: str, redirect_uri: str, timeout: float = 10.0
+) -> bool | None:
+    """Preflight a stored client_id before sending the browser anywhere.
+
+    An unknown client_id makes /authorize answer 400 directly instead of
+    redirecting (OAuth forbids redirecting for an unverified client), which
+    would leave the user on a JSON error page while oauth_login waits out
+    its callback timeout. So probe /authorize without following redirects:
+    302 means the server knows the client, a 400 naming the client means it
+    doesn't. The probe's proxy transaction expires server-side in 15 min.
+
+    Returns True/False, or None when the answer is inconclusive (network
+    error or an unexpected status); the caller keeps the stored client then,
+    since registering would hit the same server anyway.
+    """
+    _verifier, challenge = _gen_pkce()
+    try:
+        resp = requests.get(
+            f"{server_url}/authorize",
+            params=_authorize_params(client_id, redirect_uri, challenge, secrets.token_urlsafe(16)),
+            allow_redirects=False,
+            timeout=timeout,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code in (302, 303, 307):
+        return True
+    if resp.status_code in (400, 401):
+        # MCP SDK says "Client ID '...' not found"; FastMCP's proxy rewrites
+        # it to "... is not registered with this server" and adds a
+        # registration_endpoint hint (seen on mcp.blender.bet 2026-09-26).
+        text = resp.text.lower()
+        markers = ("not registered", "not found", "registration_endpoint",
+                   "invalid_client", "unauthorized_client")
+        if any(m in text for m in markers):
+            return False
+    return None
+
+
 def oauth_login(
     server_url: str,
     *,
+    client_id: str | None = None,
     timeout: float = 300.0,
     open_browser: bool = True,
 ) -> dict:
@@ -346,6 +401,10 @@ def oauth_login(
         server_url: Base URL of the MCP server, e.g.
             ``https://mcp.blender.bet/``. A trailing ``/mcp`` segment is
             stripped automatically (backwards compat for stored prefs).
+        client_id: A client_id from a previous Dynamic Client Registration.
+            Reused when the server still knows it, so each Login doesn't
+            register a new client (the server keeps them forever). Omitted
+            or rejected -> register once and return the new id.
         timeout: Max seconds to wait for the browser callback. Default 5min.
         open_browser: If True (default), opens the user's system browser to
             the authorize URL. Set False to print the URL and let the
@@ -354,7 +413,8 @@ def oauth_login(
     Returns:
         Dict with keys:
             access_token, refresh_token, expires_in, token_type, scope,
-            client_id (the DCR-issued ID this addon instance got).
+            client_id (the DCR-issued ID this addon instance got),
+            client_registered (True when this call registered a new client).
 
     Raises:
         OAuthError on any flow failure (DCR, browser timeout, token exchange).
@@ -372,9 +432,18 @@ def oauth_login(
     port = httpd.server_address[1]
     redirect_uri = f"http://127.0.0.1:{port}/callback"
 
-    # 2. Register this addon instance as an OAuth client.
-    registration = _register_client(server_url, redirect_uri)
-    client_id = registration["client_id"]
+    # 2. Reuse the stored OAuth client, or register one. The proxy validates
+    #    redirect URIs against its own pattern list (unset here, so any
+    #    loopback port is accepted), not the client's registered
+    #    redirect_uris, so a new random callback port works with an old
+    #    client_id.
+    registered = False
+    if client_id and _client_is_registered(server_url, client_id, redirect_uri) is False:
+        print("[BlenderMCP] Stored OAuth client unknown to server; registering a new one")
+        client_id = None
+    if not client_id:
+        client_id = _register_client(server_url, redirect_uri)["client_id"]
+        registered = True
 
     # 3. PKCE + state
     verifier, challenge = _gen_pkce()
@@ -400,25 +469,8 @@ def oauth_login(
     server_thread.start()
 
     # 5. Construct authorize URL + open browser
-    auth_url = (
-        f"{server_url}/authorize?"
-        + urlencode(
-            {
-                "response_type": "code",
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "code_challenge": challenge,
-                "code_challenge_method": "S256",
-                "state": state,
-                # Request OIDC scopes so the /token response includes an
-                # id_token with human-readable user info (preferred_username,
-                # email, name). Used by the addon's sidebar to display
-                # "Logged in as <name>" instead of "Logged in via OAuth".
-                # The access_token's role for bus dispatch is unaffected —
-                # it still carries sub for user identity.
-                "scope": "openid email profile",
-            }
-        )
+    auth_url = f"{server_url}/authorize?" + urlencode(
+        _authorize_params(client_id, redirect_uri, challenge, state)
     )
     if open_browser:
         webbrowser.open(auth_url, new=2)
@@ -464,6 +516,7 @@ def oauth_login(
     # Stuff client_id into the response so the caller can persist it
     # (needed for the refresh flow).
     token["client_id"] = client_id
+    token["client_registered"] = registered
 
     # Extract user-display claims. Try two sources in order:
     #
