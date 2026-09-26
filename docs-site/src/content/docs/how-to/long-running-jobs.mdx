@@ -1,0 +1,66 @@
+---
+title: "Run long jobs in Blender"
+description: "Start heavy work without holding a tool call open, follow it with a job id, fetch the result, and cancel work that hasn't started. Covers what happens when a normal dispatch runs past its wait."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most Blender commands finish in a second or two. Some don't: an exact boolean on a dense mesh, a render, a large import. A tool call can't wait minutes, so long work runs as a **job** that you follow up by id.
+
+## When a dispatch runs past its wait
+
+Every dispatch tool waits a bounded time for Blender's reply (`_timeout`, 30 s by default, 60 s for `blender_execute_code`). If the work takes longer, the call doesn't fail. It returns a job instead:
+
+```json
+{
+  "status": "running",
+  "job_id": "j-3f9a1c2b7d4e",
+  "command": "execute_code",
+  "hint": "Still running in Blender after 60s; the result will be kept. Poll blender_job_status..."
+}
+```
+
+`status` is `running` if Blender has started the work, or `queued` if it's still waiting behind other jobs. Blender keeps going, and the result is stored when it arrives, even if the server restarts or the addon briefly disconnects in the meantime.
+
+## Start long work without waiting
+
+If you already know the work is long, start it as a job directly:
+
+```text
+blender_submit(command="execute_code", params={"code": "..."})
+→ {"status": "queued", "job_id": "j-..."}
+```
+
+`command` is the dispatch tool's name without the `blender_` prefix, and `params` are the arguments that tool takes. `target_uuid` and `bus_id` work the same way as on the dispatch tools.
+
+## Wait for it and read the result
+
+`blender_job_status(job_id, wait_seconds=50)` waits up to 50 seconds and returns as soon as the job starts or finishes. Call it in a loop until `done` is true:
+
+```text
+blender_job_status(job_id="j-...", wait_seconds=50)
+→ {"status": "running", "done": false, ...}
+blender_job_status(job_id="j-...", wait_seconds=50)
+→ {"status": "completed", "done": true, ...}
+blender_job_result(job_id="j-...")
+→ {"status": "completed", "result": "...", "error": "", ...}
+```
+
+A job ends in one of four states: `completed`, `failed` (the error is in `error`), `cancelled`, or `lost` (the target Blender has been gone for over an hour).
+
+`blender_list_jobs()` lists recent jobs on your buses, newest first. Pass `status` to filter, or `bus_id` to look at one bus.
+
+## Cancel a job
+
+`blender_job_cancel(job_id)` cancels a job that is still **queued**. Once a job is running it can't be stopped: Blender runs jobs on its main thread, and Python can't safely interrupt an operation part-way. A running job will finish on its own.
+
+## Limits
+
+- **Results are kept for 24 hours**, then deleted.
+- **Output is capped at about 1 MB.** Renders and exported files stay on the Blender machine; the result gives their path, the same way `blender_get_viewport_screenshot` does.
+- **Blender's interface is busy while a job runs.** Jobs run on Blender's main thread, so the viewport doesn't respond until the job finishes.
+- **Jobs are shared with the bus.** Every member of the bus a job ran on can see its status and result.
+
+<Aside type="note">
+Waiting in slices keeps each tool call short. For a job that takes six minutes, that's about eight `blender_job_status` calls, and each one returns the moment something changes rather than on a fixed timer.
+</Aside>

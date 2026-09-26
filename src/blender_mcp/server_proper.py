@@ -33,6 +33,7 @@ from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
 from .extension_tools import BlenderExtensionComponent
 from .access_token_tools import BlenderAccessTokenComponent
+from .job_tools import BlenderJobComponent
 from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
 
@@ -333,6 +334,10 @@ def build_http_mcp() -> FastMCP:
     # Personal access tokens for CI / scripted clients (migration
     # 20260926_0004). Verification lives in the auth provider above.
     BlenderAccessTokenComponent().register_tools(mcp_server=server, prefix="blender")
+
+    # Long-running jobs (migration 20260926_0005): timed-out dispatches
+    # return a job_id; these tools poll, fetch, list and cancel.
+    BlenderJobComponent().register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain

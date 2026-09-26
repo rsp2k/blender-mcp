@@ -7,7 +7,9 @@
 Replaces the manual rounds run by hand on 2026-09-26: install a build into a
 real GUI Blender, then check boot auto-connect, uuid stability across
 restart and container recreate, network-drop recovery, worker-death
-recovery, the one-click Update now path, and the token boundary. Every step
+recovery, long-running jobs (a dispatch outliving its wait is polled to
+completion and a queued job is cancelled; SKIPs until the server has the
+job API), the one-click Update now path, and the token boundary. Every step
 prints PASS / FAIL / SKIP with evidence; the exit code is non-zero on any FAIL.
 
 The Blender is driven through the bus itself: blender_execute_code runs
@@ -468,6 +470,53 @@ async def s_update_now(ctx: Ctx, target: str | None):
     return "PASS", f"{installed} -> {offered} in {time.time() - t0:.0f}s, same uuid, no crash"
 
 
+HAS_CANCEL = f"""
+import sys, json
+mod = sys.modules.get('bl_ext.blender_mcp.blender_mcp.client.message_pump')
+print({MARK!r} + json.dumps({{"cancel": bool(mod and hasattr(mod, 'cancel_queued_job'))}}))
+"""
+
+
+async def s_jobs(ctx: Ctx):
+    """A dispatch outliving its wait becomes a job; poll it to completion; cancel a queued one."""
+    probe = await call(ctx, "blender_job_status", {"job_id": "j-canaryprobe0"})
+    if not isinstance(probe, dict) or probe.get("error") != "job_not_found":
+        return "SKIP", f"server has no job API yet ({str(probe)[:80]})"
+    addon_cancels = (await run_code(ctx, HAS_CANCEL)).get("cancel", False)
+
+    t0 = time.time()
+    first = await call(ctx, "blender_execute_code", {
+        "code": "import time; time.sleep(25); print('job-ok')",
+        "target_uuid": ctx.uuid, "_timeout": 5,
+    }, timeout=30)
+    if not isinstance(first, dict) or first.get("status") not in ("queued", "running"):
+        return "FAIL", f"timed-out dispatch didn't become a job: {str(first)[:200]}"
+    job_id = first["job_id"]
+
+    cancel_note = "cancel skipped (addon predates job_cancel)"
+    if addon_cancels:
+        queued = await call(ctx, "blender_submit", {
+            "command": "execute_code", "params": {"code": "print('should not run')"},
+            "target_uuid": ctx.uuid,
+        })
+        c = await call(ctx, "blender_job_cancel", {"job_id": queued.get("job_id", "")})
+        if not (isinstance(c, dict) and c.get("job_status") == "cancelled"):
+            return "FAIL", f"cancel of queued job failed: {str(c)[:200]}"
+        cancel_note = "queued job cancelled"
+
+    status = {}
+    for _ in range(3):
+        status = await call(ctx, "blender_job_status", {"job_id": job_id, "wait_seconds": 40},
+                            timeout=60)
+        if status.get("done"):
+            break
+    result = await call(ctx, "blender_job_result", {"job_id": job_id})
+    if result.get("status") != "completed" or "job-ok" not in (result.get("result") or ""):
+        return "FAIL", f"job {job_id} ended {result.get('status')}: {str(result)[:200]}"
+    return "PASS", (f"execute_code outlived its 5s wait as {first['status']} {job_id}, "
+                    f"completed after {time.time() - t0:.0f}s; {cancel_note}")
+
+
 async def s_token_boundary(ctx: Ctx):
     r = await call(ctx, "blender_create_access_token", {"name": "canary-should-be-refused"})
     if isinstance(r, dict) and r.get("error") == "oauth_required":
@@ -513,6 +562,7 @@ async def main() -> int:
         await step(ctx, "recreate-uuid", lambda: s_recreate(ctx))
         await step(ctx, "network-drop", lambda: s_network(ctx, args.network))
         await step(ctx, "worker-death", lambda: s_worker_death(ctx))
+        await step(ctx, "jobs", lambda: s_jobs(ctx))
         await step(ctx, "update-now", lambda: s_update_now(ctx, args.update_to_version))
     await step(ctx, "token-boundary", lambda: s_token_boundary(ctx))
 

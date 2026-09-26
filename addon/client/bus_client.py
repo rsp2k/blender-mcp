@@ -17,6 +17,7 @@ with a stub client.
 from __future__ import annotations
 
 import asyncio
+import collections
 import threading
 import traceback
 from typing import Any, Optional
@@ -249,6 +250,8 @@ class BlenderMCPClient:
         self.job_queue: list = []
         self.queue_lock = threading.Lock()
         self.active_jobs: dict = {}
+        # job_updates waiting for a connection (see job_reporter.flush_outbox).
+        self.job_outbox = collections.deque()
         self._timer_registered = False
         # bpy.app.timers compares callables by identity, and every
         # `self._drain_queue` access builds a fresh bound-method object,
@@ -677,6 +680,13 @@ class BlenderMCPClient:
                             self.last_error = None
                             print(f"[BlenderMCP] Registered as {self.client_uuid}")
                             _request_ui_redraw()
+                            # Results of jobs that finished while we were
+                            # disconnected go out now that the server knows us.
+                            try:
+                                from .job_reporter import flush_outbox
+                                flush_outbox(self)
+                            except Exception as _fo_exc:
+                                print(f"[BlenderMCP] Outbox flush failed: {_fo_exc}")
                             # Server-advertised update hint. Failures here are
                             # never fatal — a missing envelope just means the
                             # server predates the version-hint field.

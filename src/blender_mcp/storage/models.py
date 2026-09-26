@@ -23,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    JSON,
     ForeignKey,
     Index,
     String,
@@ -374,3 +375,44 @@ class PersonalAccessToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# bus_job.status values. Plain strings rather than a DB enum, so adding a
+# state later is a code change, not a migration.
+JOB_STATUSES = ("queued", "running", "completed", "failed", "cancelled", "lost")
+JOB_TERMINAL = frozenset({"completed", "failed", "cancelled", "lost"})
+
+
+class BusJob(Base):
+    """A dispatched command and its outcome, kept after the caller stops waiting.
+
+    Dispatch tools wait a bounded time for the addon's reply; when that
+    runs out the job keeps going in Blender, and the reply lands here so
+    the caller can poll for it (blender_job_status / blender_job_result).
+    Rows live 24 h (expires_at) and are pruned lazily.
+    """
+
+    __tablename__ = "bus_job"
+
+    job_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    bus_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_uuid: Mapped[str] = mapped_column(String(128), nullable=False)
+    caller_sub: Mapped[str | None] = mapped_column(String(128))
+    # DCR client_id or "pat:<token id>" of the caller, when known.
+    caller_client: Mapped[str | None] = mapped_column(String(128))
+    command: Mapped[str] = mapped_column(String(100), nullable=False)
+    params: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    result: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_bus_job_status_created", "status", "created_at"),
+        Index("ix_bus_job_expires_at", "expires_at"),
+    )

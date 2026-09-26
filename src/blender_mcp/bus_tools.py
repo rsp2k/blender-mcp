@@ -326,6 +326,15 @@ class BlenderBusComponent(MCPMixin):
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
 
+        # Dispatch jobs are tracked in bus_job: persist the update even if
+        # nobody is waiting any more (timed-out call, server restart).
+        from . import jobs
+        tracked = await jobs.handle_update(
+            job_id, status, result, error, session=_session_from_ctx(ctx),
+        )
+        if tracked is not None:
+            return json.dumps(tracked)
+
         update_payload = {
             "kind": "job_update",
             "job_id": job_id,
@@ -362,9 +371,10 @@ class BlenderBusComponent(MCPMixin):
         )
         # Wake any awaiter registered through the dispatch_component layer.
         # job_waiter keys by (bus_id_str, job_id) — see I5 dispatch refactor.
-        job_waiter.deliver(bus_id_str, job_id, status, result, error)
-        # Terminal states clean up the tracking entry.
+        # Terminal states only: a "running" progress update must not wake
+        # a waiter as if the job had finished.
         if status in {"completed", "failed", "cancelled"}:
+            job_waiter.deliver(bus_id_str, job_id, status, result, error)
             _pending_jobs.pop(job_id, None)
         return json.dumps({"status": "ok", "delivered": "direct", "targets": r.targets})
 
