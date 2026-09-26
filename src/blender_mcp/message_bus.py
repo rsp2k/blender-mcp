@@ -84,6 +84,8 @@ class ClientInfo:
     pid: Optional[int] = None
     hostname: Optional[str] = None
     blend_file: Optional[str] = None
+    # Reported by addons from 2026.926.7 on; None for older builds.
+    addon_version: Optional[str] = None
 
     def lock_is_active(self, now: Optional[float] = None) -> bool:
         """True iff a non-expired lock is held. Lazy-expiry: callers that
@@ -138,6 +140,8 @@ class ClientInfo:
             d["hostname"] = self.hostname
         if self.blend_file is not None:
             d["blend_file"] = self.blend_file
+        if self.addon_version is not None:
+            d["addon_version"] = self.addon_version
         return d
 
 
@@ -200,6 +204,8 @@ class MessageBus:
                 existing.hostname = client_info.hostname
             if client_info.blend_file is not None:
                 existing.blend_file = client_info.blend_file
+            if client_info.addon_version is not None:
+                existing.addon_version = client_info.addon_version
             if client_info.session is not None:
                 # Session changed → re-index. Drop the old session's entry
                 # (whatever it was pointing to is stale) and add the new

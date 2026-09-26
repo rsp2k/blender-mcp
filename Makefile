@@ -4,7 +4,7 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: help prod dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions
+.PHONY: help prod dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions canary canary-full
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage: make <target>\n\nTargets:\n"} \
@@ -13,6 +13,13 @@ help: ## Show this help
 
 extensions: ## Build the self-hosted Blender extension zip + index.json into dist/extensions/
 	python3 scripts/build_extension.py
+
+
+canary: ## GUI canary against the blender-docker container (ZIP=path to install a build first)
+	uv run scripts/canary/run_canary.py $(if $(ZIP),--zip $(ZIP),)
+
+canary-full: ## Canary plus the iptables network-drop step (needs passwordless sudo)
+	uv run scripts/canary/run_canary.py --network $(if $(ZIP),--zip $(ZIP),)
 
 # `prod` depends on `extensions` so the compose mount (./dist/extensions -> /srv)
 # is populated before the file-server container starts. Rebuilding on every prod

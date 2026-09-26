@@ -198,6 +198,7 @@ class BlenderBusComponent(MCPMixin):
             pid=pid,
             hostname=hostname,
             blend_file=blend_file,
+            addon_version=addon_version,
         )
         registered = resolved["bus"].register(info)
         response: dict[str, Any] = {
