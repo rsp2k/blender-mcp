@@ -203,7 +203,13 @@ def build_app() -> FastAPI:
                 await rehydrate_from_db()
             except Exception as e:
                 logger.warning("Role rehydration at startup failed: %s", e)
-            yield
+            # Keepalive notifications let addons detect a dead event stream.
+            from .stream_keepalive import run_keepalive
+            keepalive_task = asyncio.create_task(run_keepalive())
+            try:
+                yield
+            finally:
+                keepalive_task.cancel()
 
     app = FastAPI(
         title="BlenderMCP OAuth + Bus",

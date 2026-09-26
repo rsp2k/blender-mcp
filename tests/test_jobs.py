@@ -291,3 +291,85 @@ def test_cancel_when_target_gone_marks_cancelled(env, tools):
     job_id, res = run(go())
     assert res["job_status"] == "cancelled" and "note" in res
     assert row(env, job_id).status == "cancelled"
+
+
+# ---- pull fallback for dispatches the event stream missed ---------------
+
+def _age(env, job_id, seconds):
+    async def go():
+        async with env.db() as s:
+            r = await job_repo.get_job(s, job_id)
+            r.created_at = job_repo.utcnow() - timedelta(seconds=seconds)
+            await s.commit()
+    run(go())
+
+
+def test_pending_dispatches_returns_missed_queued_jobs(env, tools):
+    out = json.loads(run(tools.submit(command="execute_code", params={"code": "print(1)"})))
+    _age(env, out["job_id"], 10)
+    res = run(jobs.pending_dispatches(env.target_session, TARGET, []))
+    assert res["status"] == "ok" and res["bus_id"] == env.bus_id
+    assert [d["job_id"] for d in res["dispatches"]] == [out["job_id"]]
+    assert res["dispatches"][0]["command"] == "execute_code"
+    assert res["dispatches"][0]["params"] == {"code": "print(1)"}
+
+
+def test_pending_dispatches_skips_young_running_and_truncated(env, tools):
+    young = json.loads(run(tools.submit(command="get_scene_info")))["job_id"]
+    running = json.loads(run(tools.submit(command="get_scene_info")))["job_id"]
+    run(jobs.handle_update(running, "running", "", "", session=env.target_session))
+    _age(env, running, 10)
+    big = json.loads(run(tools.submit(command="execute_code",
+                                      params={"code": "x" * (job_repo.PARAMS_CAP + 10)})))["job_id"]
+    _age(env, big, 10)
+    res = run(jobs.pending_dispatches(env.target_session, TARGET, []))
+    ids = [d["job_id"] for d in res["dispatches"]]
+    assert young not in ids and running not in ids and big not in ids
+
+
+def test_pending_dispatches_only_for_the_calling_client(env, tools):
+    run(tools.submit(command="get_scene_info"))
+    assert run(jobs.pending_dispatches(env.other_session, TARGET, []))["error"] == "not_registered_client"
+    assert run(jobs.pending_dispatches(env.target_session, OTHER, []))["error"] == "not_registered_client"
+
+
+def test_pending_dispatches_reports_cancelled_held_jobs(env, tools):
+    job_id = json.loads(run(tools.submit(command="get_scene_info")))["job_id"]
+    run(jobs.finish(job_id, "cancelled", error="x"))
+    res = run(jobs.pending_dispatches(env.target_session, TARGET, [job_id, "j-unknown"]))
+    assert res["cancelled"] == [job_id]
+
+
+def test_unacknowledged_cancel_marks_job_cancelled(env, tools, monkeypatch):
+    # The cancel notification can be lost like a dispatch; the job must not
+    # stay queued, or the pull fallback would deliver it after all.
+    monkeypatch.setattr(job_tools, "CANCEL_ACK_WAIT_S", 0.05)
+
+    async def go():
+        out = json.loads(await tools.submit(command="execute_code", params={"code": "x"}))
+        return out["job_id"], json.loads(await tools.job_cancel(job_id=out["job_id"]))
+    job_id, res = run(go())
+    assert res["status"] == "ok" and res["job_status"] == "cancelled" and "note" in res
+    assert row(env, job_id).status == "cancelled"
+    _age(env, job_id, 10)
+    pend = run(jobs.pending_dispatches(env.target_session, TARGET, []))
+    assert job_id not in [d["job_id"] for d in pend["dispatches"]]
+
+
+def test_keepalive_reaches_every_blender_session(env):
+    from blender_mcp import stream_keepalive
+
+    class FakeSession:
+        def __init__(self):
+            self.sent = []
+
+        async def send_log_message(self, level, data, logger):
+            self.sent.append((level, data, logger))
+
+    s = FakeSession()
+    env.bus.register(ClientInfo(uuid=OTHER, client_type="blender", is_persistent=True, session=s))
+    run(stream_keepalive.send_keepalives())
+    assert s.sent, "keepalive not sent"
+    level, data, logger_name = s.sent[0]
+    assert level == "debug" and logger_name == "_message_bus"
+    assert data["payload"]["message_type"] == "bus_keepalive" and data["target_uuid"] == OTHER

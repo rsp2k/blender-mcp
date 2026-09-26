@@ -159,6 +159,43 @@ async def list_jobs(
     return list((await s.execute(q)).scalars())
 
 
+async def queued_for_target(
+    s: AsyncSession,
+    bus_id: str,
+    target_uuid: str,
+    older_than: datetime,
+    newer_than: datetime,
+    limit: int = 50,
+) -> list[BusJob]:
+    """Dispatches still queued for one client inside an age window.
+
+    Used by the addon's pull fallback: a dispatch queued for longer than a
+    few seconds most likely never arrived over the event stream.
+    """
+    q = (
+        select(BusJob)
+        .where(
+            BusJob.bus_id == bus_id,
+            BusJob.target_uuid == target_uuid,
+            BusJob.status == "queued",
+            BusJob.created_at <= older_than,
+            BusJob.created_at >= newer_than,
+        )
+        .order_by(BusJob.created_at)
+        .limit(max(1, min(limit, 200)))
+    )
+    return list((await s.execute(q)).scalars())
+
+
+async def statuses(s: AsyncSession, job_ids: Sequence[str]) -> dict[str, str]:
+    """job_id -> status for the given ids (unknown ids are omitted)."""
+    ids = [str(j) for j in job_ids if j][:500]
+    if not ids:
+        return {}
+    q = select(BusJob.job_id, BusJob.status).where(BusJob.job_id.in_(ids))
+    return {jid: st for jid, st in (await s.execute(q)).all()}
+
+
 async def delete_expired(s: AsyncSession, now: datetime | None = None) -> int:
     now = now or utcnow()
     res = await s.execute(delete(BusJob).where(BusJob.expires_at < now))
