@@ -110,6 +110,8 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
     def execute(self, context):
         prefs = get_prefs(context)
         base_url = get_server_base_url(prefs)
+        # Read on the main thread; the worker only gets the plain string.
+        stored_client_id = prefs.oauth_client_id or None
 
         # Thread state — stored on the module so the timer callback can read.
         state._oauth_result = None
@@ -122,7 +124,7 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
 
         def _worker():
             try:
-                token = oauth_login(base_url, timeout=300.0)
+                token = oauth_login(base_url, client_id=stored_client_id, timeout=300.0)
                 state._oauth_result = token
             except OAuthError as e:
                 state._oauth_error = str(e)
@@ -195,7 +197,8 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             _persist()
             print(
                 f"[BlenderMCP] OAuth login complete; access token expires in "
-                f"{expires_in}s, client_id={prefs_now.oauth_client_id}, "
+                f"{expires_in}s, client_id={prefs_now.oauth_client_id} "
+                f"({'registered' if tok.get('client_registered') else 'reused'}), "
                 f"user={prefs_now.user_display_name or prefs_now.user_email or '?'}"
             )
 
@@ -259,11 +262,13 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
             except Exception:
                 pass
 
-        # 3. Clear local credentials + display name/email.
+        # 3. Clear local credentials + display name/email. oauth_client_id
+        # stays: it identifies this addon install to the server's OAuth
+        # proxy, not the session, and the next Login reuses it instead of
+        # registering another client that the server would keep forever.
         prefs.jwt_token = ""
         prefs.refresh_token = ""
         prefs.jwt_expires_at = ""
-        prefs.oauth_client_id = ""
         prefs.user_display_name = ""
         prefs.user_email = ""
         # Persist the logout so a Blender restart doesn't resurrect the
