@@ -185,6 +185,20 @@ def draw_update_banner(layout):
     from . import _version
     from . import state as _state
 
+    pf = getattr(_state, "_update_prefetch", None)
+    if pf is not None and pf.active:
+        box = layout.box()
+        col = box.column(align=True)
+        target = f" {pf.version}" if pf.version else ""
+        text = (f"Downloading update{target}… {pf.fraction * 100:.0f}% · "
+                f"{pf.bytes_done / 1e6:.1f} / {pf.expected_size / 1e6:.1f} MB")
+        if hasattr(col, "progress"):
+            col.progress(factor=pf.fraction, type='BAR', text=text)
+        else:
+            col.label(text=text, icon='IMPORT')
+        col.operator("blendermcp.cancel_update", text="Cancel", icon='CANCEL')
+        return
+
     if not getattr(_state, "_update_available", False):
         return
 

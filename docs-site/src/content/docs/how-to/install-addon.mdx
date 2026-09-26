@@ -96,7 +96,7 @@ The legacy path is also available on Blender 4.2+, but you lose the automatic up
 
 ### Extension path
 
-When the server knows about a newer version, the sidebar and preferences panel show a banner like `Addon update available: 2026.926.0 → 2026.926.1` with an **Update now** button. Clicking it refreshes the Blender MCP repository and starts Blender's own installer in the background, with progress in the status bar. When the install finishes, Blender reloads the addon and it reconnects on its own from your saved login.
+When the server knows about a newer version, the sidebar and preferences panel show a banner like `Addon update available: 2026.926.0 → 2026.926.1` with an **Update now** button. Clicking it refreshes the Blender MCP repository and downloads the update for your platform, with a progress bar and a Cancel button in the banner. Once the download is verified against the repository's checksum, Blender installs it from its cache in about a second, reloads the addon, and it reconnects on its own from your saved login. If the repository's cache is turned off, or the download fails, Blender's own installer downloads it instead.
 
 You can also update the usual way: `Preferences → Get Extensions → Check for Updates`, then the "Update" button next to Blender MCP.
 
