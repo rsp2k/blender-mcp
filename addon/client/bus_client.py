@@ -566,6 +566,21 @@ class BlenderMCPClient:
                         import time as _time
                         last_heartbeat = _time.monotonic()
                         HEARTBEAT_INTERVAL = 30.0
+                        # The server evicts Blender clients silent for an
+                        # hour, and touch() on an evicted uuid is a no-op,
+                        # so a client whose transport survived a long stall
+                        # would heartbeat forever while invisible on the bus.
+                        # Re-sending registration periodically re-adds it.
+                        last_reregister = last_heartbeat
+                        REREGISTER_INTERVAL = 600.0
+
+                        def _reregister_on_main():
+                            try:
+                                self.refresh_registration()
+                            except Exception as _rr_exc:
+                                print(f"[BlenderMCP] Periodic re-register failed: {_rr_exc}")
+                            return None
+
                         while self.running and not self._rotate_requested:
                             await asyncio.sleep(0.2)
                             now = _time.monotonic()
@@ -573,6 +588,13 @@ class BlenderMCPClient:
                                 try:
                                     await client.ping()
                                     last_heartbeat = now
+                                    if now - last_reregister >= REREGISTER_INTERVAL:
+                                        last_reregister = now
+                                        # refresh_registration reads bpy.data,
+                                        # so hop to the main thread.
+                                        bpy.app.timers.register(
+                                            _reregister_on_main, first_interval=0.0
+                                        )
                                     # Drainer-watchdog: verified against
                                     # feedback bug-iDJHVyy4e2Q (queue stall
                                     # with heartbeat still healthy). If the
