@@ -272,7 +272,7 @@ wheels = [
 
 [[package]]
 name = "blender-mcp"
-version = "2026.926.0"
+version = "2026.926.1"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
