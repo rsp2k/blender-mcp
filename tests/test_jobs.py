@@ -99,6 +99,40 @@ def test_store_lifecycle_and_duplicates(env):
     run(go())
 
 
+def test_running_report_cannot_overwrite_completion(env):
+    """The addon sends "running" and "completed" as separate calls that can land
+    out of order. A session that read the row while it was still queued must not
+    write "running" over a completion another session already committed (seen
+    live: a finished job stuck as running with finished_at before started_at)."""
+    async def go():
+        async with env.db() as s:
+            await job_repo.create_job(s, "j-race", env.bus_id, TARGET, "execute_code", {})
+        async with env.db() as slow, env.db() as fast:
+            stale = await slow.get(BusJob, "j-race")     # "running" handler reads queued
+            assert stale.status == "queued"
+            _r, changed = await job_repo.finish_job(fast, "j-race", "completed", "ok", "")
+            assert changed
+            await job_repo.mark_running(slow, "j-race")  # arrives second
+            await job_repo.set_progress(slow, "j-race", 0.5, "late")
+        async with env.db() as s:
+            r = await job_repo.get_job(s, "j-race")
+            assert r.status == "completed" and r.result == "ok"
+            assert r.progress is None
+    run(go())
+
+
+def test_completion_cannot_overwrite_other_completion(env):
+    async def go():
+        async with env.db() as s:
+            await job_repo.create_job(s, "j-dup", env.bus_id, TARGET, "execute_code", {})
+        async with env.db() as a, env.db() as b:
+            await a.get(BusJob, "j-dup")
+            _r, changed_b = await job_repo.finish_job(b, "j-dup", "cancelled", "", "")
+            r, changed_a = await job_repo.finish_job(a, "j-dup", "completed", "late", "")
+            assert changed_b and not changed_a and r.status == "cancelled"
+    run(go())
+
+
 def test_store_caps_and_list(env):
     async def go():
         async with env.db() as s:
@@ -247,6 +281,27 @@ def test_submit_status_result(env, tools):
     assert status["status"] == "completed" and status["done"] is True
     assert result["result"] == "done"
     assert listed["jobs"] and listed["jobs"][0]["status"] == "completed"
+
+
+def test_status_wakes_for_update_between_read_and_wait(env, tools, monkeypatch):
+    """An update landing after job_status read the row but before it started
+    waiting used to cost the whole wait (the canary's 6.6 s first pickup)."""
+    real_authorized = job_tools._authorized_job
+
+    async def authorized_then_update(ctx, job_id):
+        out = await real_authorized(ctx, job_id)
+        await jobs.handle_update(job_id, "running", "", "", session=env.target_session)
+        return out
+
+    async def go():
+        job_id = json.loads(await tools.submit(command="execute_code", params={"code": "x"}))["job_id"]
+        monkeypatch.setattr(job_tools, "_authorized_job", authorized_then_update)
+        t0 = time.monotonic()
+        status = json.loads(await tools.job_status(job_id=job_id, wait_seconds=5))
+        return status, time.monotonic() - t0
+    status, elapsed = run(go())
+    assert status["status"] == "running"
+    assert elapsed < 1.0
 
 
 def test_non_member_cannot_see_job(env, tools, monkeypatch):

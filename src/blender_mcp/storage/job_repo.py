@@ -11,7 +11,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import JOB_TERMINAL, BusJob
@@ -83,15 +83,24 @@ async def get_job(s: AsyncSession, job_id: str) -> BusJob | None:
     return await s.get(BusJob, job_id)
 
 
+async def _fresh(s: AsyncSession, job_id: str) -> BusJob | None:
+    # populate_existing: the identity map may hold a copy read before another
+    # session's commit.
+    return await s.get(BusJob, job_id, populate_existing=True)
+
+
 async def mark_running(s: AsyncSession, job_id: str) -> BusJob | None:
-    row = await s.get(BusJob, job_id)
-    if row is None:
-        return None
-    if row.status == "queued":
-        row.status = "running"
-        row.started_at = utcnow()
-        await s.commit()
-    return row
+    # One conditional UPDATE, not read-then-write: the addon's "running" and
+    # "completed" reports are separate calls that can be handled concurrently,
+    # and a Python-side status check let "running" overwrite a completion
+    # committed between the read and the write.
+    await s.execute(
+        update(BusJob)
+        .where(BusJob.job_id == job_id, BusJob.status == "queued")
+        .values(status="running", started_at=utcnow())
+    )
+    await s.commit()
+    return await _fresh(s, job_id)
 
 
 PROGRESS_MESSAGE_CAP = 500
@@ -104,20 +113,24 @@ async def set_progress(
     message: str | None = None,
 ) -> BusJob | None:
     """Record the latest progress report. Implies running; ignored once terminal."""
-    row = await s.get(BusJob, job_id)
-    if row is None or row.status in JOB_TERMINAL:
-        return row
     now = utcnow()
-    if row.status == "queued":
-        row.status = "running"
-        row.started_at = now
+    await s.execute(
+        update(BusJob)
+        .where(BusJob.job_id == job_id, BusJob.status == "queued")
+        .values(status="running", started_at=now)
+    )
+    values: dict = {"progress_at": now}
     if fraction is not None:
-        row.progress = max(0.0, min(1.0, float(fraction)))
+        values["progress"] = max(0.0, min(1.0, float(fraction)))
     if message is not None:
-        row.progress_message = str(message)[:PROGRESS_MESSAGE_CAP]
-    row.progress_at = now
+        values["progress_message"] = str(message)[:PROGRESS_MESSAGE_CAP]
+    await s.execute(
+        update(BusJob)
+        .where(BusJob.job_id == job_id, BusJob.status.not_in(JOB_TERMINAL))
+        .values(**values)
+    )
     await s.commit()
-    return row
+    return await _fresh(s, job_id)
 
 
 async def finish_job(
@@ -127,21 +140,27 @@ async def finish_job(
     result: str | None = None,
     error: str | None = None,
 ) -> tuple[BusJob | None, bool]:
-    """Move a job to a terminal state. Returns (row, changed)."""
-    row = await s.get(BusJob, job_id)
-    if row is None:
-        return None, False
-    if row.status in JOB_TERMINAL:
-        return row, False
+    """Move a job to a terminal state. Returns (row, changed).
+
+    The first terminal update wins, enforced in the UPDATE's WHERE clause so
+    two concurrent reports (a result and a cancel, or an outbox resend) can't
+    both apply."""
     now = utcnow()
-    row.status = status
-    row.result = cap_text(result)
-    row.error = cap_text(error)
-    row.finished_at = now
-    if row.started_at is None and status != "cancelled":
-        row.started_at = now
+    values: dict = {
+        "status": status,
+        "result": cap_text(result),
+        "error": cap_text(error),
+        "finished_at": now,
+    }
+    if status != "cancelled":
+        values["started_at"] = func.coalesce(BusJob.started_at, now)
+    res = await s.execute(
+        update(BusJob)
+        .where(BusJob.job_id == job_id, BusJob.status.not_in(JOB_TERMINAL))
+        .values(**values)
+    )
     await s.commit()
-    return row, True
+    return await _fresh(s, job_id), bool(res.rowcount)
 
 
 async def list_jobs(

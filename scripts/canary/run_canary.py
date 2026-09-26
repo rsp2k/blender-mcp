@@ -634,20 +634,26 @@ print({MARK!r} + json.dumps({{"cleared": True}}))
 """
 
 
-LATENCY_LIMIT_S = 10.0
+# Pickup includes the harness's own overhead: each call opens a fresh MCP
+# session (~0.5-1 s over the internet), so ~1.5-2 s is the floor seen here for
+# a trivial job delivered on the event stream. The pull fallback polls every
+# 10 s, so a pickup above 5 s means the stream missed the dispatch.
+LATENCY_LIMIT_S = 5.0
+PULLED_MARK = "recovered by pull"
 
 
 async def s_dispatch_latency(ctx: Ctx):
-    """Time from dispatch to Blender picking the job up, for trivial jobs.
+    """Time from dispatch to Blender picking the job up, for trivial jobs, and
+    which path delivered it (event stream vs the pull fallback).
 
-    Dispatches travel as notifications on the addon's event stream; a stalled
-    stream once delayed them by 60 s while pings stayed healthy. The addon now
-    pulls missed dispatches and reconnects a silent stream, so pickup should
-    stay within a few seconds.
+    Also checks each job reaches a terminal state: a lost update once left a
+    completed job stuck as "running" (its "running" report committed after the
+    completion), which the old version of this step counted as a pickup.
     """
     if not await has_tool(ctx, "blender_submit"):
         return "SKIP", "server has no job API yet"
-    times = []
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 2)) + "Z"
+    results = []  # (job_id, pickup seconds, final status)
     for i in range(3):
         t0 = time.time()
         sub = await call(ctx, "blender_submit", {
@@ -657,20 +663,29 @@ async def s_dispatch_latency(ctx: Ctx):
         job_id = sub.get("job_id") if isinstance(sub, dict) else None
         if not job_id:
             return "FAIL", f"blender_submit returned no job_id: {str(sub)[:300]}"
-        picked = None
-        while time.time() - t0 < LATENCY_LIMIT_S + 20:
+        picked, status = None, None
+        while time.time() - t0 < LATENCY_LIMIT_S + 25:
             st = await call(ctx, "blender_job_status", {"job_id": job_id, "wait_seconds": 5},
                             timeout=30)
-            if isinstance(st, dict) and st.get("status") not in ("queued", None):
+            status = st.get("status") if isinstance(st, dict) else None
+            if picked is None and status not in ("queued", None):
                 picked = time.time() - t0
+            if isinstance(st, dict) and st.get("done"):
                 break
         if picked is None:
-            return "FAIL", f"job {job_id} still queued after {LATENCY_LIMIT_S + 20:.0f}s"
-        times.append(picked)
+            return "FAIL", f"job {job_id} still queued after {LATENCY_LIMIT_S + 25:.0f}s"
+        results.append((job_id, picked, status))
         await asyncio.sleep(1)
-    worst = max(times)
-    detail = "pickup " + ", ".join(f"{t:.1f}s" for t in times)
-    if worst > LATENCY_LIMIT_S:
+
+    logs = container_logs(ctx, since)
+    paths = ["pull" if f"{job_id} {PULLED_MARK}" in logs else "stream" for job_id, _p, _s in results]
+    detail = "pickup " + ", ".join(
+        f"{p:.1f}s/{path}" for (_j, p, _s), path in zip(results, paths)
+    )
+    stuck = [(j, s) for j, _p, s in results if s != "completed"]
+    if stuck:
+        return "FAIL", f"{detail}; not completed: {stuck}"
+    if max(p for _j, p, _s in results) > LATENCY_LIMIT_S:
         return "FAIL", f"{detail} (limit {LATENCY_LIMIT_S:g}s)"
     return "PASS", detail
 

@@ -636,9 +636,7 @@ class BlenderMCPClient:
         data = _tool_payload(result) or {}
         if data.get("status") != "ok":
             return
-        added = enqueue_pulled(self, data.get("dispatches") or [], str(data.get("bus_id") or ""))
-        if added:
-            print(f"[BlenderMCP] Recovered {added} dispatch(es) the event stream missed")
+        enqueue_pulled(self, data.get("dispatches") or [], str(data.get("bus_id") or ""))
         for job_id in data.get("cancelled") or []:
             cancel_queued_job(self, job_id)
 
