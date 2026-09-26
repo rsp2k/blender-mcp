@@ -25,6 +25,7 @@ from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
 from .handlers.scene import SceneHandlersMixin
 from .handlers.sketchfab import SketchfabHandlersMixin
+from .handlers.view_controls import ViewControlHandlersMixin
 from .handlers.viewport import ViewportHandlersMixin
 from .registry import COMMAND_REGISTRY, filter_kwargs
 
@@ -40,6 +41,7 @@ class BlenderCommandExecutor(
     SketchfabHandlersMixin,
     ExtensionsHandlersMixin,
     AnnotationHandlersMixin,
+    ViewControlHandlersMixin,
     SharedHelpersMixin,
 ):
     """Routes incoming `{type, params}` commands to handler methods.
