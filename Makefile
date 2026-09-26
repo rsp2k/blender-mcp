@@ -20,12 +20,12 @@ extensions: ## Build the self-hosted Blender extension zip + index.json into dis
 # reuses cached wheels for unchanged deps (pip's own resolver cache).
 prod: extensions ## Start the production stack (FastMCP server + extension repo behind caddy-docker-proxy)
 	$(COMPOSE) up -d --build blender-mcp blender-mcp-extensions
-	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/mcp"
+	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
 	@echo "-> Extension repo at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions/index.json"
 
 dev: ## Start the dev stack with hot reload
 	$(COMPOSE) --profile dev up -d --build blender-mcp-dev
-	@echo "-> Dev server at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/mcp"
+	@echo "-> Dev server at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
 
 # --profile dev so profile-gated services are also torn down, not just the default service
 down: ## Stop both stacks (prod + dev)
