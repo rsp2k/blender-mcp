@@ -1,6 +1,6 @@
 [project]
 name = "blender-mcp"
-version = "2026.926.15"
+version = "2026.926.16"
 description = "Blender integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.11"
