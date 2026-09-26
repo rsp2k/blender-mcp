@@ -490,6 +490,60 @@ def build_app() -> FastAPI:
             logger.warning("API auth lookup failed: %s", e)
             return None
 
+    # ---- Personal access tokens (REST, for the blender.bet dashboard) ----
+    # Same rules as the MCP tools: OAuth bearer only (a PAT can't manage
+    # tokens), and every call is scoped to the bearer's own user.
+
+    async def _api_token_owner(request: Request) -> str:
+        from .access_tokens import is_pat
+
+        authorization = request.headers.get("authorization")
+        if authorization and is_pat(authorization.split(None, 1)[-1].strip()):
+            raise HTTPException(403, "Token management needs an OAuth sign-in, not a personal access token")
+        uid = await _api_user_id(authorization)
+        if not uid:
+            raise HTTPException(401, "Invalid or missing bearer token")
+        return uid
+
+    @app.get("/api/tokens")
+    async def api_list_tokens(request: Request):
+        from . import access_tokens as pat
+        from .storage import get_session
+
+        uid = await _api_token_owner(request)
+        async with get_session() as s:
+            rows = await pat.list_tokens(s, uid)
+        return {"tokens": [pat.to_dict(r) for r in rows]}
+
+    @app.post("/api/tokens")
+    async def api_create_token(request: Request):
+        from . import access_tokens as pat
+        from .storage import get_session
+
+        uid = await _api_token_owner(request)
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        expires_days = int(body.get("expires_days") or pat.DEFAULT_EXPIRES_DAYS)
+        if not name:
+            raise HTTPException(400, "name is required")
+        if not 1 <= expires_days <= pat.MAX_EXPIRES_DAYS:
+            raise HTTPException(400, f"expires_days must be 1-{pat.MAX_EXPIRES_DAYS}")
+        async with get_session() as s:
+            token, row = await pat.create_token(s, uid, name, expires_days)
+        return {"token": token, **pat.to_dict(row)}
+
+    @app.delete("/api/tokens/{key}")
+    async def api_revoke_token(key: str, request: Request):
+        from . import access_tokens as pat
+        from .storage import get_session
+
+        uid = await _api_token_owner(request)
+        async with get_session() as s:
+            row = await pat.revoke_token(s, key, uid)
+        if row is None:
+            raise HTTPException(404, "No single token of yours matches that id or prefix")
+        return pat.to_dict(row)
+
     @app.get("/api/buses")
     async def api_list_buses(request: Request):
         """List all buses the bearer's user is a member of."""

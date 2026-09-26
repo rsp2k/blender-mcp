@@ -345,3 +345,32 @@ class OAuthClientRole(Base):
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+class PersonalAccessToken(Base):
+    """Long-lived bearer token for CI and scripted MCP clients.
+
+    Lets a caller skip the OAuth browser flow by sending
+    ``Authorization: Bearer bmcp_...``. Only the sha256 of the token is
+    stored; the plaintext is shown once at creation. A token acts as its
+    owner's LLM client (role ``llm-client``) and can't mint more tokens.
+    """
+
+    __tablename__ = "access_token"
+
+    id: Mapped[_uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=_uuid.uuid4
+    )
+    # Same identity the bus uses: the OIDC ``sub`` (Authentik hashed user id).
+    user_sub: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Non-secret display handle, e.g. "bmcp_Ab3xYz9Q", for list/revoke.
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    # NULL = never expires (admin script only).
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

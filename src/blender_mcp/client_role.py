@@ -212,6 +212,9 @@ def get_caller_role(ctx: Any = None) -> str:
     client_id = getattr(token, "client_id", None)
     if not client_id:
         return "llm-client"
+    if client_id.startswith("pat:"):
+        # Personal access tokens always act as their owner's LLM client.
+        return "llm-client"
     role = _role_by_client_id.get(client_id, "llm-client")
     _maybe_lazy_backfill(client_id, role)
     return role
