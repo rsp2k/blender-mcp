@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import threading
+import time
 import traceback
 from typing import Any, Optional
 
@@ -279,6 +280,10 @@ class BlenderMCPClient:
         self.job_queue: list = []
         self.queue_lock = threading.Lock()
         self.active_jobs: dict = {}
+        # Monotonic time of the drainer's last tick (health reports).
+        self.last_drain_at: Optional[float] = None
+        # False once a server rejects the health field on pending_dispatches.
+        self._health_supported = True
         # job_updates waiting for a connection (see job_reporter.flush_outbox).
         self.job_outbox = collections.deque()
         # Event-stream health: the server advertises a keepalive interval at
@@ -331,6 +336,42 @@ class BlenderMCPClient:
         )
         self._timer_registered = True
         return True
+
+    def reset_drain_timer(self) -> None:
+        """Re-register the drain timer from scratch (remote pump reset).
+        Thread-safe: bpy.app.timers register/unregister may be called from
+        the worker thread."""
+        try:
+            if bpy.app.timers.is_registered(self._drain_timer_fn):
+                bpy.app.timers.unregister(self._drain_timer_fn)
+        except Exception:
+            pass
+        self._timer_registered = False
+        self.ensure_drain_timer()
+        print("[BlenderMCP] Job pump reset requested over the bus; drain timer re-registered")
+
+    def health_report(self) -> dict:
+        """Job-pump state for the server: queue depth, what's running and for
+        how long, and whether the drain timer is alive. Built on the worker
+        thread, so it still reports while Blender's main thread is busy."""
+        now_wall = time.time()
+        with self.queue_lock:
+            queued = len(self.job_queue)
+            active = [
+                {"job_id": str(job_id), "running_seconds": round(now_wall - started, 1)}
+                for job_id, started in list(self.active_jobs.items())
+            ]
+        try:
+            registered = bool(bpy.app.timers.is_registered(self._drain_timer_fn))
+        except Exception:
+            registered = None
+        report = {"queue_depth": queued, "active_jobs": active,
+                  "main_thread_busy": bool(active)}
+        if registered is not None:
+            report["drain_timer_registered"] = registered
+        if self.last_drain_at is not None:
+            report["last_drain_seconds_ago"] = round(time.monotonic() - self.last_drain_at, 1)
+        return report
 
     def stop(self) -> None:
         """Signal worker to exit, then join."""
@@ -616,24 +657,29 @@ class BlenderMCPClient:
         next round; a server without the tool disables the pull."""
         from .message_pump import cancel_queued_job, enqueue_pulled, held_job_ids
 
+        args = {"client_uuid": self.client_uuid, "held_job_ids": held_job_ids(self)}
+        if self._health_supported:
+            args["health"] = self.health_report()
         try:
             result = await asyncio.wait_for(
-                client.call_tool(
-                    "blender_pending_dispatches",
-                    {"client_uuid": self.client_uuid, "held_job_ids": held_job_ids(self)},
-                    timeout=REQUEST_TIMEOUT_S,
-                ),
+                client.call_tool("blender_pending_dispatches", args, timeout=REQUEST_TIMEOUT_S),
                 REQUEST_TIMEOUT_S + 5.0,
             )
         except asyncio.TimeoutError:
             return
         except Exception as e:
-            if "unknown tool" in str(e).lower():
+            text = str(e).lower()
+            if "unknown tool" in text:
                 self._pull_supported = False
                 print("[BlenderMCP] Server has no dispatch pull; using the event stream only")
+            elif "health" in args and ("unexpected" in text or "health" in text):
+                # Older server without the health field; plain polls next time.
+                self._health_supported = False
             return
         self._pull_supported = True
         data = _tool_payload(result) or {}
+        if data.get("reset_pump"):
+            self.reset_drain_timer()
         if data.get("status") != "ok":
             return
         added = enqueue_pulled(self, data.get("dispatches") or [], str(data.get("bus_id") or ""))

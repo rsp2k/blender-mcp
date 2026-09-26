@@ -212,9 +212,11 @@ async def pending_dispatches(
     session: Any,
     client_uuid: str,
     held_job_ids: list[str] | None = None,
+    health: dict | None = None,
 ) -> dict:
     """Dispatches still queued for ``client_uuid``, plus which of the jobs
-    the addon is holding were cancelled.
+    the addon is holding were cancelled. Also records the addon's job-pump
+    ``health`` and passes back a pending pump reset request.
 
     Server-to-addon dispatches travel as MCP notifications on the session's
     standalone SSE stream. The MCP client stops reconnecting that stream
@@ -227,6 +229,14 @@ async def pending_dispatches(
     if where is None or where[1] != client_uuid:
         return {"status": "error", "error": "not_registered_client", "client_uuid": client_uuid}
     bus_id = str(where[0])
+    reset_pump = False
+    bus = bus_manager.all_buses().get(where[0])
+    client_info = bus.get(client_uuid) if bus is not None else None
+    if client_info is not None:
+        from . import client_health
+        if health is not None:
+            client_health.record(client_info, health)
+        reset_pump = client_health.take_reset(client_info)
     now = job_repo.utcnow()
     try:
         async with _sessions() as s:
@@ -237,7 +247,7 @@ async def pending_dispatches(
             held = await job_repo.statuses(s, held_job_ids or [])
     except Exception as e:  # noqa: BLE001 - best-effort; the addon just tries again
         logger.warning("pending_dispatches for %s: DB unavailable: %s", client_uuid, e)
-        return {"status": "error", "error": "unavailable"}
+        return {"status": "error", "error": "unavailable", "reset_pump": reset_pump}
     dispatches = [
         {
             "job_id": r.job_id,
@@ -254,6 +264,7 @@ async def pending_dispatches(
         "bus_id": bus_id,
         "dispatches": dispatches,
         "cancelled": sorted(j for j, st in held.items() if st == "cancelled"),
+        "reset_pump": reset_pump,
     }
 
 

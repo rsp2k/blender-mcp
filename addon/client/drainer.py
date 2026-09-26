@@ -43,6 +43,8 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
         client._timer_registered = False
         return None  # unregister timer
 
+    # Health reports use this to tell a working pump from a stalled one.
+    client.last_drain_at = time.monotonic()
     with client.queue_lock:
         if not client.job_queue:
             return DRAIN_INTERVAL_S

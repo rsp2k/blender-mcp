@@ -33,6 +33,8 @@ from .diagnostics_component import BlenderDiagnosticsComponent
 from .dispatch_component import BlenderDispatchComponent
 from .extension_tools import BlenderExtensionComponent
 from .access_token_tools import BlenderAccessTokenComponent
+from .analysis_tools import BlenderAnalysisComponent
+from .client_health import BlenderHealthComponent
 from .job_tools import BlenderJobComponent
 from .worker_tools import BlenderWorkerComponent
 from .feedback_tools import BlenderFeedbackComponent
@@ -341,6 +343,10 @@ def build_http_mcp() -> FastMCP:
     BlenderJobComponent().register_tools(mcp_server=server, prefix="blender")
     # Headless background workers spawned by a GUI Blender.
     BlenderWorkerComponent().register_tools(mcp_server=server, prefix="blender")
+    # Interference, world bounds, keyframes (feedback fx-5ZRSYENMByk).
+    BlenderAnalysisComponent().register_tools(mcp_server=server, prefix="blender")
+    # Job-pump health + remote pump reset (feedback bug-iDJHVyy4e2Q).
+    BlenderHealthComponent().register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain

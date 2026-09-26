@@ -269,6 +269,14 @@ async def _dispatch(
                 seen_ago < 60 if seen_ago is not None else False
             ),
         }
+        # The addon's own queue report tells "busy with a long job" from
+        # "pump stalled" from "dispatch never arrived", which the heartbeat
+        # alone can't; prefer its diagnosis when there is one.
+        from . import client_health
+        health, health_hint = client_health.describe(client_info)
+        if health is not None:
+            diagnostics["target_health"] = health
+            hint = health_hint
         row = await jobs.get(job_id) if persisted else None
         if row is None:
             return json.dumps({"status": "timeout", "command": command, "hint": hint}
