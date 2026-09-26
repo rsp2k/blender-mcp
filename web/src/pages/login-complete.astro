@@ -3,29 +3,14 @@
  * /login-complete — landing page the Blender addon redirects to after a
  * successful OAuth flow against the MCP server.
  *
- * SSR route (omitting prerender so it stays server-rendered). User
- * identity comes from Authentik's proxy outpost via Caddy forward_auth:
- * the outpost validates the user's .blender.bet session cookie and
- * forwards X-Authentik-Username / -Email / -Name headers to this
- * upstream when authenticated. The route is not gated (see the
- * @protected matcher in docker-compose.yml): without those headers it
- * renders a plain "You're signed in" so login never ends on an error.
+ * Not gated by forward_auth (see the @protected matcher in
+ * docker-compose.yml), so it must not render X-Authentik-* headers: on
+ * an ungated route those come from the client, not from Authentik.
  *
  * Addon-side context (server URL, client_id, addon version, timestamp)
  * arrives via query string — non-secret values, OK to render directly.
  * No tokens or auth codes are passed through URLs anywhere.
  */
-
-const headers = Astro.request.headers;
-const user = {
-  username: headers.get('x-authentik-username') ?? '',
-  email: headers.get('x-authentik-email') ?? '',
-  name: headers.get('x-authentik-name') ?? '',
-  greet:
-    headers.get('x-authentik-name') ||
-    headers.get('x-authentik-username') ||
-    'there',
-};
 
 const params = Astro.url.searchParams;
 const ctx = {
@@ -128,21 +113,12 @@ const ctx = {
           <path d="M20 6 9 17l-5-5" />
         </svg>
       </div>
-      <h1>{user.username || user.name ? `Welcome, ${user.greet}` : "You're signed in"}</h1>
+      <h1>You're signed in</h1>
       <p class="lede">
         Your BlenderMCP addon is authorized. You can close this tab and return to Blender.
       </p>
 
       <dl class="context">
-        {user.username && (
-          <>
-            <dt>Account</dt>
-            <dd>
-              {user.username}
-              {user.email && <span style="color:var(--muted)"> · {user.email}</span>}
-            </dd>
-          </>
-        )}
         {ctx.server && (<><dt>Server</dt><dd>{ctx.server}</dd></>)}
         {ctx.ver && (<><dt>Addon</dt><dd>BlenderMCP v{ctx.ver}</dd></>)}
         {ctx.client_id && (<><dt>Client&nbsp;ID</dt><dd>{ctx.client_id}</dd></>)}
