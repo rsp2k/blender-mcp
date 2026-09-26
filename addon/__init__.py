@@ -272,6 +272,7 @@ def unregister():
             print(f"[BlenderMCP] Error stopping client during unregister: {e}")
         state._client = None
     state._executor = None
+    state._identity = None
 
     for cls in reversed(_CLASSES):
         try:

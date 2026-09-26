@@ -15,11 +15,48 @@ import os
 import re
 import socket
 import sys
+import time
 import uuid
 from typing import Optional
 
 MAX_SLOTS = 16
+# A lease from another host counts as held only if refreshed this recently.
+# The connection supervisor refreshes the lease every tick (~10 s).
+FOREIGN_LEASE_TTL_S = 120.0
 _LEGACY_PID_FILE = re.compile(r"^blender_mcp_uuid_(\d+)\.txt$")
+
+
+def _instance_start() -> Optional[float]:
+    """Epoch seconds when this OS or container instance started, or None.
+
+    Taken from pid 1's start time: inside a container pid 1 is the
+    container's init, so this is the container start; on a host it is
+    boot. A lease last written before this moment belongs to a previous
+    boot, restart or recreate and cannot be held by a live process now.
+    Linux only; elsewhere returns None and the rule is skipped.
+    """
+    try:
+        with open("/proc/stat") as f:
+            btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+        with open("/proc/1/stat") as f:
+            # comm (field 2) may contain spaces, so split after its closing paren.
+            fields = f.read().rsplit(")", 1)[1].split()
+        start_ticks = int(fields[19])  # field 22 overall: starttime
+        return btime + start_ticks / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        return None
+
+
+def _pid_is_blender(pid: int) -> bool:
+    """On Linux, whether pid's process name looks like Blender. True elsewhere
+    (no cheap check), so this only ever narrows _pid_alive, never widens it."""
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            return "blender" in f.read().lower()
+    except FileNotFoundError:
+        return not os.path.isdir("/proc")
+    except OSError:
+        return True
 
 
 def _pid_alive(pid: int) -> bool:
@@ -102,11 +139,12 @@ class StickyUUIDManager:
 
     def _claim_slot(self, config_dir: str) -> str:
         me = f"{os.getpid()}@{socket.gethostname()}"
+        instance_start = _instance_start()
         for slot in range(MAX_SLOTS):
             uuid_path = self._slot_file(config_dir, slot)
             lease = uuid_path + ".lease"
             holder = self._read(lease)
-            if holder and holder != me and self._holder_alive(holder):
+            if holder and holder != me and self._lease_held(lease, holder, instance_start):
                 continue
             # Write-then-replace, then re-read: if two Blenders race for the
             # same free slot, the last writer wins and the other moves on.
@@ -119,21 +157,44 @@ class StickyUUIDManager:
                 print(f"[BlenderMCP] Could not write identity lease {lease}: {e}")
                 return uuid_path
             if self._read(lease) == me:
+                self.lease_file = lease
                 return uuid_path
         # Every slot held by a live process: fall back to a per-process file.
         return os.path.join(config_dir, f"blender_mcp_uuid_slot_pid{os.getpid()}.txt")
 
     @staticmethod
-    def _holder_alive(holder: str) -> bool:
+    def _lease_held(lease: str, holder: str, instance_start: Optional[float]) -> bool:
+        """Whether another live Blender holds this lease.
+
+        Written before this OS/container instance started: stale (covers
+        container recreate, restart, and small pids repeating). Same host:
+        held iff the pid is alive and is Blender. Other host (a config dir
+        shared between machines): held iff refreshed within the TTL, since
+        its pids can't be checked from here.
+        """
+        try:
+            mtime = os.path.getmtime(lease)
+        except OSError:
+            return False
+        if instance_start is not None and mtime < instance_start:
+            return False
         pid_s, _, host = holder.partition("@")
         if host and host != socket.gethostname():
-            # Config dir shared with another machine: can't check its pids,
-            # so treat the lease as held rather than steal a live identity.
-            return True
+            return (time.time() - mtime) < FOREIGN_LEASE_TTL_S
         try:
-            return _pid_alive(int(pid_s))
+            pid = int(pid_s)
         except ValueError:
             return False
+        return _pid_alive(pid) and _pid_is_blender(pid)
+
+    def refresh(self) -> None:
+        """Touch our lease so other hosts sharing the config see it as live."""
+        lease = getattr(self, "lease_file", None)
+        if lease:
+            try:
+                os.utime(lease, None)
+            except OSError:
+                pass
 
     @staticmethod
     def _remove_stale_pid_files(config_dir: str) -> None:

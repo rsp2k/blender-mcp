@@ -99,10 +99,12 @@ def start_client() -> tuple[bool, str]:
                 expires_at = int(prefs.jwt_expires_at)
             except ValueError:
                 pass
+        if state._identity is None:
+            state._identity = StickyUUIDManager()
         state._client = BlenderMCPClient(
             server_url=get_server_base_url(prefs),
             jwt_token=prefs.jwt_token,
-            client_uuid=StickyUUIDManager().get_client_id(),
+            client_uuid=state._identity.get_client_id(),
             executor=state._executor,
             refresh_token=prefs.refresh_token,
             jwt_expires_at=expires_at,
@@ -238,6 +240,8 @@ class ConnectionSupervisor:
             self._evaluate()
         except Exception as e:
             print(f"[BlenderMCP] Connection supervisor error (non-fatal): {e}")
+        if state._identity is not None:
+            state._identity.refresh()
         # While waiting out a restart backoff the panel shows a countdown,
         # so tick (and redraw) every second instead of every ten.
         if self._last_decision == BACKOFF:
