@@ -255,13 +255,38 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         col = layout.column(align=True)
         col.label(text="Connection", icon='NETWORK_DRIVE')
 
-        if not scene.blendermcp_server_running:
-            col.operator("blendermcp.start_server", text="Connect", icon='PLAY')
-        else:
-            col.operator("blendermcp.stop_server", text="Disconnect", icon='PAUSE')
+        # One switch for intent: pressed = stay connected (connect now,
+        # reconnect with backoff, connect on next start); released = off.
+        # Status below is derived from the live client, never from the
+        # Scene flag, which serializes into .blend files.
+        from .. import connection
+
+        armed = prefs.auto_connect
+        col.prop(
+            prefs, "auto_connect",
+            text="Stay connected" if armed else "Connect",
+            toggle=True,
+            icon='LINKED' if armed else 'UNLINKED',
+        )
+        alive = connection.client_alive(client)
+
+        if not armed:
+            col.label(text="Status: Disconnected", icon='CANCEL')
+        elif not prefs.jwt_token:
+            col.label(text="Status: Log in to connect", icon='INFO')
+        elif not alive:
+            wait = connection.supervisor().seconds_until_next_attempt()
+            row = col.row(align=True)
+            if wait:
+                row.label(text=f"Status: Retrying in {int(wait)}s", icon='TIME')
+            else:
+                row.label(text="Status: Starting...", icon='TIME')
+            row.operator("blendermcp.reconnect_now", text="Now", icon='FILE_REFRESH')
+            if client is not None and client.last_error:
+                col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
 
         # --- Status (live) — identity row above already shows label + uuid.
-        if client:
+        if client and alive:
             if client.connected:
                 col.label(text="Status: Connected", icon='CHECKMARK')
                 with client.queue_lock:

@@ -17,12 +17,8 @@ import requests  # for catching requests.exceptions.RequestException
 
 from .. import state
 from ..auth import OAuthError, logout, oauth_login
-from ..client import BlenderMCPClient
-from ..client.bus_client import FASTMCP_AVAILABLE
 from ..client.job_reporter import submit_force_release_control, submit_job_update
 from ..constants import RODIN_FREE_TRIAL_KEY
-from ..executor import BlenderCommandExecutor
-from ..identity import StickyUUIDManager
 from ..preferences import get_client_label, get_prefs, get_server_base_url
 
 
@@ -204,35 +200,27 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             )
 
             # CRITICAL: tear down any existing client BEFORE auto-Connect.
-            # BlenderMCPClient captures jwt_token as an instance attribute at
-            # construction time; an existing state._client carries the OLD
-            # token and start_server() reuses it (per ``if state._client is
-            # None``). So re-Login without nuking the client would attempt
-            # to connect with the stale JWT, hit 401, and bounce right back
-            # to the fatal-error banner — making the Re-login button look
-            # broken. Stop + None forces start_server to build a fresh
-            # BlenderMCPClient with the newly-persisted prefs.jwt_token.
-            if state._client is not None:
-                try:
-                    state._client.stop()
-                except Exception as exc:
-                    print(f"[BlenderMCP] Error stopping stale client pre-Connect: {exc}")
-                state._client = None
-            try:
-                bpy.context.scene.blendermcp_server_running = False
-            except Exception:
-                pass
+            # BlenderMCPClient captures jwt_token at construction time, and
+            # start_client() reuses a live client, so without this a re-Login
+            # would reconnect with the stale JWT, hit 401 and bounce back to
+            # the fatal-error banner. stop_client() drops it so a fresh one
+            # is built from the newly persisted prefs.jwt_token.
+            from .. import connection
 
-            # Auto-Connect: nobody logs in WITHOUT wanting to connect, and the
-            # two-click sequence (Login → wait → Connect) was just friction.
-            # Use EXEC_DEFAULT (not INVOKE_DEFAULT) — no UI prompts needed,
-            # the operator's execute() reads everything from prefs.
-            try:
-                bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
-            except RuntimeError as exc:
-                # Operator poll() or context-mismatch failure — leave the
-                # user a manual Connect button as fallback.
-                print(f"[BlenderMCP] Auto-Connect failed: {exc} — click Connect manually")
+            connection.stop_client()
+
+            # Logging in means wanting to connect: arm Stay connected and
+            # start now. Called directly rather than via bpy.ops, which can
+            # fail its context checks from inside a timer.
+            connection.supervisor().reset_backoff()
+            connection.set_armed(True)
+            if not connection.client_alive(state._client):
+                try:
+                    ok, message = connection.start_client()
+                    if not ok:
+                        print(f"[BlenderMCP] Auto-Connect after login: {message}")
+                except Exception as exc:
+                    print(f"[BlenderMCP] Auto-Connect after login failed: {exc}")
             return None  # unregister timer
 
         bpy.app.timers.register(_poll, first_interval=0.5)
@@ -254,18 +242,14 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
     bl_description = "Disconnect, invalidate server-side refresh tokens, clear local JWT"
 
     def execute(self, context):
+        from .. import connection
+
         prefs = get_prefs(context)
-        scene = context.scene
         base_url = get_server_base_url(prefs)
 
-        # 1. Disconnect first if connected.
-        if state._client is not None:
-            try:
-                state._client.stop()
-            except Exception:
-                pass
-            state._client = None
-        scene.blendermcp_server_running = False
+        # 1. Disconnect first if connected. Stay connected is left as is:
+        # with no token the supervisor idles, and the next Login reconnects.
+        connection.stop_client()
 
         # 2. Tell the server (best-effort).
         token = prefs.jwt_token
@@ -370,78 +354,53 @@ class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
 
 
 class BLENDERMCP_OT_StartServer(bpy.types.Operator):
-    """Connect to the BlenderMCP server's _message_bus channel."""
+    """Turn on Stay connected and connect now."""
 
     bl_idname = "blendermcp.start_server"
     bl_label = "Connect to BlenderMCP Server"
-    bl_description = "Connect to the BlenderMCP server's _message_bus channel"
+    bl_description = (
+        "Stay connected: connect now, reconnect with backoff whenever the "
+        "connection drops, and connect again on the next Blender start"
+    )
 
     def execute(self, context):
-        scene = context.scene
-        prefs = get_prefs(context)
+        from .. import connection
 
-        if not FASTMCP_AVAILABLE:
-            self.report(
-                {'ERROR'},
-                "fastmcp not installed. Run: <blender_python> -m pip install fastmcp",
-            )
-            return {'CANCELLED'}
-
-        if not prefs.jwt_token:
-            self.report({'ERROR'}, "Not logged in. Click Login in prefs first to obtain a JWT.")
-            return {'CANCELLED'}
-
-        base_url = get_server_base_url(prefs)
-
+        connection.supervisor().reset_backoff()
+        connection.set_armed(True)
+        if connection.client_alive(state._client):
+            self.report({'INFO'}, "Connected (Stay connected is on)")
+            return {'FINISHED'}
         try:
-            if state._executor is None:
-                state._executor = BlenderCommandExecutor()
-
-            if state._client is None:
-                uuid_mgr = StickyUUIDManager()
-                expires_at = 0
-                if prefs.jwt_expires_at:
-                    try:
-                        expires_at = int(prefs.jwt_expires_at)
-                    except ValueError:
-                        pass
-                state._client = BlenderMCPClient(
-                    server_url=base_url,
-                    jwt_token=prefs.jwt_token,
-                    client_uuid=uuid_mgr.get_client_id(),
-                    executor=state._executor,
-                    refresh_token=prefs.refresh_token,
-                    jwt_expires_at=expires_at,
-                    label=get_client_label(prefs),
-                    bus_id=prefs.default_bus_id or None,
-                )
-                scene.blendermcp_client_id = state._client.client_uuid
-
-            state._client.start()
-            scene.blendermcp_server_running = True
-            self.report({'INFO'}, f"Connecting as {scene.blendermcp_client_id}")
+            ok, message = connection.start_client()
         except Exception as e:
             self.report({'ERROR'}, f"Failed to start client: {e}")
             traceback.print_exc()
             return {'CANCELLED'}
-
+        # Not logged in / no fastmcp: intent stays armed, so it connects
+        # once the problem is fixed.
+        self.report({'INFO'} if ok else {'WARNING'}, message)
         return {'FINISHED'}
 
 
 class BLENDERMCP_OT_StopServer(bpy.types.Operator):
-    """Disconnect from the MCP message bus."""
+    """Turn off Stay connected and disconnect."""
 
     bl_idname = "blendermcp.stop_server"
     bl_label = "Disconnect from BlenderMCP Server"
-    bl_description = "Disconnect from the MCP message bus"
+    bl_description = (
+        "Disconnect and stop reconnecting. Stays off across Blender "
+        "restarts until you click Connect"
+    )
 
     def execute(self, context):
-        scene = context.scene
+        from .. import connection
+
         try:
-            if state._client is not None:
-                state._client.stop()
-                state._client = None
-            scene.blendermcp_server_running = False
+            connection.set_armed(False)
+            # set_armed stops via the prefs update callback; stop here too in
+            # case intent was already off but a client was still running.
+            connection.stop_client()
             self.report({'INFO'}, "Disconnected")
         except Exception as e:
             self.report({'ERROR'}, f"Error during disconnect: {e}")
@@ -470,18 +429,19 @@ class BLENDERMCP_OT_ReconnectNow(bpy.types.Operator):
     )
 
     def execute(self, context):
-        # Reuse the existing operator bodies rather than duplicating
-        # their logic — stop_server handles the client stop + null,
-        # start_server handles the fresh BlenderMCPClient construction
-        # + start (backoff resets to 1s because it's a fresh client).
+        # Not via stop_server: that turns Stay connected off. A fresh client
+        # starts with its internal backoff back at 1s.
+        from .. import connection
+
         try:
-            bpy.ops.blendermcp.stop_server('EXEC_DEFAULT')
-            bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
+            connection.stop_client()
+            connection.supervisor().reset_backoff()
+            ok, message = connection.start_client()
         except Exception as e:
             self.report({'ERROR'}, f"Reconnect failed: {e}")
             traceback.print_exc()
             return {'CANCELLED'}
-        self.report({'INFO'}, "Reconnecting")
+        self.report({'INFO'} if ok else {'WARNING'}, "Reconnecting" if ok else message)
         return {'FINISHED'}
 
 

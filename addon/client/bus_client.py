@@ -148,6 +148,9 @@ class BlenderMCPClient:
         # sleep window.
         self.reconnect_attempt = 0
         self.next_retry_at: Optional[float] = None
+        # True once this client has registered at least once. The connection
+        # supervisor uses it to tell a failed start from a run that ended.
+        self.ever_connected = False
         # Set by _refresh_watcher to signal that _run should tear down the
         # current FastMCP Client and reopen with the rotated JWT. Cleared
         # after reconnect completes.
@@ -466,6 +469,10 @@ class BlenderMCPClient:
             print(f"[BlenderMCP] {self.last_error}")
             traceback.print_exc()
         finally:
+            # Whatever ended the loop, this client is done; clear the flags so
+            # the panel and the connection supervisor don't see it as alive.
+            self.running = False
+            self.connected = False
             try:
                 self.loop.close()
             except Exception:
@@ -525,6 +532,7 @@ class BlenderMCPClient:
                                 "blender_register_client", reg_args
                             )
                             self.connected = True
+                            self.ever_connected = True
                             backoff = 1.0  # successful registration → reset backoff
                             self.reconnect_attempt = 0
                             self.next_retry_at = None

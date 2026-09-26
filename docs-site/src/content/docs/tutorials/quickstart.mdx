@@ -68,10 +68,9 @@ End-to-end: auth → connect → call a dispatch tool. You don't need to run a s
    <TabItem label="From the addon UI">
    - Install `addon.py` from this repo: Edit → Preferences → Add-ons → Install
    - In the BlenderMCP panel (sidebar `N`): set Server URL to `https://mcp.blender.bet/`
-   - Click **Login** — same browser-based PKCE flow
-   - Click **Connect**
+   - Click **Login** — same browser-based PKCE flow. The addon connects on its own once you're logged in.
 
-   Status pill should turn green with the client UUID displayed.
+   Status should read Connected with the client UUID displayed. The **Stay connected** switch under Connection is on by default: the addon connects at every Blender start and after File > Open, and reconnects with backoff when the connection drops. Switch it off to disconnect; it stays off across restarts until you switch it back on.
    </TabItem>
    <TabItem label="From a stub (no Blender)">
    For testing the flow without installing the addon, use the bundled stub:
