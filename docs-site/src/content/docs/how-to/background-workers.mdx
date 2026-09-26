@@ -56,9 +56,34 @@ A job on the user's Blender holds its main thread, so a multi-minute rebuild fre
 
    The user's sidebar shows a **Background result ready** banner with **Reload** and **Dismiss**. Nothing is loaded until they click Reload. If they have unsaved changes, the banner warns that reloading discards them.
 
+   If the user has kept working while the worker ran, offer only the collections the job changed instead, so their other edits survive (see [Merging collections](#merging-collections-instead-of-reloading)).
+
 5. **Stop the worker** with `blender_stop_worker(worker_uuid)` once you're done with it.
 
 </Steps>
+
+## Merging collections instead of reloading
+
+A reload replaces the whole scene with the worker's file, including anything the user changed after the snapshot was taken. When the job only rebuilt part of the scene, merge just those collections:
+
+```
+blender_offer_merge(path=".../attic.blend", collections=["Attic", "Roof"],
+                    message="attic rebuild finished")
+```
+
+The banner reads **Background result ready**, names the collections, and offers **Merge** and **Dismiss**. Nothing changes until the user clicks Merge. Then, for each named collection:
+
+- The collection is appended from the result file and linked in the same place as the live collection of the same name (the same parent collection), then the old one is deleted along with objects that lived only in it. Objects the old collection shared with other collections are kept, only unlinked. The new collection takes the old name back, and names Blender suffixed during the append (`Beam.001`) are restored.
+- A collection that doesn't exist in the live scene is added under the scene's top-level collection.
+- A collection missing from the result file is skipped and reported; nothing is deleted for it.
+- Meshes and materials that only the deleted objects used are removed. Other unused data the user already had is left alone.
+- If the append itself fails, everything it brought in is removed again and the scene is unchanged.
+
+`mode="add"` brings the collections in alongside the existing ones without deleting anything; Blender's `.001` suffix stays on any clashing name.
+
+Check what happened with `blender_get_merge_result()`. `pending` is set while the banner waits for an answer; `last_result` lists what was replaced, added or skipped with object counts, or `dismissed: true`.
+
+Edits the user made inside a replaced collection are lost, since that collection is swapped for the worker's version. Everything outside the named collections is kept.
 
 ## How workers behave
 
