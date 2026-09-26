@@ -85,60 +85,6 @@ _LEGACY_SCENE_PROPS = (
 )
 
 
-def _try_autoconnect() -> None:
-    """Invoke start_server if credentials are stored and we're not
-    already running. Called from a scheduled timer at register-time
-    and from the load_post handler.
-
-    Failures are silent: if credentials are stale, the normal reconnect
-    + auth-fatal path will handle it and surface a Re-login banner.
-    Each early-return prints its reason so a user diagnosing "why
-    didn't it connect" has a paper trail in the console.
-    """
-    import bpy
-
-    from . import state
-    from .preferences import get_prefs
-
-    try:
-        prefs = get_prefs()
-        if not prefs.jwt_token:
-            print("[BlenderMCP] Auto-reconnect skipped: no stored jwt_token (Login first).")
-            return
-        # Only the CLIENT state is authoritative for "already connected".
-        # scene.blendermcp_server_running is a Scene property that gets
-        # saved into .blend files (including startup.blend). A user who
-        # ever saved a scene while connected has that flag stuck at True
-        # on every subsequent open — checking it here would silently skip
-        # every startup autoconnect. Trust the live client instead; the
-        # flag is a UI hint, not a source of truth. Verified in 1.5.27
-        # where this exact check was blocking autoconnect for users with
-        # a saved startup.blend.
-        if state._client is not None and getattr(state._client, "running", False):
-            print("[BlenderMCP] Auto-reconnect skipped: client already running.")
-            return
-        print("[BlenderMCP] Auto-reconnect: stored auth present, invoking Connect")
-        bpy.ops.blendermcp.start_server('EXEC_DEFAULT')
-    except Exception as e:
-        print(f"[BlenderMCP] Auto-reconnect failed (non-fatal): {e}")
-
-
-def _schedule_autoconnect() -> None:
-    """Register a one-shot timer that runs _try_autoconnect ~2s after
-    addon register. Delay lets Blender finish scene load before the
-    first register_client fires."""
-    import bpy
-
-    def _tick():
-        _try_autoconnect()
-        return None  # one-shot; return None unregisters the timer
-
-    try:
-        bpy.app.timers.register(_tick, first_interval=2.0)
-    except Exception as e:
-        print(f"[BlenderMCP] Could not schedule autoconnect timer: {e}")
-
-
 def _on_blend_load_post(_dummy):
     """Persistent handler: fires on every .blend file open.
 
@@ -149,16 +95,14 @@ def _on_blend_load_post(_dummy):
        synchronously inside wm.open_mainfile, so when a bus job opens a
        file, tearing the client down here dropped that job's reply and
        the caller timed out after 60 s even though the load took ~2 s.
-    2. If we have credentials but no live client, this is the auto-
-       reconnect entry point for "reopen Blender" (register()'s timer
-       covers process startup; this handler covers File > Open cases
-       inside a running Blender). Same _try_autoconnect logic.
+    2. Otherwise let the connection supervisor decide now rather than on
+       its next tick (connects if Stay connected is on and logged in).
     """
-    from . import state
+    from . import connection, state
 
     try:
         client = state._client
-        if client is not None and getattr(client, "running", False):
+        if connection.client_alive(client):
             # Timer is persistent now; this only matters for a client
             # started by an older addon build still in memory.
             client.ensure_drain_timer()
@@ -166,7 +110,7 @@ def _on_blend_load_post(_dummy):
                 print("[BlenderMCP] .blend loaded while not yet registered; "
                       "metadata goes out with the pending register")
         else:
-            _try_autoconnect()
+            connection.supervisor().check_now()
     except Exception as e:
         print(f"[BlenderMCP] load_post handler failed (non-fatal): {e}")
 
@@ -269,12 +213,14 @@ def register():
     # persistent so Blender doesn't drop it after the first .blend load.
     _install_lifecycle_handlers()
 
-    # Auto-reconnect on Blender startup: schedule a one-shot timer that
-    # invokes start_server if we have credentials AND aren't already
-    # running. Delay of 2s lets Blender finish loading the initial
-    # scene before the client fires its first register_client. Avoids
-    # "click Connect after every restart" friction for the common case.
-    _schedule_autoconnect()
+    # Stay connected: a persistent timer that connects ~2s after startup
+    # (once the initial scene has loaded) and keeps a client alive while
+    # prefs.auto_connect is on and a token is stored.
+    from . import connection
+    try:
+        connection.supervisor().install()
+    except Exception as e:
+        print(f"[BlenderMCP] Could not start connection supervisor: {e}")
 
     print(f"[BlenderMCP] Addon v{__version__} registered")
     if not FASTMCP_AVAILABLE:
@@ -290,9 +236,12 @@ def unregister():
     from .preferences import BlenderMCPPreferences
     from .ui import CLASSES as _CLASSES
 
-    # Remove our load_post handler first so nothing fires against
-    # torn-down state during unregister.
+    # Remove our load_post handler and the supervisor timer first so
+    # nothing fires against torn-down state during unregister.
     _uninstall_lifecycle_handlers()
+    if state._supervisor is not None:
+        state._supervisor.uninstall()
+        state._supervisor = None
 
     # Stop any running client; state owns the singletons since phase 6.
     if state._client is not None:

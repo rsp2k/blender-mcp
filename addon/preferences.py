@@ -125,6 +125,17 @@ def get_server_base_url(prefs: Optional["BlenderMCPPreferences"] = None) -> str:
 EXTENSION_PKG_ID = "blender_mcp"
 
 
+def _on_auto_connect_changed(self, _context):
+    """Persist the new intent and act on it right away (runs on main thread)."""
+    from . import connection
+
+    persist_prefs()
+    if self.auto_connect:
+        connection.supervisor().poke()
+    else:
+        connection.stop_client()
+
+
 def find_update_repo():
     """Return ``(repo_index, repo)`` for the remote repo this addon was
     installed from, or ``None`` when one-click update isn't possible.
@@ -270,6 +281,16 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
             "you need an explicit scheme (e.g. http://localhost:8000)."
         ),
         default=DEFAULT_SERVER_HOSTNAME,
+    )
+    auto_connect: BoolProperty(
+        name="Stay connected",
+        description=(
+            "Keep this Blender connected to the bus: connect on startup and "
+            "after File > Open, and retry with backoff whenever the "
+            "connection drops, until you switch this off"
+        ),
+        default=True,
+        update=_on_auto_connect_changed,
     )
     client_label: StringProperty(
         name="Client label",

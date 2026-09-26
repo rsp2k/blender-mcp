@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 _client: Optional["BlenderMCPClient"] = None
 _executor: Optional["BlenderCommandExecutor"] = None
+# addon.connection.ConnectionSupervisor, created on first use.
+_supervisor = None
 
 # Phase I7: cached list of buses the user is a member of (populated by
 # BLENDERMCP_OT_RefreshBuses, read by the sidebar panel to render the bus
