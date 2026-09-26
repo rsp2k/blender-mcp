@@ -57,6 +57,13 @@ async def handle_message(client: "BlenderMCPClient", message: Any) -> None:
             except json.JSONDecodeError:
                 return
 
+        # Anything on the bus logger proves the event stream is alive; the
+        # heartbeat's stream watchdog reads this.
+        client.last_stream_message_at = time.monotonic()
+        payload = data.get("payload", data) if isinstance(data, dict) else {}
+        if isinstance(payload, dict) and payload.get("message_type") == "bus_keepalive":
+            return
+
         level = str(_extract(params, "level") or "info").lower()
         priority = LOG_LEVEL_TO_PRIORITY.get(level, 6)
         enqueue_job(client, priority, data)
@@ -76,8 +83,73 @@ def enqueue_job(client: "BlenderMCPClient", priority: int, log_data: dict) -> No
         if not target or target == getattr(client, "client_uuid", None):
             cancel_queued_job(client, payload.get("job_id"))
         return
+    job_id = payload.get("job_id") if isinstance(payload, dict) else None
     with client.queue_lock:
+        # The same dispatch can arrive twice: once by notification and once
+        # by the pull fallback (or a late notification after a pull).
+        if job_id and not remember_job(client, job_id):
+            return
         heapq.heappush(client.job_queue, (priority, time.time(), log_data))
+
+
+SEEN_JOBS_MAX = 2000
+
+
+def remember_job(client: "BlenderMCPClient", job_id: str) -> bool:
+    """Record job_id as seen. False if it was already seen. Caller holds queue_lock."""
+    seen = getattr(client, "_seen_job_ids", None)
+    if seen is None:
+        from collections import OrderedDict
+        seen = OrderedDict()
+        client._seen_job_ids = seen
+    if job_id in seen:
+        return False
+    seen[job_id] = None
+    while len(seen) > SEEN_JOBS_MAX:
+        seen.popitem(last=False)
+    return True
+
+
+def held_job_ids(client: "BlenderMCPClient") -> list[str]:
+    """Job ids currently waiting in the queue (not yet started)."""
+    with client.queue_lock:
+        return [
+            jid for jid in (
+                (item[2].get("payload", item[2]) or {}).get("job_id") for item in client.job_queue
+            ) if jid
+        ]
+
+
+def enqueue_pulled(client: "BlenderMCPClient", dispatches: list[dict], bus_id: str) -> int:
+    """Queue dispatches recovered by the pull fallback. Returns how many were new."""
+    added = 0
+    for d in dispatches or []:
+        job_id = d.get("job_id")
+        command = d.get("command")
+        if not job_id or not command:
+            continue
+        log_data = {
+            "bus_id": bus_id,
+            "from_uuid": f"server-dispatch:{bus_id}",
+            "target_uuid": getattr(client, "client_uuid", None),
+            "routing": {"type": "direct", "target_uuid": getattr(client, "client_uuid", None)},
+            "payload": {
+                "message_type": "command_dispatch",
+                "job_id": job_id,
+                "command": command,
+                "params": d.get("params") or {},
+            },
+            "job_id": job_id,
+            "message_id": f"pull-{job_id}",
+            "priority": 6,
+            "timestamp": time.time(),
+        }
+        with client.queue_lock:
+            if not remember_job(client, job_id):
+                continue
+            heapq.heappush(client.job_queue, (6, time.time(), log_data))
+        added += 1
+    return added
 
 
 def cancel_queued_job(client: "BlenderMCPClient", job_id) -> bool:
