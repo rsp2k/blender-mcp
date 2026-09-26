@@ -5,5 +5,5 @@ A simple grep test in CI (or a `make check-version` target) can confirm
 this string matches the rest of the project.
 """
 
-__version__ = "2026.926.13"
+__version__ = "2026.926.14"
 tuple_version = tuple(int(p) for p in __version__.split("."))
