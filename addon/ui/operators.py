@@ -1071,3 +1071,63 @@ class BLENDERMCP_OT_DismissWorkerResult(bpy.types.Operator):
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
         return {'FINISHED'}
+
+
+class BLENDERMCP_OT_MergeWorkerResult(bpy.types.Operator):
+    """Replace (or add) the offered collections from a background result."""
+
+    bl_idname = "blendermcp.merge_worker_result"
+    bl_label = "Merge background result"
+    bl_description = (
+        "Bring the named collections in from the background result, replacing "
+        "the ones with the same names. Everything else in the scene is kept"
+    )
+
+    def execute(self, context):
+        # An append doesn't reload the file or unregister this addon, so it
+        # can run here directly (unlike Reload, which defers to a timer).
+        from ..worker_merge import merge_collections
+
+        pending = state._pending_merge
+        if not pending:
+            return {'CANCELLED'}
+        state._pending_merge = None
+        try:
+            result = merge_collections(pending["path"], pending["collections"],
+                                       pending.get("mode", "replace"))
+        except Exception as e:
+            result = {"ok": False, "error": str(e), "path": pending.get("path")}
+        state._last_merge_result = result
+        if result.get("ok"):
+            done = [e["name"] for e in result.get("replaced", []) + result.get("added", [])]
+            skipped = [s["name"] for s in result.get("skipped", [])]
+            msg = f"Merged {', '.join(done) or 'nothing'}"
+            if skipped:
+                msg += f"; skipped {', '.join(skipped)}"
+            self.report({'INFO'}, msg)
+        else:
+            self.report({'ERROR'}, f"Merge failed, scene unchanged: {result.get('error')}")
+        for area in getattr(context.screen, "areas", []):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DismissWorkerMerge(bpy.types.Operator):
+    """Dismiss the merge offer without changing the scene."""
+
+    bl_idname = "blendermcp.dismiss_worker_merge"
+    bl_label = "Dismiss merge offer"
+    bl_description = "Keep the current collections; the result file stays on disk"
+
+    def execute(self, context):
+        pending = state._pending_merge
+        state._pending_merge = None
+        if pending:
+            state._last_merge_result = {"ok": False, "dismissed": True,
+                                        "path": pending.get("path"),
+                                        "collections": pending.get("collections")}
+        for area in getattr(context.screen, "areas", []):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        return {'FINISHED'}

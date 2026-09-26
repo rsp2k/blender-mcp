@@ -600,6 +600,11 @@ import bpy
 for i in range(10):
     time.sleep(2)
     report_progress((i + 1) / 10, f"step {i + 1}/10")
+coll = bpy.data.collections.new("CanaryMerge")
+bpy.context.scene.collection.children.link(coll)
+me = bpy.data.meshes.new("CanaryMergeMesh")
+me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+coll.objects.link(bpy.data.objects.new("CanaryMergeObj", me))
 out = os.path.join(os.path.dirname(bpy.data.filepath), "canary_result.blend")
 bpy.ops.wm.save_as_mainfile(filepath=out, copy=True)
 print("RESULT " + out)
@@ -624,6 +629,74 @@ print({MARK!r} + json.dumps({{
     'pending_reload': pending,
 }}))
 """
+
+
+# Does what the Merge button does (buttons can't be clicked remotely), checks
+# the collection landed, then removes it again so the scene is left as found.
+APPLY_MERGE = f"""
+import sys, json
+import bpy
+st = sys.modules.get({PKG_MODULE!r} + '.state')
+wm = sys.modules.get({PKG_MODULE!r} + '.worker_merge')
+pending = getattr(st, '_pending_merge', None)
+out = {{'had_pending': bool(pending), 'has_module': wm is not None}}
+if pending and wm is not None:
+    st._pending_merge = None
+    res = wm.merge_collections(pending['path'], pending['collections'], pending.get('mode', 'replace'))
+    st._last_merge_result = res
+    coll = bpy.data.collections.get('CanaryMerge')
+    out['ok'] = res.get('ok')
+    out['objects'] = sorted(o.name for o in coll.objects) if coll else None
+    out['in_scene'] = coll is not None and 'CanaryMerge' in bpy.context.scene.collection.children
+print({MARK!r} + json.dumps(out))
+"""
+
+CLEANUP_MERGE = f"""
+import sys, json
+import bpy
+coll = bpy.data.collections.get('CanaryMerge')
+if coll:
+    for ob in list(coll.objects):
+        data = ob.data
+        bpy.data.objects.remove(ob, do_unlink=True)
+        if data is not None and data.users == 0:
+            bpy.data.meshes.remove(data)
+    bpy.data.collections.remove(coll)
+st = sys.modules.get({PKG_MODULE!r} + '.state')
+if st is not None:
+    st._pending_merge = None
+print({MARK!r} + json.dumps({{'cleaned': True}}))
+"""
+
+
+async def check_merge(ctx: Ctx, result_path: str) -> str:
+    """Offer, apply and verify a per-collection merge. Returns a note for the
+    PASS line, or raises AssertionError with the reason."""
+    if not await has_tool(ctx, "blender_offer_merge"):
+        return "merge skipped (server predates blender_offer_merge)"
+    offer = await call(ctx, "blender_offer_merge", {
+        "path": result_path, "collections": ["CanaryMerge"], "mode": "replace",
+        "message": "canary merge", "target_uuid": ctx.uuid,
+    })
+    if isinstance(offer, dict) and "unknown command" in str(offer).lower():
+        return "merge skipped (addon predates offer_merge)"
+    if not isinstance(offer, dict) or offer.get("status") != "completed":
+        raise AssertionError(f"offer_merge failed: {str(offer)[:300]}")
+    try:
+        applied = await run_code(ctx, APPLY_MERGE)
+        if not applied.get("has_module"):
+            return "merge skipped (addon predates worker_merge)"
+        if not (applied.get("ok") and applied.get("in_scene")
+                and applied.get("objects") == ["CanaryMergeObj"]):
+            raise AssertionError(f"merge didn't land: {applied}")
+        got = await call(ctx, "blender_get_merge_result", {"target_uuid": ctx.uuid})
+        report = json.loads(got.get("result") or "{}") if isinstance(got, dict) else {}
+        last = report.get("last_result") or {}
+        if not last.get("ok") or not (last.get("replaced") or last.get("added")):
+            raise AssertionError(f"get_merge_result didn't report the merge: {str(got)[:300]}")
+    finally:
+        await run_code(ctx, CLEANUP_MERGE)
+    return "merged CanaryMerge into the live scene and removed it again"
 
 
 CLEAR_RELOAD = f"""
@@ -759,6 +832,10 @@ async def s_worker(ctx: Ctx):
         if (st.get("pending_reload") or {}).get("path") != result_path:
             return "FAIL", f"banner state not set: {st}"
         await run_code(ctx, CLEAR_RELOAD)
+        try:
+            merge_note = await check_merge(ctx, result_path)
+        except AssertionError as e:
+            return "FAIL", str(e)
     finally:
         stop = await call(ctx, "blender_stop_worker", {"worker_uuid": worker_uuid}, timeout=90)
 
@@ -772,8 +849,8 @@ async def s_worker(ctx: Ctx):
         return "FAIL", f"worker process survived stop: {st}"
     return "PASS", (f"spawned {worker_uuid} in {spawned_in:.0f}s; GUI answered in {gui_s:.1f}s "
                     f"mid-job; progress {progress_seen.get('fraction')} "
-                    f"'{progress_seen.get('message')}'; result offered; stopped "
-                    f"({stop.get('how')}), process gone")
+                    f"'{progress_seen.get('message')}'; result offered; {merge_note}; "
+                    f"stopped ({stop.get('how')}), process gone")
 
 
 async def s_token_boundary(ctx: Ctx):
