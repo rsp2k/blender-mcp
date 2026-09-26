@@ -183,7 +183,7 @@ def register():
     _line_buffer_stdout()
 
     from . import state  # noqa: F401  (re-imported here to make the symbol exist on `addon`)
-    from .client.bus_client import FASTMCP_AVAILABLE
+    from .client.bus_client import ensure_fastmcp, fastmcp_problem_lines
     from .preferences import BlenderMCPPreferences, migrate_from_scene
     from .ui import CLASSES as _CLASSES
 
@@ -244,9 +244,9 @@ def register():
         print(f"[BlenderMCP] Could not start connection supervisor: {e}")
 
     print(f"[BlenderMCP] Addon v{__version__} registered")
-    if not FASTMCP_AVAILABLE:
-        print("[BlenderMCP] WARNING: fastmcp not installed.")
-        print("[BlenderMCP]   Install with: <blender_python> -m pip install fastmcp")
+    if not ensure_fastmcp(force=True):
+        for line in fastmcp_problem_lines():
+            print(f"[BlenderMCP] {line}")
 
 
 def unregister():

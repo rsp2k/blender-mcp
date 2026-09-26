@@ -18,7 +18,7 @@ import bpy
 
 from .. import state
 from .._version import __version__
-from ..client.bus_client import FASTMCP_AVAILABLE
+from ..client import bus_client as _bus_client
 from ..preferences import (
     draw_login_section,
     draw_update_banner,
@@ -119,12 +119,15 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         scene = context.scene
         prefs = get_prefs(context)
 
-        # --- fastmcp install hint (only hard dep that can't be auto-fixed) ---
-        if not FASTMCP_AVAILABLE:
+        # --- fastmcp missing: extension installs need a restart, legacy
+        # single-file installs need a pip install. ensure_fastmcp retries
+        # at most every 30 s, so calling it per draw is cheap.
+        if not _bus_client.ensure_fastmcp():
             box = layout.box()
-            box.label(text="fastmcp not installed", icon='ERROR')
-            box.label(text="In Blender's Python console:")
-            box.label(text="  python -m pip install fastmcp")
+            lines = _bus_client.fastmcp_problem_lines()
+            box.label(text=lines[0], icon='ERROR')
+            for line in lines[1:]:
+                box.label(text=line)
             return  # Everything below depends on fastmcp.
 
         # --- Fatal-error banner — surface auth-fatal failures prominently.

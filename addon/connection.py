@@ -75,13 +75,13 @@ def start_client() -> tuple[bool, str]:
     a restart always picks up the current prefs.jwt_token.
     """
     from .client import BlenderMCPClient
-    from .client.bus_client import FASTMCP_AVAILABLE
+    from .client.bus_client import ensure_fastmcp, fastmcp_problem_lines
     from .executor import BlenderCommandExecutor
     from .identity import StickyUUIDManager
     from .preferences import get_client_label, get_prefs, get_server_base_url
 
-    if not FASTMCP_AVAILABLE:
-        return False, "fastmcp not installed. Run: <blender_python> -m pip install fastmcp"
+    if not ensure_fastmcp():
+        return False, " ".join(fastmcp_problem_lines())
     prefs = get_prefs()
     if not prefs.jwt_token:
         return False, "Not logged in. Click Login first."
