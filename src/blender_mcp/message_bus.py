@@ -94,6 +94,13 @@ class ClientInfo:
     # spawned by one (parent_uuid names the spawner). None = not reported.
     role: Optional[str] = None
     parent_uuid: Optional[str] = None
+    # Job-pump health the addon attaches to its pending_dispatches poll
+    # (~10 s): queue depth, active job and its age, drain timer state.
+    # health_at is when it arrived; reset_pump_requested is consumed by
+    # the next poll reply.
+    health: Optional[dict] = None
+    health_at: Optional[float] = None
+    reset_pump_requested: bool = False
 
     @property
     def is_worker(self) -> bool:
@@ -134,6 +141,10 @@ class ClientInfo:
             "last_seen_seconds_ago": round(self.seen_ago(), 1),
             "stale": self.is_stale(),
         }
+        if self.health is not None and self.health_at is not None:
+            d["health"] = dict(self.health) | {
+                "reported_seconds_ago": round(time.time() - self.health_at, 1),
+            }
         # Advertise the lock only when active so list_available_clients
         # payloads stay small for the common no-lock case.
         if self.lock_is_active():

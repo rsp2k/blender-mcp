@@ -240,6 +240,7 @@ class BlenderJobComponent(MCPMixin):
         self,
         client_uuid: str,
         held_job_ids: list[str] | None = None,
+        health: dict | None = None,
         ctx: Context = None,
     ) -> str:
         """For the Blender addon: dispatches queued for this client that it
@@ -247,9 +248,12 @@ class BlenderJobComponent(MCPMixin):
 
         A fallback for dispatch notifications lost on the event stream; the
         addon polls it and dedupes by job_id. Only the calling session's own
-        registered client can be queried.
+        registered client can be queried. ``health`` carries the addon's
+        job-pump state; the reply may ask it to reset its pump.
         """
         from .bus_tools import _session_from_ctx
 
-        out = await jobs.pending_dispatches(_session_from_ctx(ctx), client_uuid, held_job_ids)
+        out = await jobs.pending_dispatches(
+            _session_from_ctx(ctx), client_uuid, held_job_ids, health=health,
+        )
         return json.dumps(out)
