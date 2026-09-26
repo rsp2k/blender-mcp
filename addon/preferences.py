@@ -122,6 +122,36 @@ def get_server_base_url(prefs: Optional["BlenderMCPPreferences"] = None) -> str:
     return f"{scheme}://{host}"
 
 
+EXTENSION_PKG_ID = "blender_mcp"
+
+
+def find_update_repo():
+    """Return ``(repo_index, repo)`` for the remote repo this addon was
+    installed from, or ``None`` when one-click update isn't possible.
+
+    Extensions import as ``bl_ext.<repo_module>.<pkg_id>``, so the repo is
+    identified by module name rather than by guessing from its URL. That
+    also rules out the two cases where installing from a repo would create
+    a second copy instead of upgrading this one: the legacy single-file
+    addon (not under ``bl_ext``) and "Install from Disk" (lands in a local
+    repo with no remote URL).
+    """
+    parts = (ADDON_PACKAGE_NAME or "").split(".")
+    if len(parts) < 3 or parts[0] != "bl_ext":
+        return None
+    repo_module = parts[1]
+    try:
+        repos = bpy.context.preferences.extensions.repos
+    except AttributeError:
+        return None
+    for i, repo in enumerate(repos):
+        if repo.module == repo_module:
+            if repo.enabled and repo.use_remote_url and repo.remote_url:
+                return i, repo
+            return None
+    return None
+
+
 def draw_update_banner(layout):
     """Draw an "Update available" banner when the server said we're behind.
 
@@ -146,12 +176,14 @@ def draw_update_banner(layout):
         text=f"Addon update available: {_version.__version__} → {latest}",
         icon='FILE_REFRESH',
     )
-    if url:
-        # wm.url_open is Blender's built-in; setting .url on the returned
-        # OperatorProperties is the standard idiom for parameterizing it
-        # from a panel.
+    if find_update_repo() is not None:
+        col.operator("blendermcp.install_update", text="Update now", icon='IMPORT')
+    elif url:
+        # Legacy single-file install or Install from Disk: upgrading through
+        # a repo would add a second copy, so keep the download link.
         op = col.operator("wm.url_open", text="Get the update", icon='URL')
         op.url = url
+        col.label(text="Add the Blender MCP repository for one-click updates", icon='INFO')
 
 
 def draw_login_section(layout, prefs):

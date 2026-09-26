@@ -485,6 +485,59 @@ class BLENDERMCP_OT_ReconnectNow(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BLENDERMCP_OT_InstallUpdate(bpy.types.Operator):
+    """Sync this addon's extension repo and install the newest version.
+
+    Blender's package_install doesn't sync first outside the drag-and-drop
+    path, so it would install whatever version the cached index knew about.
+    The sync is run blocking (a small index.json fetch); the install is
+    invoked non-blocking so the download shows in Blender's status bar.
+    When the install finishes Blender disables and re-enables the addon,
+    and register() auto-reconnects from the persisted token.
+    """
+
+    bl_idname = "blendermcp.install_update"
+    bl_label = "Update Blender MCP"
+    bl_description = "Refresh the extension repository and install the latest Blender MCP"
+
+    def execute(self, context):
+        from ..preferences import EXTENSION_PKG_ID, find_update_repo
+
+        found = find_update_repo()
+        if found is None:
+            self.report({'ERROR'}, "No remote extension repository found for Blender MCP")
+            return {'CANCELLED'}
+        repo_index, repo = found
+
+        if not bpy.app.online_access:
+            # Blender's own dialog explains the setting and can enable it.
+            bpy.ops.extensions.userpref_allow_online_popup('INVOKE_DEFAULT')
+            return {'CANCELLED'}
+
+        try:
+            result = bpy.ops.extensions.repo_sync('EXEC_DEFAULT', repo_index=repo_index)
+        except Exception as e:
+            self.report({'ERROR'}, f"Could not refresh {repo.name}: {e}")
+            return {'CANCELLED'}
+        if 'FINISHED' not in result:
+            self.report({'ERROR'}, f"Could not refresh {repo.name}; see the Extensions panel")
+            return {'CANCELLED'}
+
+        try:
+            bpy.ops.extensions.package_install(
+                'INVOKE_DEFAULT',
+                repo_index=repo_index,
+                pkg_id=EXTENSION_PKG_ID,
+                enable_on_install=True,
+            )
+        except Exception as e:
+            self.report({'ERROR'}, f"Update failed to start: {e}")
+            traceback.print_exc()
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Downloading Blender MCP update")
+        return {'FINISHED'}
+
+
 # ---- Phase I7: bus management operators ---------------------------------
 
 def _api_call(method: str, path: str, prefs, body: dict | None = None) -> dict:
