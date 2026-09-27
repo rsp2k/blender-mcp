@@ -1,0 +1,90 @@
+---
+title: "File and scene tools"
+description: "Save, open and revert .blend files, clear startup leftovers, remove interior faces, and export glTF with a material audit."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Eight tools for working with files and scene state. They take the usual `target_uuid`, `bus_id` and `_timeout` arguments described under [Dispatch tools](/reference/dispatch-tools/#common-parameters). Paths are on the Blender machine.
+
+## Files
+
+### `blender_save_file`
+
+`path` (optional), `copy` (false), `compress` (false), `create_dirs` (false).
+
+Saves to the open file's own path, or to `path`, which then becomes the open file. With `copy`, it writes a copy and you keep working in the current file. A file that has never been saved needs a `path`. Returns the saved path, size and file state.
+
+### `blender_open_file`
+
+`path` (required, `.blend`), `discard_unsaved` (false), `load_ui` (false).
+
+Opens a file, replacing the current one. It **refuses when the current file has unsaved changes**, so work isn't lost without asking. Save first, or pass `discard_unsaved`. The reply arrives after the load and describes the newly open file: its scenes and object count, and whether unsaved changes were discarded.
+
+### `blender_revert_file`
+
+`discard_unsaved` (false). Reloads the open file from disk. Reverting discards changes by definition, so it asks for `discard_unsaved` when there are any.
+
+### `blender_new_file`
+
+`empty` (true), `discard_unsaved` (false). `empty` gives a scene with no objects. `empty=false` loads the user's startup file, and the reply lists any startup defaults found in it.
+
+## Scene state
+
+### `blender_scene_defaults`
+
+`remove` (false), `kinds` (`["cube", "light", "camera"]`).
+
+Finds Blender's startup cube, light and camera. Each one is reported as **untouched** or with what's different: moved, rotated, scaled, mesh edited, materials changed, power changed, lens changed, has a parent, children or modifiers. A name alone never decides; the object also has to match the startup data. `remove` deletes only the untouched ones, and anything you've changed is kept and listed.
+
+<Aside type="tip" title="Recommended flow before building a model">
+Start from `blender_new_file(empty=true)`, or run `blender_scene_defaults(remove=true)` in the open scene. The startup 1000 W point light is easy to miss: in one project it sat just above a roof and read as a specular glint for four diagnostic renders. `blender_new_scene` is the third option when the file should keep its other scenes.
+</Aside>
+
+### `blender_new_scene`
+
+`name` ("Scene"), `make_active` (true), `copy_world` (true). Adds an empty scene to the open file and switches to it. `copy_world` reuses the current World, so lighting and background carry over.
+
+## Geometry cleanup
+
+### `blender_remove_interior`
+
+`object` (required), `method` (`"faces"` or `"shells"`), `dry_run` (false).
+
+Cleans up the interior skins that self-unions leave behind, for example walls drawn twice with a slight offset.
+
+- `faces` tests every face. A point just off each side is checked against every closed shell of the mesh:
+
+  | In front | Behind | Action |
+  |---|---|---|
+  | outside | inside | keep (a correct face) |
+  | inside | outside | flip (an inside-out face) |
+  | inside | inside | delete (buried) |
+  | outside | outside | keep (an open sheet) |
+
+- `shells` deletes whole shells that sit entirely inside another shell.
+
+Only closed shells count as solid, so open parts are never used to decide what's inside. Because each point is tested for being inside a shell, not by how far a ray travels, concave shapes like an L-shaped wall are handled correctly. The reply always gives counts, sample face indices, and [mesh health](/reference/dispatch-tools/#blender_mesh_health) before and after. `dry_run` reports without changing anything.
+
+## Export
+
+### `blender_export_gltf`
+
+`path` (required), `objects` (visible objects by default), `format` (`"glb"` or `"gltf"`), `audit` (true), `auto_fix` (false), `create_dirs` (false).
+
+The glTF exporter gives no warning when it can't carry a material's colour. Measured on Blender 5.2 by reading the written file back:
+
+| Material | What gets exported |
+|---|---|
+| Principled BSDF, constant Base Color | correct |
+| Base Color from an RGB node | correct |
+| Base Color straight from an Image Texture | correct |
+| Image Texture × constant (Mix, MULTIPLY) | correct (texture plus factor) |
+| Diffuse BSDF, or any non-Principled surface | **empty material** (white, metallic) |
+| Mix of two colours | **one of the inputs**, not the mix |
+| Mix driven by a Math node | **flat grey** |
+| Image Texture through Hue/Saturation | **the bare texture**, adjustment dropped |
+
+`material_issues` lists every material in the export that falls in the last four rows, with the reason. For GLB, `materials_without_color_in_file` reads the written file back and names the materials that came out empty. That catches the empty case, but not the approximated ones, so treat `material_issues` as the list to act on.
+
+`auto_fix` temporarily swaps a plain Diffuse BSDF for an equivalent Principled BSDF during the export, then restores the original. Node chains still need baking to an image first.
