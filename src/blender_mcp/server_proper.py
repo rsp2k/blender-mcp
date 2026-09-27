@@ -116,6 +116,15 @@ def _build_auth_provider() -> AuthProvider | None:
 
                 return await verify_with_pat_first(token, super().verify_token)
 
+            def _prepare_scopes_for_upstream_refresh(self, scopes):
+                # Keep offline_access on upstream refreshes too (the base
+                # class sends the downstream client's scopes, which don't
+                # include it), so each refresh also rotates the refresh token.
+                scopes = list(scopes or [])
+                if "offline_access" not in scopes:
+                    scopes.append("offline_access")
+                return scopes
+
             async def _extract_upstream_claims(self, idp_tokens):
                 id_token = idp_tokens.get("id_token")
                 if not id_token:
@@ -165,6 +174,13 @@ def _build_auth_provider() -> AuthProvider | None:
             # don't invalidate every issued JWT. Falls back to the default
             # encrypted file store if DATABASE_URL isn't set (stdio/local).
             client_storage=_build_oauth_storage(),
+            # Always ask Authentik for offline_access, whatever scopes the
+            # downstream client registered. Without it Authentik issues no
+            # refresh token, so every session (addon, Claude Code, web)
+            # silently dies when its 8 h access token expires. Forcing it
+            # here covers clients whose DCR scopes we don't control. The
+            # provider must also have the offline_access scope mapping.
+            extra_authorize_params={"scope": "openid email profile offline_access"},
             # IMPORTANT: do NOT pass required_scopes. Authentik's access tokens
             # don't carry a `scope` or `scp` claim (those live on the ID token
             # per OIDC spec, not on the OAuth2 access token). If we set
@@ -184,7 +200,7 @@ def _build_auth_provider() -> AuthProvider | None:
         # Verified via Authentik's discovery doc: scopes_supported is
         # ['openid', 'email', 'profile']. Required by addon 1.5.12+ so
         # the id_token comes back with user_display_name/email claims.
-        provider.update_default_scopes(["openid", "email", "profile"])
+        provider.update_default_scopes(["openid", "email", "profile", "offline_access"])
         return provider
 
     if backend == "inmemory":
