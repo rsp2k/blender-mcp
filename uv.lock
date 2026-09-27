@@ -290,6 +290,7 @@ dependencies = [
     { name = "click" },
     { name = "fastapi" },
     { name = "fastmcp" },
+    { name = "fastmcp-feedback", extra = ["instrumentation"] },
     { name = "mcp", extra = ["cli"] },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
@@ -359,6 +360,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'oauth'", specifier = ">=44.0.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "fastmcp", specifier = ">=3.3.1" },
+    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
@@ -953,6 +955,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3b/a9/5c5a01b6abd5346bf60b97cfd29e4a86661940c27dd562bfcda07fd03519/fastmcp-3.3.1.tar.gz", hash = "sha256:979362ea557de42a5f40342563c7e4b236bcc8e7cd192715f50030695d1a71cd", size = 28681699, upload-time = "2026-05-15T15:50:39.673Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/11/6b1bdada6ccfe647d615ae63f9106f8136aec17971e9361546af01c7d38e/fastmcp-3.3.1-py3-none-any.whl", hash = "sha256:862440c5c4d281363a5995eee59d77f0f7cac1f18869038729cecf03b02fc522", size = 7903, upload-time = "2026-05-15T15:50:36.424Z" },
+]
+
+[[package]]
+name = "fastmcp-feedback"
+version = "2026.9.27.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "pydantic" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/58/0f/75dbe3b2839eccc59b6b64f887dd7d987422f89cafcfa81c4ac3e8472174/fastmcp_feedback-2026.9.27.1.tar.gz", hash = "sha256:0d8ea8601e81ecc7314f8f7af37a797cfba30095f4b2fd002d3b46c1b25158ff", size = 111824, upload-time = "2026-09-27T14:37:11.344Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/60/1e/af9fb6099392228e3b9dea95f3f8c51210cff8a3f1a8714e58d073c83a72/fastmcp_feedback-2026.9.27.1-py3-none-any.whl", hash = "sha256:511ab631e7e80edff24542e57cae9edfde8b28f6350dd3b3b263fd17b1fa77f7", size = 42387, upload-time = "2026-09-27T14:37:12.581Z" },
+]
+
+[package.optional-dependencies]
+instrumentation = [
+    { name = "aiosqlite" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [[package]]

@@ -210,6 +210,13 @@ def build_app() -> FastAPI:
                 yield
             finally:
                 keepalive_task.cancel()
+                # Flush queued tool-call records before the engine goes away.
+                qa_mw = getattr(mcp, "qa_middleware", None)
+                if qa_mw is not None:
+                    try:
+                        await qa_mw.aclose()
+                    except Exception as e:
+                        logger.warning("Instrumentation shutdown flush failed: %s", e)
 
     app = FastAPI(
         title="BlenderMCP OAuth + Bus",

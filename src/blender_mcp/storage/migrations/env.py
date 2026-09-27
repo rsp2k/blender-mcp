@@ -34,7 +34,14 @@ if db_url:
         db_url = "postgresql+psycopg://" + db_url[len("postgresql://"):]
     config.set_main_option("sqlalchemy.url", db_url)
 
-target_metadata = Base.metadata
+# fastmcp-feedback's tool-call instrumentation tables (ffb_*) live in the
+# same database and are migrated here, since the package never creates
+# tables when handed our engine.
+from fastmcp_feedback.instrumentation import build_metadata as _ffb_metadata  # noqa: E402
+
+from blender_mcp.instrumentation import FFB_TABLE_PREFIX  # noqa: E402
+
+target_metadata = [Base.metadata, _ffb_metadata(prefix=FFB_TABLE_PREFIX)]
 
 # Tables owned by external libraries that live in the same DB but aren't
 # part of our SQLAlchemy models. Autogenerate would otherwise try to drop

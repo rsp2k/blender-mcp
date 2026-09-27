@@ -73,6 +73,9 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Tool-call instrumentation (off | meta | full) into ffb_tool_calls.
+      QA_LOG: ${QA_LOG:-off}
+      QA_LOG_STDERR: ${QA_LOG_STDERR:-}
       # Phase G — OAuth backend selection. ``authentik`` (default) requires the
       # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
       # against the USERS dict (local dev only).
@@ -174,6 +177,9 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       BLENDER_MCP_HOST: ${BLENDER_MCP_HOST:-0.0.0.0}
       BLENDER_MCP_PORT: ${BLENDER_MCP_PORT:-8000}
+      # Tool-call instrumentation (off | meta | full) into ffb_tool_calls.
+      QA_LOG: ${QA_LOG:-off}
+      QA_LOG_STDERR: ${QA_LOG_STDERR:-}
       # Phase G — OAuth backend selection. ``authentik`` (default) requires the
       # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
       # against the USERS dict (local dev only).

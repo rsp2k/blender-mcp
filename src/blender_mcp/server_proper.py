@@ -302,17 +302,17 @@ def build_http_mcp() -> FastMCP:
 
     auth_provider = _build_auth_provider()
     server = FastMCP("BlenderMCP", auth=auth_provider)
+    # Tool-call instrumentation (fastmcp-feedback), OFF unless QA_LOG is set.
+    # Added first: the first middleware added is outermost, so it times and
+    # records every call, including ones later middleware rejects.
+    from . import instrumentation
+    # Kept on the server so the app lifespan can flush it on shutdown.
+    server.qa_middleware = instrumentation.install(server)
     # Refresh bus.last_seen on every NON-ping incoming message
     # (CallToolRequest, ListToolsRequest, etc.). Ping path is hooked
     # separately via install_ping_touch above.
     from .bus_activity_middleware import BusActivityMiddleware
     server.add_middleware(BusActivityMiddleware())
-    # Opt-in QA payload logging. No-op unless QA_LOG is set, and OFF by
-    # default. Added after BusActivityMiddleware so the measured
-    # duration covers the actual tool body rather than the liveness
-    # touch that wraps it. See qa_logging_middleware for the levels.
-    from .qa_logging_middleware import QALoggingMiddleware
-    server.add_middleware(QALoggingMiddleware())
     BlenderDiagnosticsComponent().register_all(mcp_server=server, prefix="blender")
     # Bus + dispatch: tools and prompts get the ``blender_`` prefix so they
     # don't collide with anything else in tool listings, but resources are
