@@ -79,9 +79,14 @@ class BlenderCommandExecutor(
         # command simply wasn't in the dict, so lookup fell through to
         # "Unknown command type"). Gates receive AddonPreferences (Phase 8);
         # before that they received bpy.context.scene.
-        if spec is None or (
-            spec.gate is not None and not spec.gate(get_prefs())
-        ):
+        if spec is None:
+            return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
+        if spec.gate is not None and not spec.gate(get_prefs()):
+            if spec.disabled_hint:
+                return {
+                    "status": "error",
+                    "message": f"{cmd_type} is disabled: {spec.disabled_hint}",
+                }
             return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
 
         try:

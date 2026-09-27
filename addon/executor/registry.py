@@ -26,19 +26,31 @@ class CommandSpec:
     Attributes:
         name: The command-name string used by `_execute_command_internal`.
         func: The (unbound) handler method. Called as ``func(self, **params)``.
-        gate: Optional predicate; receives ``bpy.context.scene`` and returns
+        gate: Optional predicate; receives the AddonPreferences and returns
             True if the command is currently enabled. None = always enabled.
+            Evaluated on every call, so toggling a preference takes effect
+            immediately (no reconnect).
+        disabled_hint: What to tell the caller when the gate is closed, e.g.
+            how to enable the integration. Without it a gated-off command
+            answers "Unknown command type", which reads like a missing
+            feature rather than a switched-off one.
     """
 
     name: str
     func: Callable
     gate: Optional[Callable[[Any], bool]] = None
+    disabled_hint: Optional[str] = None
 
 
 COMMAND_REGISTRY: dict[str, CommandSpec] = {}
 
 
-def command(name: str, *, gate: Optional[Callable[[Any], bool]] = None) -> Callable:
+def command(
+    name: str,
+    *,
+    gate: Optional[Callable[[Any], bool]] = None,
+    disabled_hint: Optional[str] = None,
+) -> Callable:
     """Register a handler method under ``name``.
 
     Usage::
@@ -57,7 +69,9 @@ def command(name: str, *, gate: Optional[Callable[[Any], bool]] = None) -> Calla
     """
 
     def decorator(fn: Callable) -> Callable:
-        COMMAND_REGISTRY[name] = CommandSpec(name=name, func=fn, gate=gate)
+        COMMAND_REGISTRY[name] = CommandSpec(
+            name=name, func=fn, gate=gate, disabled_hint=disabled_hint,
+        )
         return fn
 
     return decorator
