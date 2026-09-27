@@ -20,6 +20,7 @@ from .handlers.annotations import AnnotationHandlersMixin
 from .handlers.code_exec import CodeExecHandlersMixin
 from .handlers.console import ConsoleHandlersMixin
 from .handlers.extensions import ExtensionsHandlersMixin
+from .handlers.files_scene import FileSceneHandlersMixin
 from .handlers.hyper3d import Hyper3dHandlersMixin
 from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
@@ -47,6 +48,7 @@ class BlenderCommandExecutor(
     ViewControlHandlersMixin,
     AnalysisHandlersMixin,
     BooleanHandlersMixin,
+    FileSceneHandlersMixin,
     WorkerHandlersMixin,
     SharedHelpersMixin,
 ):
