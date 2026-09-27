@@ -31,6 +31,8 @@ from .operators import (
     BLENDERMCP_OT_ReconnectNow,
     BLENDERMCP_OT_InstallUpdate,
     BLENDERMCP_OT_CancelUpdate,
+    BLENDERMCP_OT_ClearMarks,
+    BLENDERMCP_OT_MarkSelection,
     BLENDERMCP_OT_ReloadWorkerResult,
     BLENDERMCP_OT_DismissWorkerResult,
     BLENDERMCP_OT_MergeWorkerResult,
@@ -76,6 +78,8 @@ CLASSES = (
     BLENDERMCP_OT_GrantExtensionInstall,
     BLENDERMCP_OT_DenyExtensionInstall,
     BLENDERMCP_OT_AlwaysAllowExtensionInstall,
+    BLENDERMCP_OT_MarkSelection,
+    BLENDERMCP_OT_ClearMarks,
 )
 
 __all__ = [
@@ -90,6 +94,8 @@ __all__ = [
     "BLENDERMCP_OT_ReconnectNow",
     "BLENDERMCP_OT_InstallUpdate",
     "BLENDERMCP_OT_CancelUpdate",
+    "BLENDERMCP_OT_MarkSelection",
+    "BLENDERMCP_OT_ClearMarks",
     "BLENDERMCP_OT_ReloadWorkerResult",
     "BLENDERMCP_OT_DismissWorkerResult",
     "BLENDERMCP_OT_MergeWorkerResult",

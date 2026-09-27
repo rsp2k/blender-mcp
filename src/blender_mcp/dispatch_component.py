@@ -402,7 +402,8 @@ class BlenderDispatchComponent(MCPMixin):
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Snapshot of the active Blender scene: name, object count, first N objects."""
+        """Snapshot of the active Blender scene: name, object count, first N objects,
+        and what the user has picked: active_object, selected_objects, selected_count."""
         return await self._call(ctx, "get_scene_info", {}, target_uuid, _timeout, bus_id=bus_id)
 
     @mcp_tool()
@@ -590,6 +591,10 @@ class BlenderDispatchComponent(MCPMixin):
         ctx: Context = None,
     ) -> str:
         """List grease-pencil strokes the user has drawn in the viewport.
+
+        Strokes on the layer "Marked" come from the add-on's Mark selection
+        button: the user boxed, ringed or arrowed objects to point them out.
+        Your own marks (annotate_object) are on "LLM".
 
         Blender's D-key annotation tool stores strokes on a special
         ``Annotations`` grease-pencil datablock; entries whose

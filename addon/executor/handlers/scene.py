@@ -45,6 +45,15 @@ class SceneHandlersMixin:
                 }
                 scene_info["objects"].append(obj_info)
 
+            # What the user has picked in the GUI, so "this one" needs no
+            # execute_code round trip. Capped like the object list.
+            view_layer = bpy.context.view_layer
+            selected = [o.name for o in view_layer.objects if o.select_get()]
+            active = view_layer.objects.active
+            scene_info["active_object"] = active.name if active else None
+            scene_info["selected_objects"] = selected[:50]
+            scene_info["selected_count"] = len(selected)
+
             print(f"Scene info collected: {len(scene_info['objects'])} objects")
             return scene_info
         except Exception as e:

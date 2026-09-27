@@ -145,6 +145,9 @@ class BlenderAnnotationWriteComponent(MCPMixin):
     ) -> str:
         """Mark an object in the viewport so the user can see which one you mean.
 
+        ``object`` is an object name, or "selected" for everything the user
+        has selected in Blender, or "active" for the active object. Use those
+        when the user says "this one" after picking it in the GUI.
         style="box" outlines its world-space bounding box, "circle" rings it
         at mid height, "arrow" points down at its top. ``padding`` grows the
         outline by that fraction of the object's size. Blender annotations

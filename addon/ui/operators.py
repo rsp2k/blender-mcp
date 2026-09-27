@@ -1232,3 +1232,67 @@ class BLENDERMCP_OT_DismissWorkerMerge(bpy.types.Operator):
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
         return {'FINISHED'}
+
+
+_MARK_STYLES = (
+    ('box', "Box", "Outline the selection's bounding box"),
+    ('circle', "Ring", "Ring the selection at mid height"),
+    ('arrow', "Arrow", "Point an arrow down at the selection"),
+)
+
+
+class BLENDERMCP_OT_MarkSelection(bpy.types.Operator):
+    """Draw a mark around the selected objects on the "Marked" annotation layer."""
+
+    bl_idname = "blendermcp.mark_selection"
+    bl_label = "Mark selection"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    style: bpy.props.EnumProperty(name="Style", items=_MARK_STYLES, default='box')
+
+    @classmethod
+    def description(cls, context, properties):
+        label = {k: d for k, _, d in _MARK_STYLES}.get(properties.style, "")
+        return f"{label}. The assistant sees it with list_annotations (layer \"Marked\")"
+
+    @classmethod
+    def poll(cls, context):
+        return any(o.select_get() for o in context.view_layer.objects)
+
+    def execute(self, context):
+        from ..executor.handlers.annotations import (
+            USER_MARK_COLOR,
+            USER_MARK_LAYER,
+            mark_objects,
+            resolve_targets,
+        )
+
+        try:
+            out = mark_objects(resolve_targets("selected"), self.style,
+                               layer=USER_MARK_LAYER, color=USER_MARK_COLOR)
+        except ValueError as e:
+            self.report({'WARNING'}, str(e))
+            return {'CANCELLED'}
+        names = [m["object"] for m in out["objects"]]
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        self.report({'INFO'}, f"Marked {shown}")
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ClearMarks(bpy.types.Operator):
+    """Remove the marks drawn with Mark selection."""
+
+    bl_idname = "blendermcp.clear_marks"
+    bl_label = "Clear marks"
+    bl_description = "Remove your marks (the \"Marked\" layer). The assistant's own marks stay"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        from ..executor.handlers.annotations import (
+            USER_MARK_LAYER,
+            AnnotationHandlersMixin,
+        )
+
+        out = AnnotationHandlersMixin.clear_annotations(None, layer=USER_MARK_LAYER)
+        self.report({'INFO'}, f"Cleared {out['removed']} stroke(s)")
+        return {'FINISHED'}

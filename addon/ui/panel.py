@@ -370,6 +370,17 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             if client.last_error:
                 col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
 
+        # --- Point things out: marks the assistant can read back with
+        # list_annotations (layer "Marked"). Works connected or not.
+        layout.separator()
+        col = layout.column(align=True)
+        col.label(text="Point it out", icon='GREASEPENCIL')
+        row = col.row(align=True)
+        row.operator("blendermcp.mark_selection", text="Mark selection", icon='SELECT_SET').style = 'box'
+        row.operator("blendermcp.mark_selection", text="", icon='MESH_CIRCLE').style = 'circle'
+        row.operator("blendermcp.mark_selection", text="", icon='SORT_ASC').style = 'arrow'
+        row.operator("blendermcp.clear_marks", text="", icon='TRASH')
+
         # --- Asset integrations (toggles only — API keys live in prefs) ---
         layout.separator()
         col = layout.column(align=True)

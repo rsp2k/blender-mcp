@@ -210,32 +210,81 @@ def _apply_layer_style(layer, color, thickness):
         layer.thickness = max(1, min(10, int(thickness)))
 
 
+USER_MARK_LAYER = "Marked"  # what the panel's Mark selection button draws on
+USER_MARK_COLOR = (0.0, 0.75, 0.85)  # teal, so user marks and LLM marks read apart
+SELECTION_ALIASES = ("selected", "active")
+
+
+def resolve_targets(spec):
+    """Objects an annotate call means: a name, or "selected" / "active".
+
+    An object actually named "selected" or "active" wins over the alias, so
+    existing calls keep meaning what they meant. Selection is read from the
+    view layer, which works from timers where context.selected_objects
+    doesn't exist.
+    """
+    obj = bpy.data.objects.get(spec)
+    if obj is not None:
+        return [obj]
+    view_layer = bpy.context.view_layer
+    if spec == "selected":
+        objs = [o for o in view_layer.objects if o.select_get()]
+        if not objs:
+            raise ValueError("nothing is selected in Blender")
+        return objs
+    if spec == "active":
+        if view_layer.objects.active is None:
+            raise ValueError("there is no active object in Blender")
+        return [view_layer.objects.active]
+    raise ValueError(f"no object named {spec!r} (or pass 'selected' / 'active')")
+
+
+def write_strokes(strokes, layer, color, thickness, display_mode):
+    ann = _scene_annotation()
+    layer_idx, lyr, created = _ensure_layer(ann, layer)
+    _apply_layer_style(lyr, color, thickness)
+    frame = _drawing_frame(lyr)
+    src = _source_label(ann)
+    ids = []
+    for pts in strokes:
+        stroke = frame.strokes.new()
+        stroke.display_mode = display_mode
+        stroke.points.add(len(pts))
+        for p, co in zip(stroke.points, pts):
+            p.co = co
+        ids.append(f"{src}:{ann.name}:{layer_idx}:{frame.frame_number}:{len(frame.strokes) - 1}")
+    return {
+        "ids": ids,
+        "layer": lyr.info,
+        "layer_created": created,
+        "frame": frame.frame_number,
+        "color": [round(c, 4) for c in lyr.color],
+        "thickness": lyr.thickness,
+        "viewports_showing_annotations": _show_annotations_in_viewports(),
+    }
+
+
+def mark_objects(objs, style="box", layer="LLM", color=None, thickness=None, padding=0.05):
+    """Draw ``style`` around each object in ``objs`` on ``layer``."""
+    from ...annotation_geometry import STYLES, bounds_of, pad_bounds
+
+    if style not in STYLES:
+        raise ValueError(f"style must be one of {sorted(STYLES)}")
+    strokes, marked = [], []
+    for obj in objs:
+        corners = [tuple(obj.matrix_world @ mathutils.Vector(c)) for c in obj.bound_box]
+        lo, hi = pad_bounds(*bounds_of(corners), float(padding))
+        strokes += STYLES[style](lo, hi)
+        marked.append({"object": obj.name, "bounds_min": list(lo), "bounds_max": list(hi)})
+    out = write_strokes(strokes, layer, color, thickness, "3DSPACE")
+    out.update({"style": style, "objects": marked})
+    return out
+
+
 class AnnotationHandlersMixin:
     """Annotation handlers: list/get (read) and add/annotate/clear (write)."""
 
-    def _write_strokes(self, strokes, layer, color, thickness, display_mode):
-        ann = _scene_annotation()
-        layer_idx, lyr, created = _ensure_layer(ann, layer)
-        _apply_layer_style(lyr, color, thickness)
-        frame = _drawing_frame(lyr)
-        src = _source_label(ann)
-        ids = []
-        for pts in strokes:
-            stroke = frame.strokes.new()
-            stroke.display_mode = display_mode
-            stroke.points.add(len(pts))
-            for p, co in zip(stroke.points, pts):
-                p.co = co
-            ids.append(f"{src}:{ann.name}:{layer_idx}:{frame.frame_number}:{len(frame.strokes) - 1}")
-        return {
-            "ids": ids,
-            "layer": lyr.info,
-            "layer_created": created,
-            "frame": frame.frame_number,
-            "color": [round(c, 4) for c in lyr.color],
-            "thickness": lyr.thickness,
-            "viewports_showing_annotations": _show_annotations_in_viewports(),
-        }
+    _write_strokes = staticmethod(write_strokes)
 
     @command("add_annotation_stroke")
     def add_annotation_stroke(
@@ -283,21 +332,14 @@ class AnnotationHandlersMixin:
         thickness=None,
         padding: float = 0.05,
     ):
-        """Mark an object with a box around its world bounds, a ring around
-        it, or an arrow pointing down at it. Blender annotations can't hold
-        text, so ``label`` is echoed back but not drawn."""
-        from ...annotation_geometry import STYLES, bounds_of, pad_bounds
-
-        if style not in STYLES:
-            raise ValueError(f"style must be one of {sorted(STYLES)}")
-        obj = bpy.data.objects.get(object)
-        if obj is None:
-            raise ValueError(f"no object named {object!r}")
-        corners = [tuple(obj.matrix_world @ mathutils.Vector(c)) for c in obj.bound_box]
-        lo, hi = pad_bounds(*bounds_of(corners), float(padding))
-        out = self._write_strokes(STYLES[style](lo, hi), layer, color, thickness, "3DSPACE")
-        out.update({"object": obj.name, "style": style,
-                    "bounds_min": list(lo), "bounds_max": list(hi)})
+        """Mark objects with a box around their world bounds, a ring around
+        them, or an arrow pointing down at them. ``object`` is a name, or
+        "selected" (every selected object) / "active". Blender annotations
+        can't hold text, so ``label`` is echoed back but not drawn."""
+        out = mark_objects(resolve_targets(object), style, layer, color, thickness, padding)
+        if len(out["objects"]) == 1:
+            # Single-object shape kept for existing callers.
+            out.update(out["objects"][0])
         if label:
             out["label"] = label
             out["label_drawn"] = False
