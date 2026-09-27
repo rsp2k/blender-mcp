@@ -74,6 +74,30 @@ def _parse_status(raw: Optional[str]):
         return UNKNOWN
 
 
+LINKED_CALLS_MAX = 20
+
+
+async def _link_recent_calls(ctx: Any, feedback_id: str) -> Optional[int]:
+    """Attach the caller's recent tool calls to a feedback row.
+
+    Only when QA instrumentation is on (QA_LOG=meta/full). Returns the number
+    of calls linked, or None when instrumentation is off or linking failed.
+    The feedback row is already stored, so nothing here may raise.
+    """
+    try:
+        server = getattr(ctx, "fastmcp", None)
+        mw = getattr(server, "qa_middleware", None)
+        if mw is None:
+            return None
+        links = await mw.capture_recent_calls(ctx, n=LINKED_CALLS_MAX)
+        if not await mw.link_feedback(feedback_id, links):
+            return None
+        return len(links)
+    except Exception:  # linking is best-effort
+        logger.warning("linking recent calls to %s failed", feedback_id, exc_info=True)
+        return None
+
+
 _VALID_CATEGORIES = [c.value for c in FeedbackCategory]
 _VALID_STATUSES = [s.value for s in FeedbackStatus]
 
@@ -182,12 +206,16 @@ class BlenderFeedbackComponent(MCPMixin):
                 "hint": "The submission couldn't be recorded. Server-side logs have the detail. Try again; if it persists, report to the maintainer out-of-band.",
             })
 
-        return json.dumps({
+        linked = await _link_recent_calls(ctx, row.id)
+        out = {
             "status": "ok",
             "id": row.id,
             "category": row.category.value,
             "url": f"https://mcp.blender.bet/feedback/{row.id}",
-        })
+        }
+        if linked is not None:
+            out["linked_calls"] = linked
+        return json.dumps(out)
 
     @mcp_tool()
     async def get_feedback(

@@ -49,7 +49,30 @@ async def _cmd_show(feedback_id: str) -> int:
         print(f"NOT FOUND: {feedback_id}", file=sys.stderr)
         return 1
     print(json.dumps(to_dict(row), indent=2))
+    calls = await _linked_calls(feedback_id)
+    if calls:
+        print(f"\nTool calls before submission ({len(calls)}):")
+        for c in calls:
+            when = c["started_at"].strftime("%H:%M:%S") if c.get("started_at") else "--:--:--"
+            status = "ok " if c.get("ok") else ("ERR" if c.get("ok") is False else " ? ")
+            err = f"  {c['error_type']}: {(c.get('error_message') or '')[:120]}" if c.get("error_type") else ""
+            dur = f"{c['duration_ms']:.0f}ms" if c.get("duration_ms") is not None else "?"
+            print(f"  {when} {status} {c.get('tool') or '(not recorded)'} {dur} [{c['rule']}]{err}")
     return 0
+
+
+async def _linked_calls(feedback_id: str) -> list[dict]:
+    """Calls linked by QA instrumentation; empty if the tables aren't there."""
+    try:
+        from fastmcp_feedback.instrumentation import DatabaseSink
+
+        from blender_mcp.instrumentation import FFB_TABLE_PREFIX
+        from blender_mcp.storage import get_engine
+
+        return await DatabaseSink(get_engine(), prefix=FFB_TABLE_PREFIX).linked_calls(feedback_id)
+    except Exception as exc:  # noqa: BLE001 - optional section of the report
+        print(f"\n(linked calls unavailable: {type(exc).__name__})", file=sys.stderr)
+        return []
 
 
 async def _cmd_list(status: str | None, category: str | None, limit: int) -> int:

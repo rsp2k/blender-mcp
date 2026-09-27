@@ -1,6 +1,6 @@
 [project]
 name = "blender-mcp"
-version = "2026.927.5"
+version = "2026.927.6"
 description = "Blender integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,7 +35,7 @@ dependencies = [
     "asyncpg>=0.30.0",         # async driver for runtime
     "psycopg[binary]>=3.2.3",  # sync driver used by alembic at migration time
     "alembic>=1.14.0",
-    "fastmcp-feedback[instrumentation]==2026.9.27.2",
+    "fastmcp-feedback[instrumentation]==2026.9.27.3",
     "shapely==2.1.2",
     "minio==7.2.20",
 ]

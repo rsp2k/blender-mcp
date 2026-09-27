@@ -341,7 +341,7 @@ wheels = [
 
 [[package]]
 name = "blender-mcp"
-version = "2026.927.5"
+version = "2026.927.6"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
@@ -422,7 +422,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'oauth'", specifier = ">=44.0.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "fastmcp", specifier = ">=3.3.1" },
-    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.2" },
+    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.3" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.1" },
     { name = "minio", specifier = "==7.2.20" },
@@ -1023,16 +1023,16 @@ wheels = [
 
 [[package]]
 name = "fastmcp-feedback"
-version = "2026.9.27.2"
+version = "2026.9.27.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/50/53afe24fff04ec3e27b816e105267df0725c4e4e5c9ed6fd62d7dea880d3/fastmcp_feedback-2026.9.27.2.tar.gz", hash = "sha256:a140e811a61785f5ca24e39a675a5a0e970460bbcb24b12833b3e402b39e6a99", size = 112196, upload-time = "2026-09-27T14:58:40.446Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/16/8f3ea14c0492578e17901547f28872e6cc5f49cbdfda705ac98ddb748e1d/fastmcp_feedback-2026.9.27.3.tar.gz", hash = "sha256:3f8373e51748c454be826479d5bd224942cd30f42120851b36bf666d87ea2747", size = 121861, upload-time = "2026-09-27T18:26:11.424Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/e7/8300a3f876df13d77760f2c48afa4883208f7754d976b6e2da880b0e693c/fastmcp_feedback-2026.9.27.2-py3-none-any.whl", hash = "sha256:27b2110e2bad42a4bcb1034389c9e4c0f780227ebcd25eeca31b300a16d3b12a", size = 42441, upload-time = "2026-09-27T14:58:41.706Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/ef/25594b63c8ca55c3189f2f1d7c424fb7d25b5cc4f5b7a33ce09601662a1c/fastmcp_feedback-2026.9.27.3-py3-none-any.whl", hash = "sha256:3db58bd68f2385ffa3d8327a2c58c92e5f5712f7fc6fed8bf644f63761953feb", size = 48239, upload-time = "2026-09-27T18:26:12.502Z" },
 ]
 
 [package.optional-dependencies]

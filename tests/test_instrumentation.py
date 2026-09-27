@@ -150,3 +150,56 @@ async def test_meta_only_tools_never_store_payloads(tmp_path):
     assert row["args_size"] > 0
     await mw.aclose()
     await engine.dispose()
+
+
+# ---- feedback correlation ---------------------------------------------------
+
+async def test_feedback_links_the_calls_that_led_up_to_it(tmp_path, identity):
+    from fastmcp import Context
+    from fastmcp_feedback.instrumentation import (
+        DatabaseSink,
+        build_metadata,
+        instrument,
+    )
+
+    from blender_mcp.feedback_tools import _link_recent_calls
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'qa.db'}")
+    metadata = build_metadata(prefix=instrumentation.FFB_TABLE_PREFIX)
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+
+    app = FastMCP("t")
+    app.qa_middleware = instrument(
+        app,
+        [DatabaseSink(engine, prefix=instrumentation.FFB_TABLE_PREFIX)],
+        mode="meta",
+        identity_resolver=instrumentation.identify,
+    )
+
+    @app.tool
+    def boom() -> str:
+        raise RuntimeError("render failed")
+
+    @app.tool
+    async def report(ctx: Context) -> str:
+        return str(await _link_recent_calls(ctx, "bug-test"))
+
+    async with Client(app) as c:
+        await c.call_tool("boom", {}, raise_on_error=False)
+        r = await c.call_tool("report", {})
+    assert r.content[0].text == "1"
+
+    await app.qa_middleware.flush()
+    calls = await app.qa_middleware.feedback_context("bug-test")
+    assert [(x["tool"], x["ok"], x["error_type"]) for x in calls] == [("boom", False, "RuntimeError")]
+    await app.qa_middleware.aclose()
+    await engine.dispose()
+
+
+async def test_feedback_linking_is_skipped_when_qa_log_is_off():
+    from blender_mcp.feedback_tools import _link_recent_calls
+
+    ctx = SimpleNamespace(fastmcp=SimpleNamespace(qa_middleware=None))
+    assert await _link_recent_calls(ctx, "bug-x") is None
+    assert await _link_recent_calls(None, "bug-x") is None
