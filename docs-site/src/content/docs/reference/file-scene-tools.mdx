@@ -64,7 +64,7 @@ Cleans up the interior skins that self-unions leave behind, for example walls dr
 
 - `shells` deletes whole shells that sit entirely inside another shell.
 
-Only closed shells count as solid, so open parts are never used to decide what's inside. Because each point is tested for being inside a shell, not by how far a ray travels, concave shapes like an L-shaped wall are handled correctly. The reply always gives counts, sample face indices, and [mesh health](/reference/dispatch-tools/) before and after. `dry_run` reports without changing anything.
+Only closed shells count as solid, so open parts are never used to decide what's inside. Because each point is tested for being inside a shell, not by how far a ray travels, concave shapes like an L-shaped wall are handled correctly. The reply always gives counts, sample face indices, and [mesh health](/reference/dispatch-tools/#blender_mesh_health) before and after. `dry_run` reports without changing anything.
 
 ## Export
 
