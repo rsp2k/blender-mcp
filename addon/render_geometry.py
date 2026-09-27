@@ -237,6 +237,132 @@ def project_bbox(points, perspective_matrix, region_size, margin: float = 0.05):
     return (x0, y0, x1, y1)
 
 
+def view_space(point, rot3, location, distance):
+    """World point -> 3D-view space for a viewport orbiting ``location``.
+
+    Mirrors Blender's view matrix: viewinv = T(location) @ R @ T(0, 0, distance),
+    where ``rot3`` is view_rotation as a row-major 3x3 (view -> world). The
+    viewer sits ``distance`` along +Z of view space and looks down -Z.
+    """
+    d = _sub(point, location)
+    # R^T @ d
+    x = rot3[0][0] * d[0] + rot3[1][0] * d[1] + rot3[2][0] * d[2]
+    y = rot3[0][1] * d[0] + rot3[1][1] * d[1] + rot3[2][1] * d[2]
+    z = rot3[0][2] * d[0] + rot3[1][2] * d[1] + rot3[2][2] * d[2]
+    return (x, y, z - distance)
+
+
+def project_ndc(points, window_matrix, rot3, location, distance,
+                ortho: bool = False, ref_distance: float | None = None):
+    """Project world points to normalised device coords through a viewport.
+
+    Returns (ndc_points, n_behind). ``window_matrix`` is region_3d.window_matrix
+    (row-major). For an orthographic view that matrix scales with the view
+    distance it was built at (``ref_distance``), so NDC is rescaled by
+    ref_distance / distance; a perspective window matrix doesn't depend on it.
+    """
+    scale = 1.0
+    if ortho and ref_distance and distance > 0:
+        scale = ref_distance / distance
+    out, behind = [], 0
+    W = window_matrix
+    for p in points:
+        v = view_space(p, rot3, location, distance)
+        v4 = (v[0], v[1], v[2], 1.0)
+        clip = [sum(W[r][c] * v4[c] for c in range(4)) for r in range(4)]
+        w = clip[3]
+        if w <= 1e-9:
+            behind += 1
+            continue
+        out.append((clip[0] / w * scale, clip[1] / w * scale))
+    return out, behind
+
+
+def fit_view(points, window_matrix, rot3, margin: float = 0.05,
+             ortho: bool = False, ref_distance: float | None = None, fill: float = 0.98):
+    """Place a viewport so every point projects inside it with ``margin``.
+
+    ``view3d.view_selected`` sizes the view from the largest bounding-box side,
+    not the projected silhouette, so a box seen corner-on (the default
+    viewport angle) overflows the region, most at the near corner. This keeps
+    the view rotation and solves for the eye position directly: in view axes
+    each point gives the linear constraint ``|x - ex| * W00 <= a * (ez - z)``
+    (and the same for y), where ``a`` is the NDC half-size the subject may
+    use after ``margin`` (a fraction of its own size per side, as the
+    screenshot crop pads it). Making the extreme constraints tight gives ex,
+    ey and ez in closed form; the larger ez of the two axes wins, which only
+    adds slack on the other. The orbit point lands at the subject's middle
+    depth. For ORTHO, ``ref_distance`` is the view distance the window matrix
+    was built at, since that matrix scales with distance.
+
+    Returns a dict with location, distance, ndc bounds (x0, y0, x1, y1) and
+    ``contained`` (every point inside with the margin, checked by projection).
+    """
+    if not points:
+        raise ValueError("no points to frame")
+    a = fill / (1.0 + 2.0 * max(0.0, margin))
+    w00, w11 = window_matrix[0][0], window_matrix[1][1]
+    if not w00 or not w11:
+        raise ValueError("window matrix has no scale")
+    # Points in view axes (columns of rot3 are the view's right, up, back).
+    axes = [[rot3[r][c] for r in range(3)] for c in range(3)]
+    vp = [tuple(_dot(p, ax) for ax in axes) for p in points]
+    xs, ys, zs = zip(*vp)
+    zc = (min(zs) + max(zs)) / 2.0
+
+    if ortho:
+        if not ref_distance:
+            raise ValueError("ortho fit needs ref_distance")
+        ref = ref_distance
+        ex, ey = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+        # NDC x = W00 * ref / dist * (x - ex); keep it within a.
+        dist = max(
+            (max(xs) - min(xs)) / 2.0 * w00 * ref / a,
+            (max(ys) - min(ys)) / 2.0 * w11 * ref / a,
+            1e-4,
+        )
+    else:
+        ref = None
+
+        def solve(coord, w):
+            t = a / w  # half-width of the allowed frustum per unit depth
+            hi = max(c + t * z for c, z in zip(coord, zs))
+            lo = max(-c + t * z for c, z in zip(coord, zs))
+            return (hi - lo) / 2.0, (hi + lo) / (2.0 * t)
+
+        def balance(coord, ez):
+            # At the chosen depth, centre the looser axis: the offset where the
+            # widest ray on each side is equal minimises the larger of the two,
+            # so it can only tighten the fit solve() found.
+            lo, hi = min(coord), max(coord)
+            for _ in range(60):
+                mid = (lo + hi) / 2.0
+                right = max((c - mid) / (ez - z) for c, z in zip(coord, zs))
+                left = max((mid - c) / (ez - z) for c, z in zip(coord, zs))
+                lo, hi = (mid, hi) if right > left else (lo, mid)
+            return (lo + hi) / 2.0
+
+        ex, ez_x = solve(xs, w00)
+        ey, ez_y = solve(ys, w11)
+        ez = max(ez_x, ez_y, max(zs) + 1e-6)  # a lone point would put the eye on it
+        ex, ey = balance(xs, ez), balance(ys, ez)
+        dist = max(ez - zc, 1e-4)
+
+    loc = tuple(ex * axes[0][i] + ey * axes[1][i] + zc * axes[2][i] for i in range(3))
+    ndc, behind = project_ndc(points, window_matrix, rot3, loc, dist, ortho, ref)
+    box = None
+    if ndc and not behind:
+        box = (min(p[0] for p in ndc), min(p[1] for p in ndc),
+               max(p[0] for p in ndc), max(p[1] for p in ndc))
+    contained = False
+    if box is not None:
+        x0, y0, x1, y1 = box
+        px, py = (x1 - x0) * margin, (y1 - y0) * margin
+        contained = (x0 - px >= -1.0 and x1 + px <= 1.0
+                     and y0 - py >= -1.0 and y1 + py <= 1.0)
+    return {"location": loc, "distance": dist, "ndc_bounds": box, "contained": contained}
+
+
 def fit_scale(src_size, dst_size, fit: str) -> float:
     """Scale factor to fit ``src`` onto ``dst`` by width, height, or not at all."""
     fit = (fit or "none").lower()

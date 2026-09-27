@@ -61,7 +61,9 @@ class ViewportHandlersMixin:
         framed = None
         if frame:
             try:
-                framed = self.set_view(frame=frame)
+                # Fit with the crop margin so the padded crop box stays inside
+                # the image instead of being clamped at its edge.
+                framed = self.set_view(frame=frame, margin=crop_margin if crop else 0.05)
             except Exception as e:
                 return {"error": f"framing failed: {e}"}
         crop_targets = None
