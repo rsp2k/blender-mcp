@@ -27,8 +27,10 @@ from .handlers.polyhaven import PolyhavenHandlersMixin
 from .handlers.render import RenderHandlersMixin
 from .handlers.analysis import AnalysisHandlersMixin
 from .handlers.booleans import BooleanHandlersMixin
+from .handlers.mesh_data import MeshDataHandlersMixin
 from .handlers.scene import SceneHandlersMixin
 from .handlers.sketchfab import SketchfabHandlersMixin
+from .handlers.uploads import UploadHandlersMixin
 from .handlers.view_controls import ViewControlHandlersMixin
 from .handlers.viewport import ViewportHandlersMixin
 from .handlers.workers import WorkerHandlersMixin
@@ -51,6 +53,8 @@ class BlenderCommandExecutor(
     BooleanHandlersMixin,
     FileSceneHandlersMixin,
     RenderHandlersMixin,
+    MeshDataHandlersMixin,
+    UploadHandlersMixin,
     WorkerHandlersMixin,
     SharedHelpersMixin,
 ):

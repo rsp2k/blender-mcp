@@ -1,0 +1,97 @@
+---
+title: "Data tools"
+description: "Build meshes from vertices or extruded 2D polygons, put files on the Blender host over the bus, and clean up footprints server-side."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+These six tools cover a workflow that used to need `blender_execute_code` plus a shared filesystem: take geometry that came from somewhere else (a PDF floor plan, a GIS export, a script), clean it up, and turn it into solid Blender objects. The model-home project built 286 wall prisms by hand-writing bmesh code; with these tools that is one `blender_polygon_ops` call and one `blender_extrude_polygons` call.
+
+Every tool returns a JSON string. The Blender-side tools accept the usual dispatch arguments (`target_uuid`, `bus_id`, `_timeout`) described in [Dispatch tools](/reference/dispatch-tools/). `blender_polygon_ops` runs entirely on the server and never touches Blender.
+
+## blender_extrude_polygons
+
+Extrude 2D polygon rings into closed prisms between `base_z` and `base_z + height`.
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `polygons` | `list` | | Each entry is `{"outer": [[x,y],...], "holes": [[[x,y],...]], "height"?, "base_z"?, "name"?}` or a bare ring `[[x,y],...]` |
+| `height` | `float` | | Used for any polygon without its own `height` |
+| `base_z` | `float` | `0.0` | Same, for `base_z` |
+| `source` | `str` | | Read the polygons from an uploaded JSON file instead (see below) |
+| `name` | `str` | `"Prisms"` | Object name when merged, name prefix otherwise |
+| `merge` | `bool` | `True` | One object with one shell per prism, or one object per prism |
+| `collection` | `str` | scene | Created under the scene if it doesn't exist |
+| `parent` | `str` | | Existing object to parent to (parent inverse is reset, so coordinates stay in parent space) |
+| `scale` | `float` | `1.0` | Applied to x, y, height and base_z, e.g. `0.3048` for feet to metres |
+| `origin` | `[x, y]` | `[0, 0]` | Subtracted before scaling, handy for plan coordinates far from zero |
+| `location` | `[x, y, z]` | `[0, 0, 0]` | Object location |
+
+Rings may be closed (last point repeating the first) or open, in either winding. The tool orients them itself, drops duplicate points, and rejects rings with fewer than three distinct points or zero area, naming the offending polygon. Prisms without holes get single n-gon caps, so concave outlines stay as clean as the input. Prisms with holes get triangulated caps.
+
+The reply lists each object's vertex and face counts, `closed`, `non_manifold_edges`, `shells` and `volume` (the same numbers `blender_mesh_health` reports), plus `all_closed` for the whole call. With `merge=false` only the first 50 objects are listed; `object_count` gives the total.
+
+```json
+{
+  "polygons": [
+    {"outer": [[0,0],[4,0],[4,4],[0,4]], "holes": [[[1,1],[3,1],[3,3],[1,3]]]},
+    [[6,0],[12,0],[12,2],[8,2],[8,6],[6,6]]
+  ],
+  "height": 2.7,
+  "name": "Walls",
+  "collection": "House"
+}
+```
+
+The JSON file form of `source` is either the list of polygons, or `{"polygons": [...], "height": ..., "base_z": ...}`. Limits: 20,000 polygons and 2 million vertices per call.
+
+## blender_create_mesh
+
+Create one mesh object from `vertices` (`[[x,y,z], ...]`) and `faces` (lists of vertex indices, three or more each). Faces that reference a missing vertex or repeat an index are rejected with the face number. Also takes `source` (a JSON file with `vertices` and `faces`), `name`, `collection`, `parent`, `location`, `scale` and `smooth`. The reply has the same health summary as above, so an open or non-manifold result is visible straight away.
+
+## blender_upload
+
+Put a file on the Blender machine. This works whether Blender runs on your desk or on a remote host that only shares the bus with you.
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `name` | `str` | | Final file name |
+| `content_base64` / `text` / `json_data` | | | Exactly one of these |
+| `sha256` | `str` | computed | Pass your own to check the bytes end to end |
+| `overwrite` | `bool` | `True` | |
+| `upload_id`, `part_index`, `part_count` | | `None, 0, 1` | For payloads split across several calls |
+
+Files land in a folder per bus under Blender's user datafiles directory (on Linux, `~/.config/blender/<version>/datafiles/blender_mcp_uploads/<bus>/`). The folder is private to the user (mode 0700), survives a Blender restart, and is readable by background workers the same user spawns. The reply includes the full `path`, but tools with a `source` argument take the bare name.
+
+Names are cut down to their last path component and to letters, digits, `.`, `-` and `_`; leading dots are removed. `../../etc/passwd` becomes `passwd` inside the upload folder. Nothing is written outside it.
+
+<Aside title="How the transfer works">
+The server splits the payload into 256 KiB chunks and sends them as bus jobs, four at a time, each pinned to the Blender instance that accepted the first one. Chunks are written at explicit offsets, so a retry (up to three per chunk) can never corrupt the file. When everything has arrived, Blender checks the size and sha256 and only then renames the hidden partial file to its real name. A failed single-part upload is cleaned up automatically, and partial files older than an hour are removed on the next upload.
+</Aside>
+
+The maximum total size is `BLENDER_MCP_UPLOAD_MAX_BYTES` on the server, 50 MB by default. A single tool call is also bounded by what your MCP client will send in one request, so for large files split the data yourself: send `part_index=0, part_count=N`, take the `upload_id` from the reply, then send parts `1` to `N-1` in order with that id. The file appears when the last part lands. Pass `sha256` of the whole file on multi-part uploads, since the server only sees one part at a time.
+
+## blender_list_uploads and blender_delete_uploads
+
+`blender_list_uploads` returns the folder, each file's name, path, size and modified time, and `total_bytes`. `blender_delete_uploads` removes one file by `name`, or everything for the bus (partial uploads included) when `name` is omitted.
+
+## blender_polygon_ops
+
+2D footprint work on the server with [shapely](https://shapely.readthedocs.io/). Input polygons use the same shape as `blender_extrude_polygons`, and the reply's `polygons` (outer rings counter-clockwise, holes clockwise, no closing point) can be passed to it unchanged.
+
+| Operation | Needs | Does |
+|---|---|---|
+| `union` | | Merge overlapping and touching polygons |
+| `buffer` | `distance` | Grow, or shrink with a negative distance |
+| `closing` | `distance` | Grow then shrink: bridges gaps narrower than twice the distance, e.g. joining wall segments traced from a plan into one footprint |
+| `opening` | `distance` | Shrink then grow: removes slivers and spurs |
+| `simplify` | `tolerance` | Drop vertices while keeping topology |
+| `difference`, `intersection` | `other` | Against a second polygon list |
+| `validate` | | Repair self-intersections |
+| `area` | | Areas only, no polygons returned |
+
+`join_style` is `mitre` (default, keeps square corners square), `round` or `bevel`; `mitre_limit` defaults to 5. Every reply includes `input_area`, `area`, `polygon_count` and `hole_count`, so you can see at a glance whether an operation did what you expected. Input that isn't a valid polygon set is repaired with `make_valid` first and the reply says so.
+
+## Why shapely runs on the server
+
+Blender's Python has no shapely, and model-home ran its footprint steps in a separate shell for that reason. Bundling it into the addon would mean shipping compiled GEOS wheels per platform and per Blender Python version, next to the numpy Blender already ships, where a mismatched build breaks imports inside Blender. Running it on the server keeps the addon pure Python, works the same for a remote Blender that has never seen the data, and lets the output of one call feed the next without a round trip through Blender.
