@@ -46,6 +46,52 @@ services:
       retries: 5
       start_period: 10s
 
+  # ---- Object storage (MinIO) for payloads too big for MCP ---------------
+  # Clients never send bytes through MCP: the server hands out presigned
+  # URLs and callers/Blender PUT and GET here directly, so this one IS
+  # publicly reachable, on STORAGE_DOMAIN. A SigV4 signature covers the Host
+  # header; caddy-docker-proxy's reverse_proxy passes Host through untouched,
+  # which is why URLs signed for STORAGE_DOMAIN verify inside the container.
+  # The server's admin calls (bucket, lifecycle, list, delete) use the
+  # internal network. The bucket and its expiry rule are created by the
+  # server on first use, so there is no init container.
+  #
+  # Image: MinIO stopped publishing images (Docker Hub's minio/minio is gone,
+  # quay.io/minio requires auth), so this is the pgsty community build of the
+  # same upstream release, pinned by tag. Override with MINIO_IMAGE.
+  blender-mcp-minio:
+    image: ${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
+    container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-minio
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      # Required: an empty password would fall back to minioadmin/minioadmin
+      # on a public hostname.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      MINIO_SERVER_URL: https://${STORAGE_DOMAIN:?STORAGE_DOMAIN must be set in .env}
+      # S3 API only; the web console is not exposed.
+      MINIO_BROWSER: "off"
+    volumes:
+      - blender-mcp-miniodata:/data
+    networks:
+      - caddy
+      - internal
+    labels:
+      caddy: ${STORAGE_DOMAIN:?STORAGE_DOMAIN must be set in .env}
+      caddy.reverse_proxy: "{{upstreams 9000}}"
+      # Stream large bodies both ways instead of buffering them in Caddy.
+      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy.transport: "http"
+      caddy.reverse_proxy.transport.read_timeout: "0"
+      caddy.reverse_proxy.transport.write_timeout: "0"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   blender-mcp:
     build:
       context: .
@@ -84,6 +130,16 @@ services:
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
+      # Object storage — see blender-mcp-minio above and object_storage.py.
+      MINIO_ENDPOINT: http://blender-mcp-minio:9000
+      MINIO_PUBLIC_URL: https://${STORAGE_DOMAIN}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-blender-mcp}
+      STORAGE_RETENTION_DAYS: ${STORAGE_RETENTION_DAYS:-7}
+      STORAGE_URL_EXPIRY_S: ${STORAGE_URL_EXPIRY_S:-900}
+      STORAGE_OUTPUT_URL_EXPIRY_S: ${STORAGE_OUTPUT_URL_EXPIRY_S:-21600}
+      STORAGE_MAX_UPLOAD_BYTES: ${STORAGE_MAX_UPLOAD_BYTES:-5368709120}
     networks:
       - caddy
       - internal
@@ -189,6 +245,15 @@ services:
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://mcp.blender.bet}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-blender_mcp}:${POSTGRES_PASSWORD}@blender-mcp-postgres:5432/${POSTGRES_DB:-blender_mcp}
+      MINIO_ENDPOINT: http://blender-mcp-minio:9000
+      MINIO_PUBLIC_URL: https://${STORAGE_DOMAIN}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-blender-mcp}
+      STORAGE_RETENTION_DAYS: ${STORAGE_RETENTION_DAYS:-7}
+      STORAGE_URL_EXPIRY_S: ${STORAGE_URL_EXPIRY_S:-900}
+      STORAGE_OUTPUT_URL_EXPIRY_S: ${STORAGE_OUTPUT_URL_EXPIRY_S:-21600}
+      STORAGE_MAX_UPLOAD_BYTES: ${STORAGE_MAX_UPLOAD_BYTES:-5368709120}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -211,10 +276,12 @@ services:
 networks:
   caddy:
     external: true
-  # Private network for blender-mcp ↔ blender-mcp-postgres only. Not on
-  # the shared caddy fabric so the DB never gets accidentally proxied.
+  # Private network for blender-mcp ↔ blender-mcp-postgres (and the
+  # server's admin calls to blender-mcp-minio). Not on the shared caddy
+  # fabric so the DB never gets accidentally proxied.
   internal:
     driver: bridge
 
 volumes:
   blender-mcp-pgdata:
+  blender-mcp-miniodata:

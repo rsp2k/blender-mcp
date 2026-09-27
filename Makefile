@@ -26,12 +26,13 @@ canary-full: ## Canary plus the iptables network-drop step (needs passwordless s
 # invocation is cheap after the first run because scripts/build_extension.py
 # reuses cached wheels for unchanged deps (pip's own resolver cache).
 prod: extensions ## Start the production stack (FastMCP server + extension repo behind caddy-docker-proxy)
-	$(COMPOSE) up -d --build blender-mcp blender-mcp-extensions
+	$(COMPOSE) up -d --build blender-mcp blender-mcp-extensions blender-mcp-minio
 	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
+	@echo "-> Object storage at https://$$(grep '^STORAGE_DOMAIN=' .env | cut -d= -f2)/"
 	@echo "-> Extension repo at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions/index.json"
 
 dev: ## Start the dev stack with hot reload
-	$(COMPOSE) --profile dev up -d --build blender-mcp-dev
+	$(COMPOSE) --profile dev up -d --build blender-mcp-dev blender-mcp-minio
 	@echo "-> Dev server at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
 
 # --profile dev so profile-gated services are also torn down, not just the default service
