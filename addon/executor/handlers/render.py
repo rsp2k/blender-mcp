@@ -217,19 +217,49 @@ def crop_image_file(path: str, box) -> tuple[int, int]:
     return x1 - x0, y1 - y0
 
 
+def _redraw(window, area, region) -> None:
+    """Draw the region now so region_3d's matrices match the current view.
+
+    window_matrix and perspective_matrix are only recomputed when the region
+    draws, and a bus job that changes the view runs between redraws.
+    """
+    try:
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    except Exception as e:  # noqa: BLE001 - a stale matrix beats failing the call
+        print(f"[BlenderMCP] viewport redraw failed: {e}")
+
+
+def _view_selected(objs, window, area, region) -> None:
+    """Frame objs with view3d.view_selected, leaving the selection as it was."""
+    view_layer = bpy.context.view_layer
+    prev_selected = [o for o in view_layer.objects if o.select_get()]
+    prev_active = view_layer.objects.active
+    try:
+        for o in prev_selected:
+            o.select_set(False)
+        for o in objs:
+            o.select_set(True)
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.view3d.view_selected(use_all_regions=False)
+    finally:
+        for o in view_layer.objects:
+            if o.select_get() and o not in prev_selected:
+                o.select_set(False)
+        for o in prev_selected:
+            try:
+                o.select_set(True)
+            except RuntimeError:
+                pass
+        view_layer.objects.active = prev_active
+
+
 def viewport_bbox(obj_names, margin: float = 0.05):
     """Projected pixel bbox of objects in the first 3D viewport, or None."""
     window, area, space, region = _require_view3d()[0]
     rv3d = space.region_3d
     if not bpy.app.background:
-        # region_3d.perspective_matrix is only recomputed when the region
-        # draws. A bus job that just changed the view (set_view, frame=)
-        # runs between redraws, so force one before projecting.
-        try:
-            with bpy.context.temp_override(window=window, area=area, region=region):
-                bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
-        except Exception as e:  # noqa: BLE001 - a stale matrix beats failing the capture
-            print(f"[BlenderMCP] viewport redraw before crop failed: {e}")
+        _redraw(window, area, region)
     points = [p for o in _frame_objects(obj_names) for p in _world_corners(o)]
     matrix = [list(row) for row in rv3d.perspective_matrix]
     return geo.project_bbox(points, matrix, (region.width, region.height), margin)
@@ -240,14 +270,15 @@ class RenderHandlersMixin:
 
     @command("set_view")
     def set_view(self, frame=None, angle=None, perspective=None, shading=None,
-                 all_viewports: bool = False):
+                 all_viewports: bool = False, margin: float = 0.05):
         """Frame the 3D viewport on objects at an angle.
 
         frame: object names, or None for every visible object. angle: a preset
         (front, back, left, right, top, bottom, iso), [yaw, elevation]
         degrees, or None to keep the current rotation. perspective: PERSP or
         ORTHO. shading: a type name (SOLID, MATERIAL, ...) or a dict of
-        set_viewport_shading arguments.
+        set_viewport_shading arguments. margin: free space kept around the
+        subject, as a fraction of its projected size per side.
         """
         yaw_el = geo.resolve_angle(angle)
         if perspective is not None:
@@ -266,36 +297,38 @@ class RenderHandlersMixin:
             if perspective is not None:
                 rv3d.view_perspective = perspective
 
-        # view3d.view_selected frames using the viewport's own lens/aspect
-        # maths; select the targets temporarily, then restore the selection.
-        view_layer = bpy.context.view_layer
-        prev_selected = [o for o in view_layer.objects if o.select_get()]
-        prev_active = view_layer.objects.active
         framed, skipped = [], []
-        try:
-            for o in prev_selected:
-                o.select_set(False)
-            for o in objs:
-                try:
-                    o.select_set(True)
-                    framed.append(o.name)
-                except RuntimeError:
-                    skipped.append(o.name)  # hidden or not in this view layer
-            if not framed:
-                raise ValueError(f"none of the objects can be framed (hidden?): {skipped}")
-            for window, area, _space, region in targets:
-                with bpy.context.temp_override(window=window, area=area, region=region):
-                    bpy.ops.view3d.view_selected(use_all_regions=False)
-        finally:
-            for o in view_layer.objects:
-                if o.select_get() and o not in prev_selected:
-                    o.select_set(False)
-            for o in prev_selected:
-                try:
-                    o.select_set(True)
-                except RuntimeError:
-                    pass
-            view_layer.objects.active = prev_active
+        for o in objs:
+            (framed if o.visible_get() else skipped).append(o)
+        if not framed:
+            raise ValueError(
+                f"none of the objects can be framed (hidden?): {[o.name for o in skipped]}")
+        points = [p for o in framed for p in _world_corners(o)]
+
+        fits = []
+        for window, area, space, region in targets:
+            if bpy.app.background:
+                # No drawn region, so no valid window matrix to fit against.
+                _view_selected(framed, window, area, region)
+                continue
+            # view3d.view_selected sizes the view from the largest bbox side,
+            # not the projected silhouette, so a box seen corner-on overflows
+            # (the bottom of the default cube was cut off). Fit against the
+            # region's own projection instead (closed form, see fit_view).
+            _redraw(window, area, region)  # refresh window_matrix after persp/ortho changes
+            rv3d = space.region_3d
+            rot3 = [list(row) for row in rv3d.view_rotation.to_matrix()]
+            window_matrix = [list(row) for row in rv3d.window_matrix]
+            ortho = rv3d.view_perspective == "ORTHO"
+            fit = geo.fit_view(
+                points, window_matrix, rot3, margin=margin, ortho=ortho, ref_distance=rv3d.view_distance,
+            )
+            rv3d.view_location = fit["location"]
+            rv3d.view_distance = fit["distance"]
+            _redraw(window, area, region)
+            fits.append({"contained": fit["contained"]})
+        skipped = [o.name for o in skipped]
+        framed = [o.name for o in framed]
 
         shading_result = None
         if shading:
@@ -311,6 +344,7 @@ class RenderHandlersMixin:
             "perspective": rv3d.view_perspective,
             "view_distance": rv3d.view_distance,
             "viewports": len(targets),
+            "fit": fits or None,
             "shading": shading_result,
         }
 
