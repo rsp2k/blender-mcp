@@ -28,7 +28,8 @@ class ViewportHandlersMixin:
     """`get_viewport_screenshot` command."""
 
     @command("get_viewport_screenshot")
-    def get_viewport_screenshot(self, max_size=0, filepath=None, format="png"):
+    def get_viewport_screenshot(self, max_size=0, filepath=None, format="png",
+                                frame=None, crop=False, crop_margin=0.05):
         """
         Render the current 3D viewport to an image file.
 
@@ -48,9 +49,28 @@ class ViewportHandlersMixin:
         - filepath: Path to write the image to. Omitted: a unique file under
           Blender's temp dir (blender_mcp_screenshots/); the result says where.
         - format: Image format (png, jpg, etc.)
+        - frame: object names to frame the viewport on first (keeps the
+          current angle; use set_view to change it).
+        - crop: crop the image to the objects' projected bounds plus
+          crop_margin (the framed objects, else the selection, else all
+          visible objects).
         """
         if bpy.app.background:
             return {"error": "No viewport available in --background mode"}
+
+        framed = None
+        if frame:
+            try:
+                framed = self.set_view(frame=frame)
+            except Exception as e:
+                return {"error": f"framing failed: {e}"}
+        crop_targets = None
+        if crop:
+            if frame:
+                crop_targets = frame
+            else:
+                selected = [o.name for o in bpy.context.view_layer.objects if o.select_get()]
+                crop_targets = selected or None
 
         area = next(
             (a for a in bpy.context.screen.areas if a.type == "VIEW_3D"), None
@@ -105,6 +125,19 @@ class ViewportHandlersMixin:
                 r.image_settings.file_format,
             ) = saved
 
+        cropped_box = None
+        if crop:
+            try:
+                from .render import crop_image_file, viewport_bbox
+
+                cropped_box = viewport_bbox(crop_targets, margin=crop_margin)
+                if cropped_box is not None and _blender_file_format(format) == "PNG":
+                    crop_image_file(filepath, cropped_box)
+                elif cropped_box is not None:
+                    return {"error": "crop is only supported for png"}
+            except Exception as e:
+                return {"error": f"crop failed: {e}"}
+
         # Downscale on disk if the capture exceeded max_size. Kept as a
         # post-pass instead of pre-shrinking the render resolution so the
         # written file's aspect matches the viewport region exactly.
@@ -129,9 +162,14 @@ class ViewportHandlersMixin:
         finally:
             bpy.data.images.remove(img)
 
-        return {
+        result = {
             "success": True,
             "width": width,
             "height": height,
             "filepath": filepath,
         }
+        if framed is not None:
+            result["framed"] = framed.get("framed")
+        if crop:
+            result["crop_box"] = list(cropped_box) if cropped_box else None
+        return result
