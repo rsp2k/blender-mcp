@@ -35,6 +35,7 @@ from .extension_tools import BlenderExtensionComponent
 from .access_token_tools import BlenderAccessTokenComponent
 from .analysis_tools import BlenderAnalysisComponent
 from .boolean_tools import BlenderBooleanComponent
+from .data_tools import BlenderDataComponent
 from .client_health import BlenderHealthComponent
 from .job_tools import BlenderJobComponent
 from .worker_tools import BlenderWorkerComponent
@@ -367,6 +368,8 @@ def build_http_mcp() -> FastMCP:
     BlenderAnalysisComponent().register_tools(mcp_server=server, prefix="blender")
     # Booleans that report deltas and refuse unsafe inputs; mesh health.
     BlenderBooleanComponent().register_tools(mcp_server=server, prefix="blender")
+    # Mesh-from-data, uploads to the Blender host, 2D polygon ops (gaps-log 1-3).
+    BlenderDataComponent().register_tools(mcp_server=server, prefix="blender")
     # Job-pump health + remote pump reset (feedback bug-iDJHVyy4e2Q).
     BlenderHealthComponent().register_tools(mcp_server=server, prefix="blender")
 
