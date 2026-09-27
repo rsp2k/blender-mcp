@@ -378,7 +378,7 @@ def build_http_mcp() -> FastMCP:
     BlenderRenderComponent().register_tools(mcp_server=server, prefix="blender")
     # Mesh-from-data, uploads to the Blender host, 2D polygon ops (gaps-log 1-3).
     BlenderDataComponent().register_tools(mcp_server=server, prefix="blender")
-    # Presigned object-storage URLs for payloads too big for MCP (MinIO).
+    # Presigned object-storage URLs for payloads too big for MCP (Garage).
     BlenderObjectStorageComponent().register_tools(mcp_server=server, prefix="blender")
     # Real-world-scaled Poly Haven materials, per-face assignment, HDRI control.
     BlenderTextureComponent().register_tools(mcp_server=server, prefix="blender")

@@ -12,10 +12,10 @@ from blender_mcp import object_storage as os_
 from blender_mcp import object_tools as ot
 
 ENV = {
-    "MINIO_ENDPOINT": "http://blender-mcp-minio:9000",
-    "MINIO_PUBLIC_URL": "https://files.example.com",
-    "MINIO_ROOT_USER": "root",
-    "MINIO_ROOT_PASSWORD": "secret-secret",
+    "S3_ENDPOINT": "http://blender-mcp-garage:3900",
+    "S3_PUBLIC_URL": "https://files.example.com",
+    "S3_ACCESS_KEY": "GK0123456789abcdef01234567",
+    "S3_SECRET_KEY": "secret-secret",
 }
 
 
@@ -33,22 +33,24 @@ def test_not_configured_without_endpoint_or_credentials():
 
 def test_config_parses_endpoints_and_defaults():
     c = os_.load_config(ENV)
-    assert (c.internal_endpoint, c.internal_secure) == ("blender-mcp-minio:9000", False)
+    assert (c.internal_endpoint, c.internal_secure) == ("blender-mcp-garage:3900", False)
     assert (c.public_endpoint, c.public_secure) == ("files.example.com", True)
-    assert c.access_key == "root" and c.bucket == "blender-mcp"
-    assert c.retention_days == 7 and c.url_expiry_s == 900
+    assert c.access_key.startswith("GK") and c.bucket == "blender-mcp" and c.region == "garage"
+    assert c.retention_days == 7 and c.url_expiry_s == 900 and c.prune_interval_s == 3600
+    assert c.garage_admin_url is None
 
 
-def test_explicit_keys_override_root_and_expiry_is_clamped():
-    c = os_.load_config({**ENV, "MINIO_ACCESS_KEY": "svc", "MINIO_SECRET_KEY": "svc-secret",
-                         "STORAGE_URL_EXPIRY_S": "99999999", "STORAGE_RETENTION_DAYS": "junk"})
-    assert c.access_key == "svc" and c.secret_key == "svc-secret"
+def test_expiry_is_clamped_and_garage_admin_is_read():
+    c = os_.load_config({**ENV, "STORAGE_URL_EXPIRY_S": "99999999",
+                         "STORAGE_RETENTION_DAYS": "junk", "GARAGE_ADMIN_URL": "http://g:3903",
+                         "GARAGE_ADMIN_TOKEN": "t", "STORAGE_PRUNE_INTERVAL_S": "0"})
     assert c.url_expiry_s == os_.MAX_URL_EXPIRY_S and c.retention_days == 7
+    assert (c.garage_admin_url, c.garage_admin_token, c.prune_interval_s) == ("http://g:3903", "t", 0)
 
 
 def test_public_url_with_a_path_is_rejected():
     with pytest.raises(ValueError, match="path"):
-        os_.load_config({**ENV, "MINIO_PUBLIC_URL": "https://example.com/minio"})
+        os_.load_config({**ENV, "S3_PUBLIC_URL": "https://example.com/s3"})
 
 
 # ---- keys -----------------------------------------------------------------
@@ -90,7 +92,7 @@ def test_output_name():
 
 def test_presigned_urls_target_the_public_host_without_network():
     # The internal endpoint doesn't resolve here; presigning must not touch it.
-    s = store(MINIO_ENDPOINT="http://nowhere.invalid:9000")
+    s = store(S3_ENDPOINT="http://nowhere.invalid:3900")
     key = os_.make_key("bus-1", "a b.png")
     put = urlsplit(s.presign_put(key))
     assert put.scheme == "https" and put.netloc == "files.example.com"
@@ -98,7 +100,7 @@ def test_presigned_urls_target_the_public_host_without_network():
     q = parse_qs(put.query)
     assert q["X-Amz-Expires"] == ["900"]
     assert q["X-Amz-SignedHeaders"] == ["host"]
-    assert "/us-east-1/s3/aws4_request" in q["X-Amz-Credential"][0]
+    assert "/garage/s3/aws4_request" in q["X-Amz-Credential"][0]
     get = parse_qs(urlsplit(s.presign_get(key, 60)).query)
     assert get["X-Amz-Expires"] == ["60"]
 

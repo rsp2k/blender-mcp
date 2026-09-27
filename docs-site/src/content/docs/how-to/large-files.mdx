@@ -5,7 +5,7 @@ description: "Move big inputs onto the Blender host and get renders and exports 
 
 import { Aside } from '@astrojs/starlight/components';
 
-An MCP message tops out around 25 MB, and long before that a big payload fills the calling model's context with bytes it can't use. So large files skip MCP entirely. The server runs S3-compatible object storage (MinIO) and hands out **presigned URLs**: short-lived links that allow exactly one upload or download of one object, with no credentials involved. You move the bytes with plain HTTP; the tool calls only carry the link and an `object_key`.
+An MCP message tops out around 25 MB, and long before that a big payload fills the calling model's context with bytes it can't use. So large files skip MCP entirely. The server runs S3-compatible object storage ([Garage](https://garagehq.deuxfleurs.fr/)) and hands out **presigned URLs**: short-lived links that allow exactly one upload or download of one object, with no credentials involved. You move the bytes with plain HTTP; the tool calls only carry the link and an `object_key`.
 
 ## Get a file onto the Blender host
 
@@ -85,14 +85,16 @@ The storage tools answer `storage_not_configured`, and `store=true` adds `"store
 
 ## Running the storage (self-hosting)
 
-The compose stack includes a `blender-mcp-minio` service on its own hostname. To enable it:
+Object storage is optional. The compose stack has a `blender-mcp-garage` service behind the `storage` profile, which `make prod` includes only when `STORAGE_DOMAIN` is set. To enable it:
 
 1. Point a DNS record for the storage hostname (e.g. `files.blender.bet`) at the Caddy host, same as `DOMAIN`.
-2. In `.env`, set `STORAGE_DOMAIN`, `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` (generate the last two with `openssl rand -hex 24`). Compose refuses to start without them.
-3. Run `make prod`. The server creates the bucket and its expiry rule on first use.
+2. In `.env`, set `STORAGE_DOMAIN`, `S3_ACCESS_KEY` (`GK` plus 24 hex characters, e.g. `GK$(openssl rand -hex 12)`), `S3_SECRET_KEY`, `GARAGE_RPC_SECRET` and `GARAGE_ADMIN_TOKEN` (each `openssl rand -hex 32`).
+3. Run `make prod`. On first use the server sets Garage up through its admin API: the single-node layout, the access key, the bucket and its expiry rule. It checks before each step, so restarts are harmless.
+
+Objects are deleted `STORAGE_RETENTION_DAYS` after upload. The server sets an S3 lifecycle rule, which Garage applies in a once-a-day pass, and also runs its own hourly prune by upload time, so expiry doesn't depend on that pass.
 
 <Aside type="caution">
-A presigned URL is signed for one hostname, and the signature covers the `Host` header. Caddy's `reverse_proxy` passes `Host` through unchanged, which is what makes this work; a proxy that rewrites `Host` breaks every URL with `SignatureDoesNotMatch`. `MINIO_PUBLIC_URL` (derived from `STORAGE_DOMAIN`) must be the exact origin clients connect to.
+A presigned URL is signed for one hostname, and the signature covers the `Host` header. Caddy's `reverse_proxy` passes `Host` through unchanged, which is what makes this work; a proxy that rewrites `Host` breaks every URL with a 403 "Invalid signature". `S3_PUBLIC_URL` (derived from `STORAGE_DOMAIN`) must be the exact origin clients connect to.
 </Aside>
 
-The web console is turned off; only the S3 API is exposed. MinIO no longer publishes container images, so the stack uses the `pgsty/minio` community build of the same upstream release, pinned by tag (`MINIO_IMAGE` overrides it).
+Only the S3 API is proxied. Garage's admin API stays on the Docker networks, behind `GARAGE_ADMIN_TOKEN`. The image is the official `dxflrs/garage`, pinned by tag (`GARAGE_IMAGE` overrides it).

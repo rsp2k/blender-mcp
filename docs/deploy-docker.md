@@ -155,18 +155,18 @@ make dev          # docker compose up with the dev profile + source mounts + --r
 
 That target runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.0.0.0` inside the container with source volumes mounted from the host.
 
-## Object storage (MinIO)
+## Object storage (Garage, optional)
 
-The `blender-mcp-minio` service holds large inputs and outputs so bytes never travel through MCP (see the docs-site how-to "Large files: uploads and downloads"). It has its own public hostname because clients PUT and GET presigned URLs against it directly.
+The `blender-mcp-garage` service holds large inputs and outputs so bytes never travel through MCP (see the docs-site how-to "Large files: uploads and downloads"). It has its own public hostname because clients PUT and GET presigned URLs against it directly. It sits behind the `storage` compose profile: with `STORAGE_DOMAIN` unset the stack runs exactly as before and the storage tools report "storage not configured".
 
 Enabling it on an existing deploy:
 
 1. DNS: an A record for the storage hostname pointing at the Caddy host, e.g. `nsupd blender.bet 'add files 300 A <caddy host IP>'`. Check with `dig +short files.blender.bet`.
-2. `.env`: add `STORAGE_DOMAIN=files.blender.bet`, `MINIO_ROOT_USER=$(openssl rand -hex 12)` and `MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)`. Compose now refuses to start any service without these three.
-3. `make prod` (it now also starts `blender-mcp-minio`), then `docker compose logs blender-mcp-minio` and `docker compose ps` until it's healthy.
-4. Smoke test from a client: `blender_create_upload_url(filename="t.txt")`, `curl -T t.txt "<upload_url>"`, then `blender_create_download_url` and `curl` the result. A `SignatureDoesNotMatch` means something between the client and MinIO rewrote the `Host` header.
+2. `.env`: add `STORAGE_DOMAIN=files.blender.bet`, `S3_ACCESS_KEY=GK$(openssl rand -hex 12)`, `S3_SECRET_KEY=$(openssl rand -hex 32)`, `GARAGE_RPC_SECRET=$(openssl rand -hex 32)` and `GARAGE_ADMIN_TOKEN=$(openssl rand -hex 32)`. Write the generated values literally; the `$(...)` is just how to make them.
+3. `make prod`. With `STORAGE_DOMAIN` set it adds `--profile storage` and starts `blender-mcp-garage` (`make prod-storage` starts only that). Check `docker compose --profile storage logs blender-mcp-garage` and `docker compose --profile storage ps` until it's healthy.
+4. Smoke test from a client: `blender_create_upload_url(filename="t.txt")`, `curl -T t.txt "<upload_url>"`, then `blender_create_download_url` and `curl` the result. A 403 "Invalid signature" means something between the client and Garage rewrote the `Host` header.
 
-The server creates the bucket and a lifecycle rule (`STORAGE_RETENTION_DAYS`, default 7) on first use. Data lives on the `blender-mcp-miniodata` volume. The server signs with the root credentials; a scoped service account (`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` override them) is a reasonable follow-up.
+On first use the server bootstraps Garage through its admin API (single-node layout, imports `S3_ACCESS_KEY`, creates the bucket, grants the key), then sets a lifecycle rule. Every step checks first, so restarts are harmless. Expiry: the server also prunes objects older than `STORAGE_RETENTION_DAYS` (default 7) every hour, independent of Garage's once-a-day lifecycle pass. Data lives on the `blender-mcp-garagedata` volume; the image is the official `dxflrs/garage`, pinned by tag (`GARAGE_IMAGE` overrides it).
 
 ## Live reference deploy
 

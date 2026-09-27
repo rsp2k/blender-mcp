@@ -1,0 +1,20 @@
+# Single-node Garage for blender-mcp object storage (see docker-compose.yml).
+# Secrets come from the environment, not this file:
+#   GARAGE_RPC_SECRET   32 random bytes as hex (node-to-node RPC; unused but required)
+#   GARAGE_ADMIN_TOKEN  admin API bearer token; the server uses it to bootstrap
+#                       the layout, access key and bucket on first use
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+# Must match S3_REGION on the server: presigned URLs are signed for it.
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"

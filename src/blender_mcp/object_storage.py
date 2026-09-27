@@ -1,39 +1,49 @@
-"""S3-compatible object storage (MinIO) for payloads too big for MCP.
+"""S3-compatible object storage (Garage) for payloads too big for MCP.
 
 MCP messages top out around 25 MB, and even well under that a large payload
 burns the calling model's context. So bytes never travel through MCP here:
 the server hands out short-lived presigned URLs and the caller (or the
-Blender addon) talks to MinIO directly.
+Blender addon) talks to the S3 server directly.
 
-Two clients, one set of credentials:
+Two clients, one set of credentials (the ``minio`` package is a generic S3
+client and works against Garage):
 
-- the *signer* is built for the public endpoint (``MINIO_PUBLIC_URL``, e.g.
+- the *signer* is built for the public endpoint (``S3_PUBLIC_URL``, e.g.
   https://files.blender.bet). A SigV4 signature covers the Host header, so
   URLs must be signed for the host the client will actually connect to;
   Caddy's reverse_proxy passes that Host through unchanged. With a fixed
-  region the minio client signs locally, with no network round trip.
-- the *admin* client talks to the internal endpoint (``MINIO_ENDPOINT``, e.g.
-  http://blender-mcp-minio:9000) for bucket setup, listing, stat and delete.
+  region the client signs locally, with no network round trip.
+- the *admin* client talks to the internal endpoint (``S3_ENDPOINT``, e.g.
+  http://blender-mcp-garage:3900) for bucket setup, listing, stat and delete.
   It's synchronous, so every call goes through ``asyncio.to_thread``.
 
+Garage starts empty (no layout, keys or buckets). When ``GARAGE_ADMIN_URL``
+and ``GARAGE_ADMIN_TOKEN`` are set, the first use bootstraps it through the
+admin API (see garage_admin.py), idempotently.
+
 Object keys are ``<bus_id>/<32 hex>/<filename>``; every tool checks the key
-starts with a bus the caller is a member of. A lifecycle rule on the bucket
-expires objects after ``STORAGE_RETENTION_DAYS``.
+starts with a bus the caller is a member of.
+
+Expiry, two layers: an S3 lifecycle rule (Garage applies it in a once-a-day
+pass) and a pruning task in this process that deletes objects older than
+``STORAGE_RETENTION_DAYS`` every ``STORAGE_PRUNE_INTERVAL_S``. The pruner is
+what the tests verify, since a lifecycle pass can't be triggered on demand.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from urllib.parse import urlsplit
 
 DEFAULT_BUCKET = "blender-mcp"
-DEFAULT_REGION = "us-east-1"
+DEFAULT_REGION = "garage"  # Garage's s3_region (packaging/garage.toml)
 DEFAULT_RETENTION_DAYS = 7
 DEFAULT_URL_EXPIRY_S = 15 * 60
 # Output uploads are signed before the render starts, and a render can run
@@ -42,6 +52,9 @@ DEFAULT_OUTPUT_URL_EXPIRY_S = 6 * 3600
 # S3 caps a single PUT at 5 GiB.
 DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024**3
 MAX_URL_EXPIRY_S = 7 * 24 * 3600  # SigV4 limit
+DEFAULT_PRUNE_INTERVAL_S = 3600
+
+log = logging.getLogger(__name__)
 
 LIFECYCLE_RULE_ID = "blender-mcp-retention"
 
@@ -49,8 +62,8 @@ _NAME_OK = re.compile(r"[^A-Za-z0-9._-]+")
 MAX_NAME_LEN = 128
 
 NOT_CONFIGURED_DETAIL = (
-    "Object storage is not configured on this server (MINIO_ENDPOINT, MINIO_PUBLIC_URL "
-    "and credentials must be set). Fallback: blender_upload sends files up to 50 MB "
+    "Object storage is not configured on this server (S3_ENDPOINT, S3_PUBLIC_URL, "
+    "S3_ACCESS_KEY and S3_SECRET_KEY must be set). Fallback: blender_upload sends files up to 50 MB "
     "through the bus in chunks, and outputs stay on the Blender host at the path "
     "each tool returns."
 )
@@ -82,7 +95,7 @@ def _endpoint(url: str) -> tuple[str, bool]:
     if not parts.netloc:
         raise ValueError(f"not a usable endpoint URL: {url!r}")
     if parts.path not in ("", "/"):
-        raise ValueError(f"endpoint must not have a path (got {url!r}); serve MinIO at a host root")
+        raise ValueError(f"endpoint must not have a path (got {url!r}); serve S3 at a host root")
     return parts.netloc, parts.scheme == "https"
 
 
@@ -100,19 +113,19 @@ class StorageConfig:
     url_expiry_s: int = DEFAULT_URL_EXPIRY_S
     output_url_expiry_s: int = DEFAULT_OUTPUT_URL_EXPIRY_S
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
+    prune_interval_s: int = DEFAULT_PRUNE_INTERVAL_S
+    garage_admin_url: str | None = None
+    garage_admin_token: str | None = None
+    garage_capacity_gb: int = 100
 
 
 def load_config(env=None) -> StorageConfig | None:
-    """Storage settings from the environment, or None when not configured.
-
-    Credentials: MINIO_ACCESS_KEY / MINIO_SECRET_KEY if set, else the root
-    user (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD) compose already has.
-    """
+    """Storage settings from the environment, or None when not configured."""
     env = os.environ if env is None else env
-    internal = (env.get("MINIO_ENDPOINT") or "").strip()
-    public = (env.get("MINIO_PUBLIC_URL") or "").strip()
-    access = (env.get("MINIO_ACCESS_KEY") or env.get("MINIO_ROOT_USER") or "").strip()
-    secret = (env.get("MINIO_SECRET_KEY") or env.get("MINIO_ROOT_PASSWORD") or "").strip()
+    internal = (env.get("S3_ENDPOINT") or "").strip()
+    public = (env.get("S3_PUBLIC_URL") or "").strip()
+    access = (env.get("S3_ACCESS_KEY") or "").strip()
+    secret = (env.get("S3_SECRET_KEY") or "").strip()
     if not (internal and public and access and secret):
         return None
     i_host, i_secure = _endpoint(internal)
@@ -121,14 +134,19 @@ def load_config(env=None) -> StorageConfig | None:
         internal_endpoint=i_host, internal_secure=i_secure,
         public_endpoint=p_host, public_secure=p_secure,
         access_key=access, secret_key=secret,
-        bucket=(env.get("STORAGE_BUCKET") or DEFAULT_BUCKET).strip(),
-        region=(env.get("STORAGE_REGION") or DEFAULT_REGION).strip(),
+        bucket=(env.get("S3_BUCKET") or DEFAULT_BUCKET).strip(),
+        region=(env.get("S3_REGION") or DEFAULT_REGION).strip(),
         retention_days=_int_env(env, "STORAGE_RETENTION_DAYS", DEFAULT_RETENTION_DAYS),
         url_expiry_s=_int_env(env, "STORAGE_URL_EXPIRY_S", DEFAULT_URL_EXPIRY_S,
                               lo=60, hi=MAX_URL_EXPIRY_S),
         output_url_expiry_s=_int_env(env, "STORAGE_OUTPUT_URL_EXPIRY_S",
                                      DEFAULT_OUTPUT_URL_EXPIRY_S, lo=60, hi=MAX_URL_EXPIRY_S),
         max_upload_bytes=_int_env(env, "STORAGE_MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES),
+        prune_interval_s=_int_env(env, "STORAGE_PRUNE_INTERVAL_S", DEFAULT_PRUNE_INTERVAL_S,
+                                  lo=0),
+        garage_admin_url=(env.get("GARAGE_ADMIN_URL") or "").strip() or None,
+        garage_admin_token=(env.get("GARAGE_ADMIN_TOKEN") or "").strip() or None,
+        garage_capacity_gb=_int_env(env, "GARAGE_CAPACITY_GB", 100),
     )
 
 
@@ -190,6 +208,7 @@ class ObjectStore:
                             region=config.region)
         self._ready = False
         self._ready_lock = asyncio.Lock()
+        self._pruner: asyncio.Task | None = None
 
     # Presigning is pure computation (fixed region, local clock).
     def presign_put(self, key: str, expires_s: int | None = None) -> str:
@@ -218,7 +237,13 @@ class ObjectStore:
         from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
 
         c = self.config
-        if not self._admin.bucket_exists(c.bucket):
+        if c.garage_admin_url and c.garage_admin_token:
+            from .garage_admin import bootstrap
+
+            bootstrap(c.garage_admin_url, c.garage_admin_token, access_key=c.access_key,
+                      secret_key=c.secret_key, bucket=c.bucket,
+                      capacity_bytes=c.garage_capacity_gb * 1024**3)
+        elif not self._admin.bucket_exists(c.bucket):
             self._admin.make_bucket(c.bucket)
         want = Rule(ENABLED, rule_filter=Filter(prefix=""), rule_id=LIFECYCLE_RULE_ID,
                     expiration=Expiration(days=c.retention_days))
@@ -230,13 +255,47 @@ class ObjectStore:
         self._admin.set_bucket_lifecycle(c.bucket, LifecycleConfig(others + [want]))
 
     async def ensure_ready(self) -> None:
-        """Create the bucket and retention rule once per process (idempotent)."""
+        """Bootstrap Garage, the bucket and the retention rule once per process
+        (idempotent), and start the pruner."""
         if self._ready:
             return
         async with self._ready_lock:
             if not self._ready:
                 await self._admin_call(self._ensure_bucket_sync)
                 self._ready = True
+                if self.config.prune_interval_s and self._pruner is None:
+                    self._pruner = asyncio.create_task(self._prune_loop(),
+                                                       name="object-storage-pruner")
+
+    async def _prune_loop(self) -> None:
+        while True:
+            try:
+                n = await self.prune()
+                if n:
+                    log.info("object storage: pruned %d expired objects", n)
+            except Exception as e:  # noqa: BLE001 - keep pruning on the next tick
+                log.warning("object storage: prune failed: %s", e)
+            await asyncio.sleep(self.config.prune_interval_s)
+
+    async def prune(self, max_age: timedelta | None = None, now: datetime | None = None) -> int:
+        """Delete objects older than ``max_age`` (default: the retention period).
+
+        Doesn't rely on the server's lifecycle support: it lists the bucket
+        and deletes by each object's upload time.
+        """
+        age = max_age if max_age is not None else timedelta(days=self.config.retention_days)
+        cutoff = (now or datetime.now(UTC)) - age
+        bucket = self.config.bucket
+
+        def run():
+            n = 0
+            for o in self._admin.list_objects(bucket, recursive=True):
+                if o.last_modified is not None and o.last_modified < cutoff:
+                    self._admin.remove_object(bucket, o.object_name)
+                    n += 1
+            return n
+
+        return await self._admin_call(run)
 
     async def stat(self, key: str) -> dict:
         await self.ensure_ready()
@@ -268,7 +327,7 @@ def _describe(key, size, last_modified, content_type, retention_days) -> dict:
     d = {"object_key": key, "name": key.rsplit("/", 1)[-1], "size": size}
     if last_modified is not None:
         d["last_modified"] = last_modified.strftime("%Y-%m-%dT%H:%M:%SZ")
-        # MinIO expires at midnight UTC after the day count, so this is a floor.
+        # Deleted by the next prune (or lifecycle pass) after this time.
         d["expires_after"] = (last_modified + timedelta(days=retention_days)).strftime(
             "%Y-%m-%dT%H:%M:%SZ")
     if content_type:

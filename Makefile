@@ -4,7 +4,13 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: help prod dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions canary canary-full
+# Object storage (Garage) is optional: its service sits behind the `storage`
+# compose profile and joins prod/dev only when .env sets STORAGE_DOMAIN.
+STORAGE_ON := $(shell grep -qE '^STORAGE_DOMAIN=.+' .env 2>/dev/null && echo 1)
+STORAGE_PROFILE := $(if $(STORAGE_ON),--profile storage,)
+STORAGE_SVC := $(if $(STORAGE_ON),blender-mcp-garage,)
+
+.PHONY: help prod prod-storage dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions canary canary-full
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage: make <target>\n\nTargets:\n"} \
@@ -26,21 +32,26 @@ canary-full: ## Canary plus the iptables network-drop step (needs passwordless s
 # invocation is cheap after the first run because scripts/build_extension.py
 # reuses cached wheels for unchanged deps (pip's own resolver cache).
 prod: extensions ## Start the production stack (FastMCP server + extension repo behind caddy-docker-proxy)
-	$(COMPOSE) up -d --build blender-mcp blender-mcp-extensions blender-mcp-minio
+	$(COMPOSE) $(STORAGE_PROFILE) up -d --build blender-mcp blender-mcp-extensions $(STORAGE_SVC)
 	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
-	@echo "-> Object storage at https://$$(grep '^STORAGE_DOMAIN=' .env | cut -d= -f2)/"
+	@echo "-> Object storage: $(if $(STORAGE_ON),https://$$(grep '^STORAGE_DOMAIN=' .env | cut -d= -f2)/,off (set STORAGE_DOMAIN in .env to enable))"
 	@echo "-> Extension repo at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions/index.json"
 
 dev: ## Start the dev stack with hot reload
-	$(COMPOSE) --profile dev up -d --build blender-mcp-dev blender-mcp-minio
+	$(COMPOSE) --profile dev $(STORAGE_PROFILE) up -d --build blender-mcp-dev $(STORAGE_SVC)
 	@echo "-> Dev server at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
 
 # --profile dev so profile-gated services are also torn down, not just the default service
 down: ## Stop both stacks (prod + dev)
-	$(COMPOSE) --profile dev down
+	$(COMPOSE) --profile dev --profile storage down
 
 logs: ## Tail logs from whichever stack is running
-	$(COMPOSE) --profile dev logs -f --tail=200
+	$(COMPOSE) --profile dev --profile storage logs -f --tail=200
+
+prod-storage: ## Start/refresh only the object storage service (needs STORAGE_DOMAIN etc. in .env)
+	@test -n "$(STORAGE_ON)" || { echo "STORAGE_DOMAIN is not set in .env"; exit 1; }
+	$(COMPOSE) --profile storage up -d blender-mcp-garage
+	$(COMPOSE) --profile storage ps blender-mcp-garage
 
 restart: ## Graceful restart without rebuild (prod, falls back to dev if running)
 	@if docker ps --format '{{.Names}}' | grep -q "blender-mcp-dev$$"; then \
