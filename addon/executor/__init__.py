@@ -25,8 +25,10 @@ from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
 from .handlers.analysis import AnalysisHandlersMixin
 from .handlers.booleans import BooleanHandlersMixin
+from .handlers.mesh_data import MeshDataHandlersMixin
 from .handlers.scene import SceneHandlersMixin
 from .handlers.sketchfab import SketchfabHandlersMixin
+from .handlers.uploads import UploadHandlersMixin
 from .handlers.view_controls import ViewControlHandlersMixin
 from .handlers.viewport import ViewportHandlersMixin
 from .handlers.workers import WorkerHandlersMixin
@@ -47,6 +49,8 @@ class BlenderCommandExecutor(
     ViewControlHandlersMixin,
     AnalysisHandlersMixin,
     BooleanHandlersMixin,
+    MeshDataHandlersMixin,
+    UploadHandlersMixin,
     WorkerHandlersMixin,
     SharedHelpersMixin,
 ):
