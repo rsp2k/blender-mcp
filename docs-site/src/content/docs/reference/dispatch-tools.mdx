@@ -96,7 +96,7 @@ Execute arbitrary Python in the Blender main thread. Captures stdout and returns
 
 ```python
 blender_get_viewport_screenshot(
-    filepath: str,
+    filepath: str | None = None,
     max_size: int = 0,
     format: str = "png",
     target_uuid: str | None = None,
@@ -104,7 +104,7 @@ blender_get_viewport_screenshot(
 ) -> str
 ```
 
-Save a 3D viewport screenshot to `filepath` on the Blender host. `max_size` caps the longest edge in pixels; `0` (the default) keeps the viewport's native resolution. `format` is `png` or `jpg`.
+Save a 3D viewport screenshot on the Blender host. `filepath` is a path on the Blender machine; leave it out and the image goes to a unique file under Blender's temp dir (`blender_mcp_screenshots/`, cleared when Blender exits). Either way the result's `filepath` says where it was written. `max_size` caps the longest edge in pixels; `0` (the default) keeps the viewport's native resolution. `format` is `png` or `jpg`.
 
 ### `blender_get_console_output`
 

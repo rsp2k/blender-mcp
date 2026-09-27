@@ -45,11 +45,10 @@ class ViewportHandlersMixin:
         Parameters:
         - max_size: Maximum size in pixels for the largest dimension.
           0 (the default) keeps the viewport region's native size.
-        - filepath: Path to write the image to
+        - filepath: Path to write the image to. Omitted: a unique file under
+          Blender's temp dir (blender_mcp_screenshots/); the result says where.
         - format: Image format (png, jpg, etc.)
         """
-        if not filepath:
-            return {"error": "No filepath provided"}
         if bpy.app.background:
             return {"error": "No viewport available in --background mode"}
 
@@ -64,6 +63,11 @@ class ViewportHandlersMixin:
         region = next((r for r in area.regions if r.type == "WINDOW"), None)
         if not region:
             return {"error": "3D viewport has no WINDOW region"}
+
+        if not filepath:
+            from ...screenshot_paths import default_screenshot_path
+
+            filepath = default_screenshot_path(format, base_dir=bpy.app.tempdir or None)
 
         scene = bpy.context.scene
         r = scene.render
