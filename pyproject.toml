@@ -35,7 +35,7 @@ dependencies = [
     "asyncpg>=0.30.0",         # async driver for runtime
     "psycopg[binary]>=3.2.3",  # sync driver used by alembic at migration time
     "alembic>=1.14.0",
-    "fastmcp-feedback[instrumentation]==2026.9.27.1",
+    "fastmcp-feedback[instrumentation]==2026.9.27.2",
 ]
 
 [project.optional-dependencies]

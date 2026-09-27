@@ -360,7 +360,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'oauth'", specifier = ">=44.0.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "fastmcp", specifier = ">=3.3.1" },
-    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.1" },
+    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.2" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
@@ -959,16 +959,16 @@ wheels = [
 
 [[package]]
 name = "fastmcp-feedback"
-version = "2026.9.27.1"
+version = "2026.9.27.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/0f/75dbe3b2839eccc59b6b64f887dd7d987422f89cafcfa81c4ac3e8472174/fastmcp_feedback-2026.9.27.1.tar.gz", hash = "sha256:0d8ea8601e81ecc7314f8f7af37a797cfba30095f4b2fd002d3b46c1b25158ff", size = 111824, upload-time = "2026-09-27T14:37:11.344Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/50/53afe24fff04ec3e27b816e105267df0725c4e4e5c9ed6fd62d7dea880d3/fastmcp_feedback-2026.9.27.2.tar.gz", hash = "sha256:a140e811a61785f5ca24e39a675a5a0e970460bbcb24b12833b3e402b39e6a99", size = 112196, upload-time = "2026-09-27T14:58:40.446Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/60/1e/af9fb6099392228e3b9dea95f3f8c51210cff8a3f1a8714e58d073c83a72/fastmcp_feedback-2026.9.27.1-py3-none-any.whl", hash = "sha256:511ab631e7e80edff24542e57cae9edfde8b28f6350dd3b3b263fd17b1fa77f7", size = 42387, upload-time = "2026-09-27T14:37:12.581Z" },
+    { url = "https://files.pythonhosted.org/packages/26/e7/8300a3f876df13d77760f2c48afa4883208f7754d976b6e2da880b0e693c/fastmcp_feedback-2026.9.27.2-py3-none-any.whl", hash = "sha256:27b2110e2bad42a4bcb1034389c9e4c0f780227ebcd25eeca31b300a16d3b12a", size = 42441, upload-time = "2026-09-27T14:58:41.706Z" },
 ]
 
 [package.optional-dependencies]
