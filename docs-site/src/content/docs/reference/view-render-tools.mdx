@@ -1,0 +1,105 @@
+---
+title: "View and render tools"
+description: "Frame the viewport, render stills and orthographic elevations, and compare a render against a reference drawing."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Five tools for looking at a model the way a person checking it would: point the viewport at the part that matters, render a clean image, and lay that image against the drawing it is supposed to match. They are dispatch tools, so they take the usual `target_uuid`, `_timeout` and `bus_id` parameters and return the envelope described in [Dispatch tools](/reference/dispatch-tools/). Arguments are validated on the server before anything reaches Blender, and a bad one comes back as `{"status": "error", "error": "invalid_argument", "detail": "..."}`.
+
+A typical check against a floor plan is three calls: `blender_render_view(axis="top")` for a tight orthographic PNG, `blender_compare_images(render, plan, mode="overlay")` to see where they disagree, then `blender_set_view` plus a framed screenshot to look closer at whatever is off.
+
+## blender_set_view
+
+Frames the 3D viewport on some objects, at an angle, in one call.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `frame` | `None` | Object name or list of names. Omitted means every visible object. |
+| `angle` | `None` | `front`, `back`, `left`, `right`, `top`, `bottom`, `iso`, or `[yaw, elevation]` in degrees. Omitted keeps the current angle. |
+| `perspective` | `None` | `PERSP` or `ORTHO`. |
+| `shading` | `None` | A shading type (`SOLID`, `MATERIAL`, `RENDERED`, `WIREFRAME`) or a dict of [`blender_set_viewport_shading`](/reference/dispatch-tools/) arguments. |
+| `all_viewports` | `False` | Apply to every 3D viewport instead of the first. |
+
+Yaw 0 looks from -Y toward +Y (Blender's front view) and yaw 90 looks from +X. Elevation is degrees above the horizon, so 90 looks straight down. `iso` is yaw 45 at an elevation of about 35.26°, the angle where all three axes foreshorten equally. A viewport that was looking through a camera is switched out of camera view first, because framing a camera view would move the camera. The selection and active object are restored after framing.
+
+## Framed screenshots
+
+[`blender_get_viewport_screenshot`](/reference/dispatch-tools/) gained three optional parameters. Existing calls behave exactly as before.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `frame` | `None` | Object names to frame (via `set_view`) before capturing. |
+| `crop` | `False` | Crop the PNG to the screen-space bounding box of the subject. |
+| `crop_margin` | `0.05` | Extra space around the crop, as a fraction of the box size. |
+
+The crop subject is `frame` if given, otherwise the selected objects, otherwise everything visible. The crop happens before any `max_size` downscale, so a small subject still gets the full pixel budget. The result carries `framed` (when `frame` was given) and `crop_box` (when `crop` was set; `[x0, y0, x1, y1]` in viewport pixels, or `null` when the subject was off screen and nothing was cropped). Cropping applies to PNG output only.
+
+## blender_render
+
+Renders a still to a PNG on the Blender host and returns its path.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `camera_pos` | `None` | `[x, y, z]` for a temporary camera, removed afterwards. |
+| `look_at` | centre of visible objects | `[x, y, z]` the temporary camera aims at. |
+| `lens` | `None` | Focal length in mm for the temporary camera. |
+| `camera` | `None` | An existing camera by name. Used when `camera_pos` is not given. |
+| `engine` | `EEVEE` | `EEVEE`, `WORKBENCH` or `CYCLES`. |
+| `resolution` | scene | `[width, height]`. |
+| `samples` | scene | Render samples for EEVEE or Cycles. |
+| `filepath` | temp file | Where to write. Omitted gives a unique file in Blender's temp directory. |
+| `transparent` | `False` | Film transparency, written as RGBA. |
+
+With none of the camera parameters, the scene camera is used. Every render setting the tool touches (engine, resolution, samples, film transparency, output path and format, scene camera) is snapshotted first and restored afterwards, even when the render fails.
+
+<Aside type="tip" title="Long renders become jobs">
+A render that outlives `_timeout` (default: the long timeout) is not lost. The call returns a `job_id`, and `blender_job_status` / `blender_job_result` pick it up from there. For a render you already know will be slow, send it with `blender_submit` and command `"render"` so nothing waits on it.
+</Aside>
+
+Engine names are resolved at run time against what the running Blender accepts, so `EEVEE` works on 4.2 to 4.x (where the identifier is `BLENDER_EEVEE_NEXT`) and on 5.x (where it is `BLENDER_EEVEE` again).
+
+## blender_render_view
+
+An orthographic elevation of some objects, cropped tight, as a PNG.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `axis` | `front` | `front`, `back`, `left`, `right`, `top`, `bottom`. |
+| `objects` | visible objects | Object name or list of names to fit. |
+| `size` | `1024` | Pixels on the long edge when `resolution` is omitted. |
+| `resolution` | `None` | Fixed `[width, height]`. The subject is fitted inside without cropping. |
+| `margin` | `0.05` | Space on every side, as a fraction of the subject's size. |
+| `engine` | `WORKBENCH` | Workbench is fast and gives flat, drawing-like shading. |
+| `background` | transparent | `[r, g, b]` in 0 to 1 for a solid background. |
+| `isolate` | `False` | Hide everything except `objects` for this render. |
+| `filepath` | temp file | Where to write. |
+
+A temporary orthographic camera is sized to the world-space bounds of the objects and removed afterwards, and the scene's own camera and render settings are left as they were. Without `resolution`, the image takes the subject's aspect ratio: a 6 m by 1 m wall at `size=600` comes out 600×100, filled edge to edge apart from the margin. The axes match Blender's numpad views. `front` looks along +Y with +X to the right and +Z up, and `top` looks down with +X right and +Y up, so a top view lines up with a plan drawn the usual way.
+
+The result includes `filepath`, `resolution`, `ortho_scale` (world units across the long edge) and `subject_size`. Dividing pixels by `ortho_scale` gives the drawing scale, which is what makes a precise overlay with `compare_images` possible.
+
+## blender_compare_images
+
+Composes a render and a reference image into one PNG. Both paths are on the Blender host.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `render_path` | required | The render. It sets the output size. |
+| `reference_path` | required | The drawing, photo or earlier render. |
+| `mode` | `overlay` | `stack` (render above reference), `overlay` (reference over render at `opacity`) or `diff` (per-pixel absolute difference). |
+| `opacity` | `0.5` | Reference opacity in overlay mode. |
+| `fit` | `width` | How the reference is scaled to the render first: `width`, `height`, `contain` or `none`. |
+| `scale` | `1.0` | Extra scaling after `fit`. |
+| `offset` | `[0, 0]` | Reference shift in pixels, x right and y up. |
+| `filepath` | temp file | Where to write. |
+
+Transparent areas are flattened onto white before composing, which is what a transparent `render_view` next to a scanned plan needs. In `diff` mode the result also reports `mean_difference` and `max_difference` in 0 to 1, a quick number for "did this change" without looking at the picture. Scaling is nearest-neighbour, so line drawings stay crisp rather than blurring.
+
+## Verification status
+
+Checked against Blender 5.2 headless: `render_view` fill and aspect on all axes (subject spans 0.045 to 0.955 of the frame at margin 0.05), temporary camera removal, restoration of render settings and the scene camera, `render` with a temporary camera on EEVEE and with the scene camera on Workbench, `compare_images` in all three modes, clean errors for an unknown engine and a missing reference file, and `set_view` against a factory-startup scene.
+
+<Aside type="caution" title="Needs a GUI to confirm">
+The viewport screenshot itself cannot be taken headless, so `frame`/`crop` on `blender_get_viewport_screenshot` and on-screen framing by `set_view` have been checked only in their parts: the crop maths is unit-tested and the image crop was run in Blender, but not the full capture. The crop box is computed from the viewport's projection matrix, which the tool refreshes with a forced redraw first so the box matches the framing it just set.
+</Aside>
