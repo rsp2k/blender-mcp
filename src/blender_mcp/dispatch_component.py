@@ -437,7 +437,7 @@ class BlenderDispatchComponent(MCPMixin):
     @mcp_tool()
     async def get_viewport_screenshot(
         self,
-        filepath: str,
+        filepath: Optional[str] = None,
         max_size: int = 0,
         format: str = "png",
         target_uuid: Optional[str] = None,
@@ -445,17 +445,23 @@ class BlenderDispatchComponent(MCPMixin):
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Save a 3D viewport screenshot to ``filepath`` on the Blender host.
+        """Save a 3D viewport screenshot on the Blender host.
 
+        ``filepath`` is a path on the Blender machine, not the caller's.
+        Omit it and the image goes to a unique file in Blender's temp dir
+        (blender_mcp_screenshots/, cleared when Blender exits); either way
+        the result's ``filepath`` says where it was written.
         ``max_size`` caps the longest edge in pixels; 0 (default) keeps the
-        viewport region's native resolution. The image is written on the
-        Blender machine and only its path and size travel over the bus, so
-        there is no payload ceiling here.
+        viewport region's native resolution. Only the path and size travel
+        over the bus, so there is no payload ceiling here.
         """
+        params = {"max_size": max_size, "format": format}
+        if filepath:
+            params["filepath"] = filepath
         return await self._call(
             ctx,
             "get_viewport_screenshot",
-            {"filepath": filepath, "max_size": max_size, "format": format},
+            params,
             target_uuid,
             _timeout,
             bus_id=bus_id,
