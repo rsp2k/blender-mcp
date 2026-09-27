@@ -155,6 +155,19 @@ make dev          # docker compose up with the dev profile + source mounts + --r
 
 That target runs `uv run uvicorn blender_mcp.oauth_server:app --reload --host 0.0.0.0` inside the container with source volumes mounted from the host.
 
+## Object storage (MinIO)
+
+The `blender-mcp-minio` service holds large inputs and outputs so bytes never travel through MCP (see the docs-site how-to "Large files: uploads and downloads"). It has its own public hostname because clients PUT and GET presigned URLs against it directly.
+
+Enabling it on an existing deploy:
+
+1. DNS: an A record for the storage hostname pointing at the Caddy host, e.g. `nsupd blender.bet 'add files 300 A <caddy host IP>'`. Check with `dig +short files.blender.bet`.
+2. `.env`: add `STORAGE_DOMAIN=files.blender.bet`, `MINIO_ROOT_USER=$(openssl rand -hex 12)` and `MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)`. Compose now refuses to start any service without these three.
+3. `make prod` (it now also starts `blender-mcp-minio`), then `docker compose logs blender-mcp-minio` and `docker compose ps` until it's healthy.
+4. Smoke test from a client: `blender_create_upload_url(filename="t.txt")`, `curl -T t.txt "<upload_url>"`, then `blender_create_download_url` and `curl` the result. A `SignatureDoesNotMatch` means something between the client and MinIO rewrote the `Host` header.
+
+The server creates the bucket and a lifecycle rule (`STORAGE_RETENTION_DAYS`, default 7) on first use. Data lives on the `blender-mcp-miniodata` volume. The server signs with the root credentials; a scoped service account (`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` override them) is a reasonable follow-up.
+
 ## Live reference deploy
 
 The branch's reference deployment runs at **`https://mcp.blender.bet/`** — MCP and the OAuth surface both live at root, no path prefix needed (the `mcp.` hostname carries the semantic). If you want to skip standing up your own server while exploring the API, you can point clients at this deployment directly.

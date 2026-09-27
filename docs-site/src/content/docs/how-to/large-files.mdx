@@ -1,0 +1,98 @@
+---
+title: "Large files: uploads and downloads"
+description: "Move big inputs onto the Blender host and get renders and exports back without pushing bytes through MCP. Covers presigned URLs, storing tool outputs, retention, and the chunked fallback when the server has no object storage."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An MCP message tops out around 25 MB, and long before that a big payload fills the calling model's context with bytes it can't use. So large files skip MCP entirely. The server runs S3-compatible object storage (MinIO) and hands out **presigned URLs**: short-lived links that allow exactly one upload or download of one object, with no credentials involved. You move the bytes with plain HTTP; the tool calls only carry the link and an `object_key`.
+
+## Get a file onto the Blender host
+
+Ask for an upload URL, PUT the file to it, then have Blender pull it down:
+
+```text
+blender_create_upload_url(filename="site-plan.json", size=48213377)
+```
+
+```json
+{
+  "status": "ok",
+  "object_key": "7c1e…/3fa92b…/site-plan.json",
+  "upload_url": "https://files.blender.bet/blender-mcp/7c1e…?X-Amz-Signature=…",
+  "method": "PUT",
+  "headers": {},
+  "expires_in": 900,
+  "retention_days": 7
+}
+```
+
+```bash
+curl -T site-plan.json "<upload_url>"
+```
+
+```text
+blender_fetch_object_to_blender(object_key="7c1e…/3fa92b…/site-plan.json")
+```
+
+Blender downloads the object itself into the same per-bus folder [`blender_upload`](/reference/data-tools/) writes to, and the reply gives the local `path`. Tools that read uploaded files take the bare name, for example `blender_create_mesh(source="site-plan.json")`.
+
+Files up to 16 MB arrive before the call returns. Bigger ones download on a background thread so Blender's UI keeps responding; the call polls until they finish (or `_timeout`, 180 s by default). With `wait=false`, or when the wait runs out, you get a `transfer_id` to check with `blender_object_transfer_status`.
+
+<Aside type="tip">
+If you send `content_type` to `blender_create_upload_url`, send the same `Content-Type` header on the PUT (it's echoed back in `headers`). A single upload can be up to 5 GB.
+</Aside>
+
+## Get renders and exports back
+
+Pass `store=true` to a tool that writes a file, and Blender uploads the result for you:
+
+```text
+blender_render(camera_pos=[8, -8, 5], store=true)
+```
+
+```json
+{
+  "filepath": "/tmp/blender_mcp_renders/render-9d2c.png",
+  "stored": {
+    "object_key": "7c1e…/a01f…/render.png",
+    "state": "uploaded",
+    "size": 1843220,
+    "download_url": "https://files.blender.bet/blender-mcp/7c1e…?X-Amz-Signature=…",
+    "download_expires_in": 900
+  }
+}
+```
+
+The file still lands on the Blender host as before; `stored` is extra. Hand `download_url` to whatever needs the image. When it expires, `blender_create_download_url(object_key=…)` signs a fresh one.
+
+`store` is available on `blender_render`, `blender_render_view`, `blender_get_viewport_screenshot` and `blender_export_gltf` (GLB only, since a `.gltf` export is several files). Other file-writing tools (`blender_compare_images`, `blender_save_file`, Poly Haven and Sketchfab downloads) don't take it yet, so their files stay on the Blender host.
+
+A stored output bigger than 16 MB uploads in the background, so `state` is `uploading` and there's a `transfer_id`. The download URL works as soon as the upload finishes. If the upload fails, `state` is `failed` with an `error`, and the command's own result is unaffected.
+
+## Housekeeping
+
+`blender_list_objects` shows what's stored for a bus, with sizes and the earliest time each object expires. `blender_delete_object` removes one early. Everything expires on its own after the retention period (7 days unless the server sets `STORAGE_RETENTION_DAYS`), counted from the upload.
+
+Every key starts with the bus it belongs to. You can only list, sign, fetch or delete objects in buses you're a member of; pass `bus_id` for a shared bus, same as the other tools.
+
+## When the server has no object storage
+
+The storage tools answer `storage_not_configured`, and `store=true` adds `"stored": {"state": "not_configured"}` without failing the command. The fallback is the one that existed before:
+
+- **Into Blender:** `blender_upload` sends up to 50 MB through the bus in chunks. It costs context for every byte (the payload is a tool argument), so keep it for small files.
+- **Out of Blender:** outputs stay on the Blender host at the returned path.
+
+## Running the storage (self-hosting)
+
+The compose stack includes a `blender-mcp-minio` service on its own hostname. To enable it:
+
+1. Point a DNS record for the storage hostname (e.g. `files.blender.bet`) at the Caddy host, same as `DOMAIN`.
+2. In `.env`, set `STORAGE_DOMAIN`, `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` (generate the last two with `openssl rand -hex 24`). Compose refuses to start without them.
+3. Run `make prod`. The server creates the bucket and its expiry rule on first use.
+
+<Aside type="caution">
+A presigned URL is signed for one hostname, and the signature covers the `Host` header. Caddy's `reverse_proxy` passes `Host` through unchanged, which is what makes this work; a proxy that rewrites `Host` breaks every URL with `SignatureDoesNotMatch`. `MINIO_PUBLIC_URL` (derived from `STORAGE_DOMAIN`) must be the exact origin clients connect to.
+</Aside>
+
+The web console is turned off; only the S3 API is exposed. MinIO no longer publishes container images, so the stack uses the `pgsty/minio` community build of the same upstream release, pinned by tag (`MINIO_IMAGE` overrides it).
