@@ -24,6 +24,7 @@ from .handlers.files_scene import FileSceneHandlersMixin
 from .handlers.hyper3d import Hyper3dHandlersMixin
 from .handlers.msgbus import MsgbusHandlersMixin
 from .handlers.polyhaven import PolyhavenHandlersMixin
+from .handlers.render import RenderHandlersMixin
 from .handlers.analysis import AnalysisHandlersMixin
 from .handlers.booleans import BooleanHandlersMixin
 from .handlers.scene import SceneHandlersMixin
@@ -49,6 +50,7 @@ class BlenderCommandExecutor(
     AnalysisHandlersMixin,
     BooleanHandlersMixin,
     FileSceneHandlersMixin,
+    RenderHandlersMixin,
     WorkerHandlersMixin,
     SharedHelpersMixin,
 ):

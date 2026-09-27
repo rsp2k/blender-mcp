@@ -370,6 +370,9 @@ def build_http_mcp() -> FastMCP:
     BlenderBooleanComponent().register_tools(mcp_server=server, prefix="blender")
     # Save/open/revert/new file, startup leftovers, interior faces, audited glTF export.
     BlenderFileSceneComponent().register_tools(mcp_server=server, prefix="blender")
+    # View framing, renders, orthographic elevations, image comparison.
+    from .render_tools import BlenderRenderComponent
+    BlenderRenderComponent().register_tools(mcp_server=server, prefix="blender")
     # Job-pump health + remote pump reset (feedback bug-iDJHVyy4e2Q).
     BlenderHealthComponent().register_tools(mcp_server=server, prefix="blender")
 

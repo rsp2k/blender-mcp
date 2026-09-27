@@ -440,12 +440,21 @@ class BlenderDispatchComponent(MCPMixin):
         filepath: Optional[str] = None,
         max_size: int = 0,
         format: str = "png",
+        frame: Optional[list[str]] = None,
+        crop: bool = False,
+        crop_margin: float = 0.05,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Save a 3D viewport screenshot on the Blender host.
+
+        ``frame``: object names to frame the viewport on before capturing
+        (keeps the current angle; blender_set_view changes it). ``crop``
+        trims the image to the objects' on-screen bounds plus ``crop_margin``
+        (the framed objects, else the selection, else everything visible;
+        png only). Together they make a subject check one call.
 
         ``filepath`` is a path on the Blender machine, not the caller's.
         Omit it and the image goes to a unique file in Blender's temp dir
@@ -458,6 +467,11 @@ class BlenderDispatchComponent(MCPMixin):
         params = {"max_size": max_size, "format": format}
         if filepath:
             params["filepath"] = filepath
+        if frame:
+            params["frame"] = [frame] if isinstance(frame, str) else list(frame)
+        if crop:
+            params["crop"] = True
+            params["crop_margin"] = crop_margin
         return await self._call(
             ctx,
             "get_viewport_screenshot",
