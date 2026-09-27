@@ -56,6 +56,13 @@ from .bus_tools import _pending_jobs, _resolve_user_id, resolve_bus
 from .client_role import check_role_or_reject
 from .job_waiter import job_waiter
 from .message_router import Priority
+from .object_storage import (
+    StorageError,
+    attach_download,
+    get_store,
+    output_name,
+    output_params,
+)
 
 
 # Per-tool timeouts (seconds). Kept short enough that a stuck Blender
@@ -334,8 +341,14 @@ class BlenderDispatchComponent(MCPMixin):
         target_uuid: Optional[str],
         timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
+        store_as: Optional[str] = None,
     ) -> str:
         """Auth-check + role-gate + bus-resolve + dispatch. Returns JSON.
+
+        ``store_as`` (a file name) asks the addon to upload the file the
+        command writes to object storage; the reply's ``stored`` entry then
+        carries the object key and a presigned download URL (see
+        object_storage.output_params / attach_download).
 
         Role gating happens here (phase H) because every dispatch tool +
         every dispatch-backed resource funnels through this method. The
@@ -356,7 +369,19 @@ class BlenderDispatchComponent(MCPMixin):
         resolved = await resolve_bus(user_id, bus_id)
         if not resolved["ok"]:
             return json.dumps(resolved)
-        return await _dispatch(
+        store = None
+        if store_as:
+            store = get_store()
+            if store is not None:
+                try:
+                    await store.ensure_ready()
+                    params = {**params, "_store": output_params(
+                        store, str(resolved["bus_id"]), store_as)}
+                except StorageError as e:
+                    return json.dumps({"status": "error", "error": e.code, "detail": e.detail,
+                                       "hint": "call again without store=true; the file "
+                                               "stays on the Blender host"})
+        reply = await _dispatch(
             resolved["bus"],
             str(resolved["bus_id"]),
             command,
@@ -365,6 +390,7 @@ class BlenderDispatchComponent(MCPMixin):
             timeout,
             caller_sub=user_id,
         )
+        return attach_download(reply, store) if store_as else reply
 
     # ---- Tier 1: always-on core (7 commands) -----------------------
 
@@ -445,12 +471,16 @@ class BlenderDispatchComponent(MCPMixin):
         frame: Optional[list[str]] = None,
         crop: bool = False,
         crop_margin: float = 0.05,
+        store: bool = False,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Save a 3D viewport screenshot on the Blender host.
+
+        ``store``: also upload it to object storage; the result's ``stored``
+        entry has an ``object_key`` and a short-lived ``download_url``.
 
         ``frame``: object names to frame the viewport on before capturing
         (keeps the current angle; blender_set_view changes it). ``crop``
@@ -481,6 +511,7 @@ class BlenderDispatchComponent(MCPMixin):
             target_uuid,
             _timeout,
             bus_id=bus_id,
+            store_as=output_name(filepath, f"viewport.{format}") if store else None,
         )
 
     @mcp_tool()

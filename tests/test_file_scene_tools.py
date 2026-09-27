@@ -127,7 +127,7 @@ def comp(monkeypatch):
     c = ft.BlenderFileSceneComponent()
     calls = []
 
-    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None):
+    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None, store_as=None):
         calls.append((command, params))
         return json.dumps({"status": "completed", "command": command})
 

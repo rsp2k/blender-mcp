@@ -148,12 +148,14 @@ def comp(monkeypatch):
     c = rt.BlenderRenderComponent()
     calls = []
 
-    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None):
+    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None, store_as=None):
         calls.append((command, params, timeout))
+        c.store_as.append(store_as)
         return json.dumps({"status": "completed"})
 
     monkeypatch.setattr(c, "_call", fake_call)
     c.calls = calls
+    c.store_as = []
     return c
 
 
@@ -195,3 +197,11 @@ def test_compare_images_validates(comp):
     run(comp.compare_images("a.png", "b.png", mode="diff", offset=[3, -4]))
     params = comp.calls[-1][1]
     assert params["mode"] == "diff" and params["offset"] == [3, -4]
+
+
+def test_store_names_the_object_after_the_output(comp):
+    run(comp.render())
+    run(comp.render(store=True))
+    run(comp.render(store=True, filepath="/tmp/out/hero shot.png"))
+    run(comp.render_view(axis="left", store=True))
+    assert comp.store_as == [None, "render.png", "hero_shot.png", "left.png"]

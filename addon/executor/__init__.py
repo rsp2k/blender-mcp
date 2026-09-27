@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import traceback
 
+from .. import object_store
 from ..preferences import get_prefs
 from ._shared import SharedHelpersMixin
 from .handlers.annotations import AnnotationHandlersMixin
@@ -97,11 +98,20 @@ class BlenderCommandExecutor(
                 }
             return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
 
+        # ``_store`` (a presigned PUT URL + object key from the server) asks
+        # for the command's output file to be uploaded; handlers never see it.
+        store = None
+        if isinstance(params, dict) and "_store" in params:
+            params = dict(params)
+            store = params.pop("_store")
+
         try:
             print(f"Executing handler for {cmd_type}")
             accepted = filter_kwargs(spec.func, params)
             result = spec.func(self, **accepted)
             print("Handler execution complete")
+            if store and isinstance(result, dict):
+                result = object_store.attach_stored(result, store)
             return {"status": "success", "result": result}
         except Exception as e:
             print(f"Error in handler: {str(e)}")

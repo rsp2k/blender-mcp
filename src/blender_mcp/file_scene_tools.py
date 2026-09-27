@@ -19,6 +19,7 @@ from .dispatch_component import (
     TIMEOUT_MEDIUM,
     BlenderDispatchComponent,
 )
+from .object_storage import output_name
 
 INTERIOR_METHODS = ("faces", "shells")
 GLTF_FORMATS = ("glb", "gltf")
@@ -236,6 +237,7 @@ class BlenderFileSceneComponent(MCPMixin):
         audit: bool = True,
         auto_fix: bool = False,
         create_dirs: bool = False,
+        store: bool = False,
         target_uuid: str | None = None,
         _timeout: float = TIMEOUT_LONG,
         bus_id: str | None = None,
@@ -243,6 +245,9 @@ class BlenderFileSceneComponent(MCPMixin):
     ) -> str:
         """Export glTF (``glb`` or ``gltf``) on the Blender machine, listing
         materials whose colour won't survive the export.
+
+        ``store`` (glb only): also upload the file to object storage; the
+        result's ``stored`` entry has ``object_key`` and ``download_url``.
 
         The exporter gives no warning: a non-Principled surface (e.g. Diffuse
         BSDF) exports as an empty white material, and a Principled Base Color
@@ -262,6 +267,9 @@ class BlenderFileSceneComponent(MCPMixin):
             return _err("invalid_argument", detail=f"format must be one of {list(GLTF_FORMATS)}")
         if not isinstance(path, str) or not path.strip():
             return _err("invalid_argument", detail="path is required")
+        if store and fmt != "glb":
+            return _err("invalid_argument",
+                        detail="store needs format=glb (a .gltf export is several files)")
         if isinstance(objects, str):
             objects = [objects]
         return await self._call(
@@ -269,4 +277,5 @@ class BlenderFileSceneComponent(MCPMixin):
             {"path": path.strip(), "objects": objects, "format": fmt, "audit": audit,
              "auto_fix": auto_fix, "create_dirs": create_dirs},
             target_uuid, _timeout, bus_id=bus_id,
+            store_as=output_name(path.strip(), "export.glb") if store else None,
         )

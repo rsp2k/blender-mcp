@@ -21,7 +21,7 @@ def comp(monkeypatch):
     c = BlenderDispatchComponent()
     sent = []
 
-    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None):
+    async def fake_call(ctx, command, params, target_uuid, timeout, bus_id=None, store_as=None):
         sent.append((command, params))
         return "{}"
 

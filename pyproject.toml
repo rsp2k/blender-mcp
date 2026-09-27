@@ -37,6 +37,7 @@ dependencies = [
     "alembic>=1.14.0",
     "fastmcp-feedback[instrumentation]==2026.9.27.2",
     "shapely==2.1.2",
+    "minio==7.2.20",
 ]
 
 [project.optional-dependencies]
