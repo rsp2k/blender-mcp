@@ -42,6 +42,7 @@ from .job_tools import BlenderJobComponent
 from .worker_tools import BlenderWorkerComponent
 from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
+from .texture_tools import BlenderTextureComponent
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,8 @@ def build_http_mcp() -> FastMCP:
     BlenderRenderComponent().register_tools(mcp_server=server, prefix="blender")
     # Mesh-from-data, uploads to the Blender host, 2D polygon ops (gaps-log 1-3).
     BlenderDataComponent().register_tools(mcp_server=server, prefix="blender")
+    # Real-world-scaled Poly Haven materials, per-face assignment, HDRI control.
+    BlenderTextureComponent().register_tools(mcp_server=server, prefix="blender")
     # Job-pump health + remote pump reset (feedback bug-iDJHVyy4e2Q).
     BlenderHealthComponent().register_tools(mcp_server=server, prefix="blender")
 
