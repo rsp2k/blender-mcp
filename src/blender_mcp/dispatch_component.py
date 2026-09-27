@@ -36,7 +36,9 @@ Surface tiers:
 - **Tier 2** (3) — always-on integration status probes.
 - **Tier 3** (14) — gated by addon prefs (polyhaven / hyper3d /
   sketchfab / msgbus). When the gate is off, the addon returns an
-  "Unknown command type" error which the dispatcher faithfully relays.
+  error which the dispatcher relays ("<cmd> is disabled: ..." with
+  enable instructions for Poly Haven, "Unknown command type" otherwise).
+  Poly Haven search and categories fall back to a server-side lookup.
 """
 
 from __future__ import annotations
@@ -631,8 +633,10 @@ class BlenderDispatchComponent(MCPMixin):
         )
 
     # ---- Tier 3: gated by addon prefs ------------------------------
-    # When the matching ``use_*`` pref is off the addon returns an
-    # "Unknown command type" error rather than running the handler.
+    # When the matching ``use_*`` pref is off the addon refuses the call:
+    # "<command> is disabled: <how to enable>" for Poly Haven, "Unknown
+    # command type" for the others. The pref is read per call, so turning
+    # it on takes effect without a reconnect.
 
     # ---- Tier 3a: msgbus (5 commands, no addon-side gate) ----------
 
@@ -757,8 +761,14 @@ class BlenderDispatchComponent(MCPMixin):
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """List PolyHaven categories for ``asset_type`` in {hdris, textures, models, all}."""
-        return await self._call(
+        """List PolyHaven categories for ``asset_type`` in {hdris, textures, models, all}.
+
+        Answered server-side (``"source": "server"``) when the addon's Poly
+        Haven switch is off or no Blender is connected.
+        """
+        from . import polyhaven_api
+
+        result = await self._call(
             ctx,
             "get_polyhaven_categories",
             {"asset_type": asset_type},
@@ -766,6 +776,9 @@ class BlenderDispatchComponent(MCPMixin):
             _timeout,
             bus_id=bus_id,
         )
+        if polyhaven_api.addon_unavailable(result):
+            return await polyhaven_api.server_side("categories", asset_type=asset_type)
+        return result
 
     @mcp_tool()
     async def search_polyhaven_assets(
@@ -777,8 +790,15 @@ class BlenderDispatchComponent(MCPMixin):
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Search PolyHaven for assets (response capped at 20 entries by the addon)."""
-        return await self._call(
+        """Search PolyHaven for assets (response capped at 20 entries).
+
+        Each texture carries ``dimensions_m`` ([width, height] of one tile in
+        metres). Answered server-side (``"source": "server"``) when the addon's
+        Poly Haven switch is off or no Blender is connected.
+        """
+        from . import polyhaven_api
+
+        result = await self._call(
             ctx,
             "search_polyhaven_assets",
             {"asset_type": asset_type, "categories": categories},
@@ -786,6 +806,11 @@ class BlenderDispatchComponent(MCPMixin):
             _timeout,
             bus_id=bus_id,
         )
+        if polyhaven_api.addon_unavailable(result):
+            return await polyhaven_api.server_side(
+                "search", asset_type=asset_type, categories=categories,
+            )
+        return result
 
     @mcp_tool()
     async def download_polyhaven_asset(
@@ -794,6 +819,9 @@ class BlenderDispatchComponent(MCPMixin):
         asset_type: str,
         resolution: str = "1k",
         file_format: Optional[str] = None,
+        rotation_deg: Optional[float] = None,
+        strength: Optional[float] = None,
+        background_visible: Optional[bool] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = TIMEOUT_LONG,
         bus_id: Optional[str] = None,
@@ -803,8 +831,15 @@ class BlenderDispatchComponent(MCPMixin):
 
         ``asset_type`` in {hdris, textures, models}. Models prefer glTF;
         HDRIs default to .hdr; textures default to .jpg. HDRIs replace
-        the active world; textures create a new material; models are
-        appended to the active scene.
+        the active world; textures create a new UV-mapped material (see
+        blender_make_pbr_material for real-world scale) and report
+        ``dimensions_m``; models are appended to the active scene.
+
+        HDRI only: ``rotation_deg`` turns the environment about Z (sun
+        direction), ``strength`` sets the Background strength, and
+        ``background_visible=False`` hides the HDRI from the camera while
+        keeping its light and reflections. blender_set_world_hdri changes
+        these later without re-downloading.
         """
         return await self._call(
             ctx,
@@ -814,6 +849,9 @@ class BlenderDispatchComponent(MCPMixin):
                 "asset_type": asset_type,
                 "resolution": resolution,
                 "file_format": file_format,
+                "rotation_deg": rotation_deg,
+                "strength": strength,
+                "background_visible": background_visible,
             },
             target_uuid,
             _timeout,

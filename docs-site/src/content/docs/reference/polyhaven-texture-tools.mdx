@@ -1,0 +1,117 @@
+---
+title: "Poly Haven texture tools"
+description: "Real-world-scaled Poly Haven materials, per-face material assignment, HDRI rotation and visibility, and the Poly Haven switch."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+These tools take a Poly Haven texture from "downloaded" to "on the right faces at the right size", and give an imported HDRI the controls a lighting pass needs. They sit beside the original Poly Haven dispatch tools (`blender_search_polyhaven_assets`, `blender_download_polyhaven_asset`, `blender_set_texture`), which keep working as before.
+
+A typical texturing pass looks like this:
+
+```python
+# 1. Find a texture and its real size (no Blender needed)
+await client.call_tool("blender_polyhaven_info", {"asset_id": "brick_wall_001"})
+# -> dimensions_m: [3.0, 3.0]
+
+# 2. Download the maps (1k is plenty for layout work)
+await client.call_tool("blender_download_polyhaven_asset",
+                       {"asset_id": "brick_wall_001", "asset_type": "textures", "resolution": "1k"})
+
+# 3. Build a box-projected material sized for the wall object
+await client.call_tool("blender_make_pbr_material",
+                       {"texture_id": "brick_wall_001", "object_name": "Wall"})
+
+# 4. Put it on the walls only; the roof keeps its own material
+await client.call_tool("blender_assign_material",
+                       {"object_name": "Wall", "material": "brick_wall_001_object", "normal": "side"})
+```
+
+## The Poly Haven switch
+
+The addon preference **Use assets from Poly Haven** (Edit > Preferences > Add-ons > Blender MCP, or the BlenderMCP tab in the 3D Viewport sidebar) gates the commands that download into the scene. It is read on every call, so flipping it takes effect immediately, with no reconnect.
+
+When it is off, gated calls answer with an error that says so and how to turn it on (`download_polyhaven_asset is disabled: ...`). Earlier builds answered `Unknown command type`, which read like a missing feature. Search and categories never need the switch: when the addon declines, or no Blender is connected, the server answers them itself from the public API and marks the reply `"source": "server"`.
+
+<Aside title="Why is it off by default?">
+The gate dates from when the integration was experimental. Poly Haven is a free CC0 API that needs no key, so the original reason is largely gone. The default is unchanged for now because turning it on lets a connected model download files into the user's scene, which is a reasonable thing to opt in to.
+</Aside>
+
+## blender_polyhaven_info
+
+Look up one asset: name, type, categories, tags, maximum resolution, HDRI dynamic range (`evs_cap`), and **`dimensions_m`**, the width and height of one texture tile in metres (Poly Haven publishes millimetres). HDRIs and most models have no dimensions. The server reads the public API directly, so this works without Blender and whether or not the switch is on.
+
+| Parameter | Type | Default |
+|---|---|---|
+| `asset_id` | `str` | required |
+
+`blender_search_polyhaven_assets` results also carry `dimensions_m` per texture now.
+
+## blender_make_pbr_material
+
+Build a Principled material from maps already downloaded for `texture_id`, at real-world scale.
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `texture_id` | `str` | required | Poly Haven id, downloaded first |
+| `name` | `str` | `<id>_<coordinates>` | material name |
+| `tile_size_m` | `float` or `[w, h]` | asset dimensions, else 1 m | metres per repeat |
+| `coordinates` | `str` | `"object"` | `object`, `world` or `uv` |
+| `object_name` | `str` | none | cancels that object's scale |
+| `displacement_scale` | `float` | `0.02` | Displacement node scale |
+
+Maps are wired by role: base colour (with AO multiplied in at 0.8), roughness, metallic, the OpenGL normal map through a Normal Map node, displacement, and the packed ARM map filling any role without a dedicated map (R = AO, G = roughness, B = metallic). The reply lists what feeds what, the mapping scale, and where the tile size came from.
+
+### How the real-world mapping works
+
+UV coordinates cannot give a true size: one UV unit covers however much surface the unwrap happened to assign it. So the scaled modes skip UVs and project the images along the three axes (Image Texture projection **Box**, blend 0.2), through a Mapping node whose scale converts metres to texture repeats.
+
+With **`object`** coordinates, a coordinate of 1.0 is one unit of the object's *local* space, which the object's scale stretches in the world. A wall made by scaling a 2 m cube to `(3, 0.2, 1.5)` is 6 m long, and its local X unit is 3 m. To repeat a 3 m brick tile every 3 m, the mapping scale per axis is `object_scale / tile`, here `(1.0, 0.067, 0.5)`. Pass `object_name` so the tool can read the scale. The texture moves and rotates with the object, but if the object is rescaled later, rebuild the material or apply the scale.
+
+With **`world`** coordinates the projection uses world position, so the scale is simply `1 / tile`. One material can be shared by many objects and the pattern lines up across them (two walls meeting at a corner), at the price that the pattern stays put when an object moves.
+
+With a `[w, h]` tile, the height drives Z, so brick courses on vertical faces come out at their real height.
+
+## blender_assign_material
+
+Put an existing material on some faces of a mesh. If the object does not have the material yet, a slot is added. Other faces keep their materials. When the mesh had no slots and only part of it is assigned, an empty slot 0 is kept so the rest still renders with the default material.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `object_name` | `str` | required | mesh object, in Object Mode |
+| `material` | `str` | required | existing material name |
+| `faces` | `list[int]` | none | polygon indices |
+| `normal` | `str` or `[x, y, z]` | none | `up`, `down`, `side`, or a direction (world space) |
+| `normal_tolerance_deg` | `float` | `30` | angle allowed from the direction; for `side`, from horizontal |
+| `min_z` / `max_z` | `float` | none | face-centre height band, world units |
+| `slot` | `int` | none | faces currently using this slot |
+| `attribute` | `str` | none | face-domain attribute, faces where it is true |
+
+Rules combine with AND, and with no rule every face is assigned. A call that matches nothing changes nothing and says so. The reply gives the slot used, whether it was added, and a face count per material:
+
+```json
+{"slot_index": 2, "slot_added": true, "faces_assigned": 1, "faces_total": 6,
+ "faces_per_material": {"brick_wall_001_object": 4, "Roof": 1, "<empty slot 0>": 1}}
+```
+
+`blender_set_texture` is unchanged and still replaces every material on the object with a single UV-mapped one.
+
+## HDRI rotation, strength and visibility
+
+`blender_download_polyhaven_asset` takes three extra parameters when `asset_type` is `"hdris"`, and `blender_set_world_hdri` changes the same things later without downloading again.
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `rotation_deg` | `float` | turn the environment about Z (moves the sun and reflections) |
+| `strength` | `float` | Background strength, 1 = as shot |
+| `background_visible` | `bool` | `false` hides the HDRI from the camera, keeping its light |
+| `background_color` | `[r, g, b]` | `set_world_hdri` only: what the camera sees when hidden (default near black) |
+
+Omitted values stay as they are. Rotation goes through a Mapping node in front of the Environment Texture. Hiding uses a Light Path **Is Camera Ray** switch into a Mix Shader, so camera rays see the plain colour while every other ray still sees the HDRI. This works the same in EEVEE and Cycles, unlike film transparency, which only changes the alpha. The nodes are labelled `BlenderMCP camera ...`, and `background_visible: true` removes them again.
+
+The imported image is now named `<id>_<resolution>.hdr` instead of a temp-file name, and it is packed into the .blend.
+
+## Fixes that came along
+
+- Downloaded textures used to leave the normal and displacement maps unconnected, and fetched the `mtlx` file as if it were an image. The download now wires maps by role and skips non-image files.
+- `blender_set_texture` crashed on Blender 4.x/5.x for textures with an ARM map (`ShaderNodeSeparateRGB` no longer exists, and the MixRGB `Fac` socket was renamed). It now uses Separate Color and indexes sockets by position.
