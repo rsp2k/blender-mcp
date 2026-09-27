@@ -15,7 +15,7 @@ from pathlib import Path
 
 import bpy
 
-from ... import upload_store
+from ... import object_store, upload_store
 from ..registry import command
 
 _ROOT_NAME = "blender_mcp_uploads"
@@ -69,3 +69,27 @@ class UploadHandlersMixin:
     def delete_uploads(self, name=None, bus_dir=None):
         """Delete one uploaded file, or all of them when no name is given."""
         return upload_store.delete(upload_dir(bus_dir), name)
+
+    @command("fetch_object")
+    def fetch_object(self, url, name, size=None, overwrite=True, bus_dir=None):
+        """Download an object-storage file (presigned GET URL) into the upload folder.
+
+        Small files arrive before this returns; larger ones download on a
+        background thread (state "running" plus a transfer_id for
+        transfer_status) so Blender's UI keeps responding.
+        """
+        base = upload_dir(bus_dir)
+        size = int(size) if size is not None else None
+        return object_store.run_transfer(
+            "download", name, size,
+            lambda progress: object_store.get_to_dir(url, base, name, expected_size=size,
+                                                     overwrite=bool(overwrite),
+                                                     progress=progress))
+
+    @command("transfer_status")
+    def transfer_status(self, transfer_id):
+        """Progress of a background upload or download."""
+        item = object_store.TRANSFERS.get(transfer_id)
+        if item is None:
+            raise ValueError(f"no transfer with id {transfer_id!r} (Blender may have restarted)")
+        return item

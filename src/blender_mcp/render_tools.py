@@ -18,6 +18,7 @@ from .dispatch_component import (
     TIMEOUT_LONG,
     BlenderDispatchComponent,
 )
+from .object_storage import output_name
 
 # Mirrors addon/render_geometry.py (the installed server can't import addon/).
 AXES = ("front", "back", "left", "right", "top", "bottom")
@@ -127,12 +128,17 @@ class BlenderRenderComponent(MCPMixin):
         samples: int | None = None,
         filepath: str | None = None,
         transparent: bool = False,
+        store: bool = False,
         target_uuid: str | None = None,
         _timeout: float = TIMEOUT_LONG,
         bus_id: str | None = None,
         ctx: Context = None,
     ) -> str:
         """Render a still image to a PNG on the Blender host; returns its path.
+
+        ``store``: also upload the PNG to object storage; the result's
+        ``stored`` entry has an ``object_key`` and a short-lived
+        ``download_url`` (see blender_create_download_url to re-sign).
 
         Camera, in order of precedence: ``camera_pos`` (world coordinates)
         aimed at ``look_at`` (default: the centre of the visible objects) with
@@ -170,7 +176,8 @@ class BlenderRenderComponent(MCPMixin):
                 args["filepath"] = filepath
         except (ValueError, TypeError) as e:
             return _err("invalid_argument", detail=str(e))
-        return await self._call(ctx, "render", args, target_uuid, _timeout, bus_id=bus_id)
+        return await self._call(ctx, "render", args, target_uuid, _timeout, bus_id=bus_id,
+                                store_as=output_name(filepath, "render.png") if store else None)
 
     @mcp_tool()
     async def render_view(
@@ -184,12 +191,16 @@ class BlenderRenderComponent(MCPMixin):
         background: str | list[float] | None = None,
         isolate: bool = False,
         filepath: str | None = None,
+        store: bool = False,
         target_uuid: str | None = None,
         _timeout: float = TIMEOUT_LONG,
         bus_id: str | None = None,
         ctx: Context = None,
     ) -> str:
         """Orthographic elevation (front/back/left/right/top/bottom) as a tight PNG.
+
+        ``store``: also upload the PNG to object storage (result ``stored``
+        has ``object_key`` and ``download_url``).
 
         A temporary orthographic camera is sized to the world bounds of
         ``objects`` (default: every visible object) and removed afterwards.
@@ -221,7 +232,9 @@ class BlenderRenderComponent(MCPMixin):
                 args["filepath"] = filepath
         except (ValueError, TypeError) as e:
             return _err("invalid_argument", detail=str(e))
-        return await self._call(ctx, "render_view", args, target_uuid, _timeout, bus_id=bus_id)
+        return await self._call(
+            ctx, "render_view", args, target_uuid, _timeout, bus_id=bus_id,
+            store_as=output_name(filepath, f"{args['axis']}.png") if store else None)
 
     @mcp_tool()
     async def compare_images(
