@@ -477,6 +477,71 @@ Sets `CONSTANT`, `LINEAR`, `BEZIER` or any other Blender interpolation on the ob
 
 ---
 
+## Booleans and mesh health (2, ungated)
+
+Booleans that check their inputs and report what they did. Blender's own boolean modifier fails in ways that look like success, so these tools measure the target before and after every operand.
+
+### `blender_mesh_health`
+
+```python
+blender_mesh_health(objects: list[str] | str, evaluated: bool = False,
+                    target_uuid: str | None = None, _timeout: float = 30) -> str
+```
+
+Per object: vertex, edge and face counts; non-manifold edges broken down into `boundary_edges` (open), `multi_face_edges` (shared by three or more faces), `wire_edges` and `non_contiguous_edges` (flipped normals); `loose_vertices`, `zero_area_faces`, connected `shells`, whether the mesh is `closed`, its `volume` in world units, and world bounds. `volume` is `null` when the mesh isn't closed, because an open mesh has no meaningful volume. `evaluated=True` measures the mesh with its modifiers; the default reads the stored mesh. Nothing is modified.
+
+### `blender_boolean`
+
+```python
+blender_boolean(
+    target: str,
+    operands: list[str] | str,
+    operation: str = "DIFFERENCE",        # DIFFERENCE, UNION, INTERSECT
+    solver: str = "EXACT",                # EXACT, FLOAT, MANIFOLD (no FAST in 5.x)
+    apply: bool = True,
+    check: bool = True,
+    force: bool = False,
+    use_self: bool = False,
+    use_hole_tolerant: bool = False,
+    coplanar_tolerance: float = 1e-4,
+    coplanar_nudge: float | None = None,
+    keep_operands: bool = True,
+    hide_operands: bool = True,
+    target_uuid: str | None = None,
+    _timeout: float = 60,
+) -> str
+```
+
+Operands are applied one at a time. Each entry in `steps` gives the face count, volume and non-manifold edge count before and after, plus that step's warnings, so a bad result can be traced to the operand that caused it.
+
+With `check` on (the default), the call is **refused and nothing changes** when:
+
+- the target or an operand isn't a closed manifold solid (open, wire or three-face edges, flipped normals), or
+- an operand's faces lie in the same plane as the target's, either coincident (same direction) or abutting (touching back to back).
+
+The refusal names the problem and where it was found. Fix the inputs, pass `coplanar_nudge` (a small distance in scene units: a temporary copy of each operand is pushed outward by that much so no faces share a plane), or pass `force=True` to run anyway.
+
+Warnings flag results that look fine but aren't:
+
+- a DIFFERENCE or INTERSECT that changed nothing,
+- a UNION that left the target unchanged (the operand was dropped, unless it lies entirely inside),
+- a UNION smaller than one of its inputs, or a DIFFERENCE that increased the volume,
+- new non-manifold edges, or a result that is no longer a closed solid.
+
+`use_self` also unions overlapping parts within the target, which cleans up duplicated or overlapping pieces before trimming. `apply=False` leaves the boolean modifiers on the target for inspection. Operands are kept and hidden by default; `keep_operands=False` deletes them after applying. Modifiers are applied to the base mesh, ahead of any modifiers the target already has.
+
+#### Booleans that fail silently
+
+These came from a real modelling session (a house roof built from nine unioned gables) and are what the checks above look for:
+
+- **Faces sharing a plane corrupt the result.** Unioning solids that abut on the same plane, or cutting with an operand whose face lies exactly on the target's surface, can leave non-manifold edges with no error. The mesh still renders correctly, so nothing looks wrong until a later boolean on it misbehaves. Overlap abutting parts slightly (a few hundredths of a unit) instead of letting faces meet exactly, or use `coplanar_nudge`.
+- **A boolean can do nothing, or drop an operand, and report success.** Face counts alone don't catch this, because valid unions also remove faces. The volume check does: a union can never be smaller than either input, and a difference can never be larger than its target.
+- **Volume stops meaning anything once a mesh is non-manifold,** so non-manifold edges are reported on every step rather than relying on volume alone.
+- **Solvers fail differently.** In testing, `FLOAT` produced non-manifold results on coplanar and abutting inputs where `EXACT` and `MANIFOLD` stayed clean. `MANIFOLD` needs clean closed inputs. Blender 5.x has no `FAST`; `FLOAT` replaced it.
+- **Sometimes a boolean is the wrong tool.** A flat plate with a hole is better built by clipping the outline and extruding it than by cutting a solid.
+
+---
+
 ## Job-pump health
 
 The addon reports its job queue about every 10 seconds from its network thread, so a report still arrives while Blender's main thread is busy. `blender_list_available_clients` shows it as `health` (`queue_depth`, `active_jobs` with `running_seconds`, `drain_timer_registered`, `last_drain_seconds_ago`, `reported_seconds_ago`), and a dispatch that times out or comes back `queued` includes it as `target_health`, with a hint that tells the three usual causes apart: Blender busy with a long job, a stalled job pump, or a dispatch that hasn't arrived yet.
