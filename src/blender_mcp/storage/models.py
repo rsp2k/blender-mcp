@@ -368,7 +368,7 @@ class PersonalAccessToken(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Non-secret display handle, e.g. "bmcp_Ab3xYz9Q", for list/revoke.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -376,6 +376,12 @@ class PersonalAccessToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Matches migration 20260926_0004, which made uniqueness a named index
+    # (a column-level unique=True reads as a different object to alembic check).
+    __table_args__ = (
+        Index("ux_access_token_token_hash", "token_hash", unique=True),
+    )
 
 
 # bus_job.status values. Plain strings rather than a DB enum, so adding a
