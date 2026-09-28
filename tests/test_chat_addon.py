@@ -58,7 +58,7 @@ def test_tool_start_then_end_updates_one_row():
     assert len(tools) == 1
     assert tools[0]["ok"] is True and tools[0]["ms"] == 412
     log = st.drain_log()
-    assert any("tool create_mesh ok 412 ms" in line for line in log)
+    assert any("tool create_mesh  0.41 s ok" in line for line in log)
 
 
 def test_final_reply_not_duplicated_after_text_event():
