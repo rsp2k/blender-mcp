@@ -145,6 +145,21 @@ services:
       STORAGE_URL_EXPIRY_S: ${STORAGE_URL_EXPIRY_S:-900}
       STORAGE_OUTPUT_URL_EXPIRY_S: ${STORAGE_OUTPUT_URL_EXPIRY_S:-21600}
       STORAGE_MAX_UPLOAD_BYTES: ${STORAGE_MAX_UPLOAD_BYTES:-5368709120}
+      # In-Blender chat (src/blender_mcp/chat). Off unless CHAT_ENABLED=true.
+      # GPU_API_KEY and CHAT_SECRET_KEY are secrets: set them in .env only.
+      CHAT_ENABLED: ${CHAT_ENABLED:-false}
+      GPU_BASE_URL: ${GPU_BASE_URL:-https://blender-chat.gpu.supported.systems/v1}
+      GPU_API_KEY: ${GPU_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3}
+      CHAT_VISION_MODEL: ${CHAT_VISION_MODEL:-qwen2.5vl}
+      CHAT_MAX_STEPS: ${CHAT_MAX_STEPS:-6}
+      CHAT_MAX_TOKENS: ${CHAT_MAX_TOKENS:-2048}
+      CHAT_LLM_TIMEOUT_S: ${CHAT_LLM_TIMEOUT_S:-120}
+      CHAT_TURN_TIMEOUT_S: ${CHAT_TURN_TIMEOUT_S:-300}
+      CHAT_APPROVAL_TIMEOUT_S: ${CHAT_APPROVAL_TIMEOUT_S:-120}
+      CHAT_TOOLS: ${CHAT_TOOLS:-}
+      CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
+      CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
     networks:
       - caddy
       - internal
@@ -262,6 +277,21 @@ services:
       STORAGE_URL_EXPIRY_S: ${STORAGE_URL_EXPIRY_S:-900}
       STORAGE_OUTPUT_URL_EXPIRY_S: ${STORAGE_OUTPUT_URL_EXPIRY_S:-21600}
       STORAGE_MAX_UPLOAD_BYTES: ${STORAGE_MAX_UPLOAD_BYTES:-5368709120}
+      # In-Blender chat (src/blender_mcp/chat). Off unless CHAT_ENABLED=true.
+      # GPU_API_KEY and CHAT_SECRET_KEY are secrets: set them in .env only.
+      CHAT_ENABLED: ${CHAT_ENABLED:-false}
+      GPU_BASE_URL: ${GPU_BASE_URL:-https://blender-chat.gpu.supported.systems/v1}
+      GPU_API_KEY: ${GPU_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3}
+      CHAT_VISION_MODEL: ${CHAT_VISION_MODEL:-qwen2.5vl}
+      CHAT_MAX_STEPS: ${CHAT_MAX_STEPS:-6}
+      CHAT_MAX_TOKENS: ${CHAT_MAX_TOKENS:-2048}
+      CHAT_LLM_TIMEOUT_S: ${CHAT_LLM_TIMEOUT_S:-120}
+      CHAT_TURN_TIMEOUT_S: ${CHAT_TURN_TIMEOUT_S:-300}
+      CHAT_APPROVAL_TIMEOUT_S: ${CHAT_APPROVAL_TIMEOUT_S:-120}
+      CHAT_TOOLS: ${CHAT_TOOLS:-}
+      CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
+      CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:

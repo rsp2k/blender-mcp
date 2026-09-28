@@ -65,11 +65,16 @@ blender_chat(message: str, history: list[{role: "user"|"assistant", content: str
  "backend": {"provider": "gateway", "model": "qwen3"}}
 ```
 
-- Other statuses: `disabled` (chat is off on this server), `no_backend` (the gateway isn't available to this account and no backend is configured; `hint` says what to do), `busy` (a turn is already running for this account), `backend_error` (the model call failed; `detail` has the reason), `timeout`.
+- Other statuses: `disabled` (chat is off on this server), `no_backend` (the gateway isn't available to this account and no backend is configured; `hint` says what to do), `busy` (a turn is already running for this account), `backend_error` (the model call failed; `detail` has the reason), `timeout`. `backend_error` and `timeout` also carry `steps`, `elapsed_s` and `backend` for whatever ran before the failure, and `timeout` carries the `reply` so far (often empty).
+- Problems with the call itself come back as `{"status": "error", "error": …}`: `not_registered` (this session hasn't called `blender_register_client`, so there is no Blender to target), `empty_message`, `unauthenticated`.
 
 ### Approvals are MCP elicitation
 
 For a tool that needs approval, the server sends an `elicitation/create` request on the same session while the call is running. The message starts with `BlenderMCP approval:` and the requested schema has no fields, so the client answers **accept** (allow) or **decline** (deny). Clients should decline elicitations they don't recognise. Unanswered requests are declined by the server after 120 seconds.
+
+<Aside type="caution">
+The MCP Python SDK runs a client's elicitation callback inside the session's receive loop, so while an approval is waiting that session reads nothing else: no progress, no replies to other calls, no keepalives. Answer (or auto-decline) promptly, and don't let a stream-silence watchdog reconnect the session while a prompt is showing.
+</Aside>
 
 ### `blender_set_chat_backend` (add-on role only)
 
@@ -78,7 +83,7 @@ blender_set_chat_backend(provider: "gateway"|"anthropic"|"openai", model: str | 
                          base_url: str | None = None, api_key: str | None = None, clear: bool = False)
 ```
 
-Returns `{"status": "ok", "backend": {"provider", "model", "base_url", "has_key"}}`; the key is never returned. `blender_get_chat_backend()` returns the same shape. Arguments to this tool are never recorded by the server's call logging.
+Returns `{"status": "ok", "backend": {"provider", "model", "base_url", "has_key"}}`; the key is never returned. Omitting `api_key` keeps the saved key when the provider stays the same; an empty string removes it. Refusals are `{"status": "error", "error", "detail"}` with `error` one of `invalid_provider`, `invalid_argument`, `api_key_required`, `secret_key_not_configured`. `blender_get_chat_backend()` returns the same shape. Arguments to this tool are never recorded by the server's call logging.
 
 ### Feature flag
 
