@@ -330,7 +330,7 @@ def _j_rests_on(check, after, before, turn, i):
     cy = (obj["bmin"][1] + obj["bmax"][1]) / 2
     over = base["bmin"][0] - tol <= cx <= base["bmax"][0] + tol and \
         base["bmin"][1] - tol <= cy <= base["bmax"][1] + tol
-    ok = abs(gap) <= tol and over
+    ok = abs(gap) <= tol + 1e-6 and over  # float noise at exactly tol
     return _result(check, ok, {"object": obj["name"], "base": base["name"], "gap": _r(gap),
                                "center_over_base": over})
 
