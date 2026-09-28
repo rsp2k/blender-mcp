@@ -38,7 +38,7 @@ blender_report_user_tools(tools: list[{server, name, description, input_schema, 
 
 - Replaces the full set for the calling Blender; an empty list clears it. Sent after registration and whenever a server's tools change.
 - Limits: at most 80 tools, `description` cut to 1,000 characters, `input_schema` at most 8 KB of JSON each; oversize entries are dropped and listed.
-- Returns `{"status": "ok", "accepted": 12, "dropped": [{"server", "name", "reason"}]}`.
+- Returns `{"status": "ok", "accepted": 12, "dropped": [{"server", "name", "reason"}]}`. A `reason` is one of `too_many_tools`, `invalid_server` (not 1 to 64 of `A-Z a-z 0-9 _ -`), `invalid_name` (empty, over 128 characters, or containing whitespace), `duplicate`, `invalid_schema` (not a JSON object schema) or `schema_too_large`.
 - The set lives in server memory for that Blender's session; the add-on re-reports after reconnecting.
 
 ### Chat names
@@ -53,6 +53,7 @@ Dispatched like any Blender command, and only to the Blender whose add-on starte
 {"command": "user_tool_call", "params": {"server": "pdf", "tool": "read_text", "arguments": {"path": "spec.pdf"}, "timeout_s": 60}}
 ```
 
+- The server refuses to send `user_tool_call` for anyone else: `blender_submit` and `bus_send_message` answer `chat_only_command`, so MCP clients never reach these tools.
 - The add-on looks `server` up in its own preferences. A name it doesn't have is refused: commands and addresses only ever come from the user's preferences, never from the server.
 - The call runs off Blender's main thread. The result is `{"ok": true, "text": "...", "truncated": false}`; text content is joined, images are replaced by a short note, and text is cut to 20,000 characters.
 - A timeout or a crashed server returns `{"ok": false, "text": "<reason>"}`; the add-on restarts a crashed server on its next call.

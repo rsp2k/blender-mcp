@@ -37,6 +37,7 @@ META_ONLY_TOOLS = frozenset({
     "blender_create_access_token",
     "blender_set_chat_backend",  # carries a provider API key
     "blender_chat",
+    "blender_report_user_tools",  # large, user-private schemas and descriptions
 })
 
 try:

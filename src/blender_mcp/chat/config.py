@@ -45,6 +45,8 @@ class ChatConfig:
     llm_timeout_s: int = 120
     turn_timeout_s: int = 300
     approval_timeout_s: int = 120
+    # Blender tools plus the add-on's own tool servers, offered per turn.
+    max_tools: int = 40
     # Empty = the curated default list in catalog.py.
     tools: frozenset[str] = frozenset()
     # Empty = every authenticated user may use the shared gateway.
@@ -70,6 +72,7 @@ def load_config(env=None) -> ChatConfig:
         llm_timeout_s=_int(env, "CHAT_LLM_TIMEOUT_S", 120),
         turn_timeout_s=_int(env, "CHAT_TURN_TIMEOUT_S", 300),
         approval_timeout_s=_int(env, "CHAT_APPROVAL_TIMEOUT_S", 120),
+        max_tools=_int(env, "CHAT_MAX_TOOLS", 40, hi=128),
         tools=_csv(env, "CHAT_TOOLS"),
         gateway_users=_csv(env, "CHAT_GATEWAY_USERS"),
         secret_key=_get(env, "CHAT_SECRET_KEY"),

@@ -103,3 +103,15 @@ class ChatExecutor:
                 parts.append("[image returned; use look_at_viewport to have it described]")
         text = "\n".join(parts)
         return (not res.isError) and result_ok(text), text
+
+    async def call_user_tool(self, server: str, tool: str, args: dict | None) -> tuple[bool, str]:
+        """(ok, text) for a tool on the calling Blender's own tool server.
+
+        Not an MCP tool: dispatched as ``user_tool_call`` straight to this
+        Blender (chat/user_tools.py). Arguments go through untouched, since
+        they only reach the user's tool server, never a Blender tool.
+        """
+        from . import user_tools
+
+        return await user_tools.call(self.user_sub, self.bus_id, self.blender_uuid,
+                                     server, tool, dict(args or {}))
