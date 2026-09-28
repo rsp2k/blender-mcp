@@ -4,7 +4,7 @@ failure list, and render them as Markdown. Pure Python.
 A result record (one per model x case x repeat) looks like:
 
     {"model": "gateway:qwen3", "case": "box-exact", "repeat": 1, "ok": false,
-     "seconds": 23.4, "tools": [{"name": ..., "ok": ..., "ms": ...}],
+     "seconds": 23.4, "tools": [{"name": ..., "ok": ..., "ms": ..., "error"?: ..., "head"?: ...}],
      "approvals": [{"prompt": ..., "answer": "deny"}], "reply": "...",
      "errors": [...], "checks": [{"check", "ok", "observed", "expect"}],
      "timed_out": false, "note": "..."}
@@ -161,6 +161,12 @@ def render_markdown(results: list[dict], meta: dict | None = None) -> str:
         tools = ", ".join(f"{t.get('name')}{'' if t.get('ok') else '(failed)'}"
                           for t in r.get("tools") or [])
         out.append(f"- tools: {tools or 'none'}")
+        for t in r.get("tools") or []:
+            if not t.get("ok"):
+                why = t.get("error") or "(no error text recorded)"
+                out.append(f"  - {t.get('name')} failed: `{_fmt(why, 300)}`")
+        if r.get("resnapshot"):
+            out.append(f"- note: snapshot retaken, {_fmt(r['resnapshot'], 200)}")
         if r.get("approvals"):
             out.append("- approvals: " + "; ".join(
                 f"{a.get('answer')}: {_fmt(a.get('prompt'), 120)}" for a in r["approvals"]))

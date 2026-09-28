@@ -154,6 +154,20 @@ def tool_line(entry: dict) -> str:
     return text
 
 
+STEP_DETAIL_CHARS = 300
+
+
+def step_detail(event: dict) -> dict:
+    """The optional ``error`` (failed step) and ``head`` (start of a successful
+    result) of a tool end event, as strings of bounded length."""
+    out = {}
+    for key in ("error", "head"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value[:STEP_DETAIL_CHARS]
+    return out
+
+
 ROLE_ICONS = {"user": "USER", "assistant": "MONKEY", "error": "ERROR", "status": "INFO"}
 
 
@@ -183,7 +197,8 @@ def format_log_line(entry: dict, when: float | None = None) -> str:
     text = entry.get("text") or ""
     if role == "tool":
         mark = "ok" if entry.get("ok") else "failed"
-        return f"[{stamp}]   tool {tool_line(entry)} {mark}"
+        err = entry.get("error") if not entry.get("ok") else None
+        return f"[{stamp}]   tool {tool_line(entry)} {mark}" + (f": {err}" if err else "")
     label = {"user": "You", "assistant": "Assistant", "error": "Error"}.get(role, "Note")
     body = text.replace("\n", "\n    ")
     return f"[{stamp}] {label}: {body}"
@@ -308,15 +323,18 @@ class ChatState:
                     self.add_message("tool", "", log=False, name=name, ok=None, ms=None, **extra)
                     return
                 ok, ms, wait = bool(event.get("ok")), event.get("ms"), event.get("wait_ms")
+                detail = step_detail(event)
                 for entry in reversed(self.messages):
                     if (entry.get("role") == "tool" and entry.get("name") == name
                             and entry.get("ok") is None and entry.get("turn") == self.turn):
                         entry["ok"], entry["ms"], entry["wait_ms"] = ok, ms, wait
+                        entry.update(detail)
                         self.revision += 1
                         self._log.append(format_log_line(entry))
                         break
                 else:
-                    self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait, **extra)
+                    self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait,
+                                     **detail, **extra)
 
     def finish_turn(self, turn: int, role: str, text: str,
                     payload: dict | None = None) -> bool:

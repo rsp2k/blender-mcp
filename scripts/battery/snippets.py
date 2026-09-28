@@ -144,6 +144,19 @@ _out({{"ok": True, "objects": sorted(x.name for x in bpy.context.scene.objects)}
 """
 
 
+# Whether the add-on has work left: the chat turn, and dispatches still queued
+# for the main thread (this snippet is itself a dispatch, already dequeued).
+IDLE = CHAT + """
+_q = None
+for _k, _m in list(sys.modules.items()):
+    if _k.endswith(".state") and hasattr(_m, "_client") and hasattr(_m, "_executor"):
+        _c = getattr(_m, "_client", None)
+        _q = len(getattr(_c, "job_queue", None) or []) if _c is not None else None
+        break
+_out({"busy": bool(_st.busy), "queued": _q})
+"""
+
+
 def poll(since_turn: int) -> str:
     return CHAT + f"""
 _since = {int(since_turn)}
@@ -153,7 +166,7 @@ with _st.lock:
     for m in _st.messages:
         if m.get("turn", 0) > _since:
             msgs.append({{k: (v[:4000] if isinstance(v, str) else v) for k, v in m.items()
-                         if k in ("role", "text", "name", "ok", "ms", "turn")}})
+                         if k in ("role", "text", "name", "ok", "ms", "turn", "error", "head")}})
     _out({{"busy": _st.busy, "status": _st.status, "turn": _st.turn,
           "approval": pend.get("prompt") if pend else None, "last_error": _st.last_error,
           "available": _st.available, "backend_used": _st.backend_used,

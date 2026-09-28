@@ -9,6 +9,17 @@ import bpy
 from ..registry import command
 
 
+def scene_named(name=None):
+    """The scene called ``name``, or the active scene when it's empty."""
+    if name is None or name == "":
+        return bpy.context.scene
+    found = bpy.data.scenes.get(str(name))
+    if found is None:
+        names = [s.name for s in bpy.data.scenes]
+        raise ValueError(f"no scene named {name!r}; scenes: {names}")
+    return found
+
+
 class SceneHandlersMixin:
     """`get_scene_info`, `get_object_info`, `browse_data` commands.
 
@@ -18,63 +29,68 @@ class SceneHandlersMixin:
     """
 
     @command("get_scene_info")
-    def get_scene_info(self):
-        """Get information about the current Blender scene"""
+    def get_scene_info(self, scene=None):
+        """Summary of the active scene, or of the scene named ``scene`` without
+        switching to it."""
         try:
-            print("Getting scene info...")
-            # Simplify the scene info to reduce data size
+            target = scene_named(scene)
+            active_scene = bpy.context.scene
+            objects = list(target.objects)
+            # Every scene in the file first, so a summary cut short for a
+            # prompt still names them all.
             scene_info = {
-                "name": bpy.context.scene.name,
-                "object_count": len(bpy.context.scene.objects),
+                "name": target.name,
+                "active_scene": active_scene.name,
+                "scenes": [
+                    {"name": s.name, "active": s == active_scene, "objects": len(s.objects)}
+                    for s in bpy.data.scenes
+                ],
+                "object_count": len(objects),
                 "objects": [],
                 "materials_count": len(bpy.data.materials),
             }
-
-            # Collect minimal object information (limit to first 10 objects)
-            for i, obj in enumerate(bpy.context.scene.objects):
-                if i >= 10:  # Reduced from 20 to 10
-                    break
-
-                obj_info = {
+            for obj in objects[:10]:
+                scene_info["objects"].append({
                     "name": obj.name,
                     "type": obj.type,
-                    # Only include basic location data
                     "location": [round(float(obj.location.x), 2),
-                                round(float(obj.location.y), 2),
-                                round(float(obj.location.z), 2)],
-                }
-                scene_info["objects"].append(obj_info)
+                                 round(float(obj.location.y), 2),
+                                 round(float(obj.location.z), 2)],
+                })
 
             # What the user has picked in the GUI, so "this one" needs no
             # execute_code round trip. Capped like the object list.
-            view_layer = bpy.context.view_layer
-            selected = [o.name for o in view_layer.objects if o.select_get()]
-            active = view_layer.objects.active
+            if target == active_scene:
+                view_layer = bpy.context.view_layer
+            else:
+                view_layer = target.view_layers[0] if len(target.view_layers) else None
+            if view_layer is not None:
+                selected = [o.name for o in view_layer.objects if o.select_get()]
+                active = view_layer.objects.active
+            else:
+                selected, active = [], None
             scene_info["active_object"] = active.name if active else None
             scene_info["selected_objects"] = selected[:50]
             scene_info["selected_count"] = len(selected)
 
-            # Whole-file context the 10-object list can't give: every scene,
-            # and how many objects of each type this one holds.
-            scene = bpy.context.scene
             type_counts = {}
-            for o in scene.objects:
+            for o in objects:
                 type_counts[o.type] = type_counts.get(o.type, 0) + 1
-            scene_info["total_objects"] = len(scene.objects)
+            scene_info["total_objects"] = len(objects)
             scene_info["type_counts"] = dict(sorted(type_counts.items()))
-            scene_info["scenes"] = [
-                {"name": s.name, "active": s == scene, "objects": len(s.objects)}
-                for s in bpy.data.scenes
-            ]
-            scene_info["active_scene"] = scene.name
-            if len(scene.objects) > len(scene_info["objects"]):
+            if len(objects) > len(scene_info["objects"]):
                 scene_info["objects_note"] = (
-                    f"first {len(scene_info['objects'])} of {len(scene.objects)} objects; "
+                    f"first {len(scene_info['objects'])} of {len(objects)} objects; "
                     "list_scene_objects lists them all with filters"
                 )
-
-            print(f"Scene info collected: {len(scene_info['objects'])} objects")
+            if len(bpy.data.scenes) > 1:
+                scene_info["scenes_note"] = (
+                    "pass scene=<name> to get_scene_info or list_scene_objects to look "
+                    "inside another scene without switching to it"
+                )
             return scene_info
+        except ValueError as e:
+            return {"error": str(e)}
         except Exception as e:
             print(f"Error in get_scene_info: {str(e)}")
             traceback.print_exc()

@@ -87,12 +87,30 @@ async def _fetch(store, key: str) -> bytes:
     raise StorageError("object_not_found", "screenshot never arrived in storage")
 
 
+def rejected_deselect(reply: str) -> bool:
+    """An add-on from before ``deselect`` existed refusing the parameter."""
+    text = str(reply or "")
+    return "deselect" in text or "unexpected keyword" in text
+
+
+async def capture(executor) -> tuple[bool, str]:
+    """Screenshot with the selection cleared, so a selected object's outline
+    isn't read as its colour. Add-ons without ``deselect`` normally drop the
+    unknown key (registry.filter_kwargs); one that refuses it gets a plain
+    capture instead."""
+    base = {"store": True, "max_size": MAX_SIZE}
+    ok, reply = await executor.call(SCREENSHOT_TOOL, {}, extra={**base, "deselect": True})
+    if not ok and rejected_deselect(reply):
+        ok, reply = await executor.call(SCREENSHOT_TOOL, {}, extra=base)
+    return ok, reply
+
+
 async def look(executor, handler, backend: Backend, question: str) -> tuple[bool, str]:
     """(ok, description) for the calling Blender's viewport."""
     store = get_store()
     if store is None:
         return False, "Viewport screenshots are not available on this server."
-    ok, reply = await executor.call(SCREENSHOT_TOOL, {}, extra={"store": True, "max_size": MAX_SIZE})
+    ok, reply = await capture(executor)
     if not ok:
         return False, reply
     key = find_object_key(reply)
