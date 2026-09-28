@@ -153,7 +153,7 @@ def request_ui_redraw() -> None:
         try:
             for window in bpy.context.window_manager.windows:
                 for area in window.screen.areas:
-                    if area.type in {'VIEW_3D', 'PREFERENCES'}:
+                    if area.type in {'VIEW_3D', 'PREFERENCES', 'STATUSBAR'}:
                         area.tag_redraw()
         except Exception:
             pass

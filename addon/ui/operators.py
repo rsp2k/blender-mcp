@@ -1299,3 +1299,29 @@ class BLENDERMCP_OT_ClearMarks(bpy.types.Operator):
         out = AnnotationHandlersMixin.clear_annotations(None, layer=USER_MARK_LAYER)
         self.report({'INFO'}, f"Cleared {out['removed']} stroke(s)")
         return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ShowPanel(bpy.types.Operator):
+    """Open the 3D Viewport sidebar on the Blender MCP tab."""
+
+    bl_idname = "blendermcp.show_panel"
+    bl_label = "Show Blender MCP"
+    bl_description = "Open the Blender MCP sidebar tab"
+
+    category: bpy.props.StringProperty(default="BlenderMCP", options={'HIDDEN'})
+
+    def execute(self, context):
+        screen = context.window.screen if context.window else context.screen
+        area = next((a for a in screen.areas if a.type == 'VIEW_3D'), None)
+        if area is None:
+            self.report({'WARNING'}, "No 3D Viewport in this workspace")
+            return {'CANCELLED'}
+        area.spaces.active.show_region_ui = True
+        for region in area.regions:
+            if region.type == 'UI':
+                try:
+                    region.active_panel_category = self.category
+                except (TypeError, AttributeError):
+                    pass
+        area.tag_redraw()
+        return {'FINISHED'}

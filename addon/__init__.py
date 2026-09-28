@@ -47,7 +47,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (2026, 927, 9),  # MUST match addon/_version.py:tuple_version
+    "version": (2026, 927, 10),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -207,6 +207,8 @@ def register():
     # Register the UI classes (panel + operators).
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    from .ui import statusbar as _statusbar
+    _statusbar.register()
 
     # One-shot migration from legacy Scene properties (pre-Phase-8 installs).
     # Runs against bpy.context.scene if available; safe to no-op otherwise.
@@ -293,6 +295,9 @@ def unregister():
         state._client = None
     state._executor = None
     state._identity = None
+
+    from .ui import statusbar as _statusbar
+    _statusbar.unregister()
 
     for cls in reversed(_CLASSES):
         try:

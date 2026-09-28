@@ -19,6 +19,7 @@ import bpy
 
 from .. import state
 from .._version import __version__
+from ..activity_format import format_ago, format_ms
 from ..client import bus_client as _bus_client
 from ..preferences import (
     draw_login_section,
@@ -355,3 +356,39 @@ class BLENDERMCP_PT_PointItOut(_SubPanel, bpy.types.Panel):
         row.operator("blendermcp.mark_selection", text="", icon='MESH_CIRCLE').style = 'circle'
         row.operator("blendermcp.mark_selection", text="", icon='SORT_ASC').style = 'arrow'
         row.operator("blendermcp.clear_marks", text="", icon='TRASH')
+
+
+class BLENDERMCP_PT_Activity(_SubPanel, bpy.types.Panel):
+    """The last commands run in this Blender, newest first."""
+
+    bl_label = "Activity"
+    bl_idname = "BLENDERMCP_PT_Activity"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(get_prefs(context).jwt_token)
+
+    def draw_header_preset(self, context):
+        if state._activity:
+            last = state._activity[-1]
+            row = self.layout.row()
+            row.alert = not last["ok"]
+            row.label(text=f"{last['command']} · {format_ago(_time.time() - last['at'])}")
+
+    def draw(self, context):
+        layout = self.layout
+        if not state._activity:
+            layout.label(text="Nothing has run yet", icon='INFO')
+            return
+        now = _time.time()
+        col = layout.column(align=True)
+        for entry in reversed(state._activity):
+            row = col.row(align=True)
+            row.alert = not entry["ok"]
+            row.label(text=entry["command"], icon='CHECKMARK' if entry["ok"] else 'ERROR')
+            row.label(text=f"{format_ms(entry['ms'])} · {format_ago(now - entry['at'])}")
+            if entry["error"]:
+                err = col.row()
+                err.alert = True
+                err.label(text=f"    {entry['error'][:60]}")

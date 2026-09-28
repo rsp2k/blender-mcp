@@ -17,6 +17,7 @@ per-session and don't dirty the .blend file.
 
 from __future__ import annotations
 
+from collections import deque
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -56,6 +57,11 @@ _current_progress = None
 _buses: list = []
 # Set once the sidebar has started its background fetch of _buses.
 _buses_fetch_started: bool = False
+
+# Last commands run in this Blender, newest last, for the sidebar's Activity
+# subpanel: {command, ok, ms, at (epoch s), error}. Written by the drainer
+# on the main thread.
+_activity: deque = deque(maxlen=20)
 
 # 1.5.8: OAuth in-flight indicator. Set True when the Login worker starts;
 # flipped False by the poll() timer on completion (success OR error). The

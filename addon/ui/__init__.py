@@ -40,18 +40,25 @@ from .operators import (
     BLENDERMCP_OT_RefreshBuses,
     BLENDERMCP_OT_ReLogin,
     BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey,
+    BLENDERMCP_OT_ShowPanel,
     BLENDERMCP_OT_StartServer,
     BLENDERMCP_OT_StopServer,
     BLENDERMCP_OT_TakeBackControl,
     BLENDERMCP_OT_TestConnection,
 )
-from .panel import BLENDERMCP_PT_Bus, BLENDERMCP_PT_Panel, BLENDERMCP_PT_PointItOut
+from .panel import (
+    BLENDERMCP_PT_Activity,
+    BLENDERMCP_PT_Bus,
+    BLENDERMCP_PT_Panel,
+    BLENDERMCP_PT_PointItOut,
+)
 
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
     BLENDERMCP_PT_Panel,
     BLENDERMCP_PT_Bus,
     BLENDERMCP_PT_PointItOut,
+    BLENDERMCP_PT_Activity,
     BLENDERMCP_OT_TestConnection,
     BLENDERMCP_OT_OAuthLogin,
     BLENDERMCP_OT_Logout,
@@ -82,6 +89,7 @@ CLASSES = (
     BLENDERMCP_OT_AlwaysAllowExtensionInstall,
     BLENDERMCP_OT_MarkSelection,
     BLENDERMCP_OT_ClearMarks,
+    BLENDERMCP_OT_ShowPanel,
 )
 
 __all__ = [

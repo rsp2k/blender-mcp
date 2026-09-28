@@ -99,6 +99,19 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
     return 0.0  # check for next immediately
 
 
+def _record_activity(command: str, started: float, ok: bool, error: str = "") -> None:
+    """Remember a finished job for the sidebar's Activity list."""
+    first = (error or "").strip().splitlines()
+    state._activity.append({
+        "command": command,
+        "ok": ok,
+        "ms": (time.time() - started) * 1000.0,
+        "at": time.time(),
+        "error": first[0][:120] if first else "",
+    })
+    _tag_redraw()
+
+
 def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None:
     """Execute a dispatched script in Blender's main thread, report result."""
     client.active_jobs[job_id] = time.time()
@@ -117,6 +130,7 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
         "__name__": "__blender_mcp_job__",
     }
 
+    started, ok, err = time.time(), False, ""
     try:
         with redirect_stdout(output):
             exec(compile(script, f"<job_{job_id}>", "exec"), exec_globals)
@@ -124,8 +138,10 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
             client, job_id, "completed",
             result=output.getvalue(), error="",
         )
+        ok = True
     except Exception as e:
         tb = traceback.format_exc()
+        err = f"{type(e).__name__}: {e}"
         submit_job_update(
             client, job_id, "failed",
             result=output.getvalue(),
@@ -134,6 +150,7 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
     finally:
         client.active_jobs.pop(job_id, None)
         state._current_progress = None
+        _record_activity("execute_code", started, ok, err)
 
 
 def execute_command(
@@ -161,6 +178,7 @@ def execute_command(
     # execute_code exposes this to the job's code as report_progress().
     state._current_progress = make_progress_reporter(client, job_id)
 
+    started, ok, err = time.time(), False, ""
     try:
         with redirect_stdout(output):
             result = client.executor.execute_command(
@@ -169,12 +187,14 @@ def execute_command(
         # execute_command already wraps its return in {"status", "result"}
         # or {"status", "message"}; collapse that into our wire shape.
         if isinstance(result, dict) and result.get("status") == "error":
+            err = str(result.get("message", ""))
             submit_job_update(
                 client, job_id, "failed",
                 result=output.getvalue(),
-                error=str(result.get("message", "")),
+                error=err,
             )
         else:
+            ok = True
             submit_job_update(
                 client, job_id, "completed",
                 # Serialize the inner result; the dispatch handler returns
@@ -184,6 +204,7 @@ def execute_command(
             )
     except Exception as e:
         tb = traceback.format_exc()
+        err = f"{type(e).__name__}: {e}"
         submit_job_update(
             client, job_id, "failed",
             result=output.getvalue(),
@@ -192,6 +213,7 @@ def execute_command(
     finally:
         client.active_jobs.pop(job_id, None)
         state._current_progress = None
+        _record_activity(command, started, ok, err)
 
 
 def _pre_authorized(prefs_uuids: str, requester_uuid: str) -> bool:
@@ -216,10 +238,11 @@ def _get_prefs():
 
 
 def _tag_redraw() -> None:
-    """Kick the sidebar to redraw so a pending-request banner appears fast."""
+    """Kick the sidebar (and the status-bar indicator) to redraw so a
+    pending-request banner appears fast."""
     try:
         for area in bpy.context.screen.areas:
-            if area.type == "VIEW_3D":
+            if area.type in ("VIEW_3D", "STATUSBAR"):
                 area.tag_redraw()
     except (AttributeError, RuntimeError):
         # bpy.context isn't always populated (edge cases during startup).
