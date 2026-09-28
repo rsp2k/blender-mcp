@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "battery"))
 
-from report import cell_text, failures, matrix, render_markdown, summarize
+from report import cell_text, failures, matrix, merge, render_markdown, summarize
 
 
 def rec(model, case, ok, seconds=10.0, tools=1, repeat=1, **extra):
@@ -52,6 +52,14 @@ def test_matrix_and_cells_with_repeats():
 
 def test_failures_skip_passes_and_skipped():
     assert [(r["model"], r["case"]) for r in failures(RESULTS)] == [("gateway:qwen3", "chair")]
+
+
+def test_merge_later_run_replaces_same_model_case():
+    full = [rec("m", "a", False), rec("m", "b", True), rec("n", "a", True)]
+    rerun = [rec("m", "a", True, repeat=1), rec("m", "a", True, repeat=2), rec("m", "c", False)]
+    merged = merge([full, rerun])
+    assert [(r["model"], r["case"], r["ok"]) for r in merged] == [
+        ("m", "a", True), ("m", "a", True), ("m", "b", True), ("n", "a", True), ("m", "c", False)]
 
 
 def test_render_markdown():

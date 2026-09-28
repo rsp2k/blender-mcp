@@ -21,6 +21,23 @@ def _median(xs: list[float]) -> float | None:
     return round(statistics.median(xs), 1) if xs else None
 
 
+def merge(runs: list[list[dict]]) -> list[dict]:
+    """Combine result lists; a later run replaces every earlier record for the
+    same (model, case), so a rerun of a few cases updates a full run.
+    Order: first appearance of each (model, case)."""
+    order: list[tuple[str, str]] = []
+    latest: dict[tuple[str, str], list[dict]] = {}
+    for run in runs:
+        fresh: dict[tuple[str, str], list[dict]] = {}
+        for r in run:
+            fresh.setdefault((r["model"], r["case"]), []).append(r)
+        for key, recs in fresh.items():
+            if key not in latest:
+                order.append(key)
+            latest[key] = recs
+    return [r for key in order for r in latest[key]]
+
+
 def summarize(results: list[dict]) -> list[dict]:
     """Per-model rows: runs, passed, pass rate, median turn s, avg tool calls, ..."""
     by_model: OrderedDict[str, list[dict]] = OrderedDict()
@@ -101,7 +118,8 @@ def render_markdown(results: list[dict], meta: dict | None = None) -> str:
     meta = meta or {}
     out = ["# Chat battery report", ""]
     if meta:
-        for k in ("started", "finished", "mcp_url", "client", "cases", "models", "repeat", "restored"):
+        for k in ("started", "finished", "mcp_url", "client", "cases", "models", "repeat", "restored",
+                  "merged_from"):
             if k in meta:
                 out.append(f"- **{k}**: {_fmt(meta[k], 400)}")
         out.append("")
