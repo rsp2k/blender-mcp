@@ -117,7 +117,12 @@ def mesh_health(obj, evaluated: bool = False) -> dict:
             "bounds_world": {"min": [round(x, 6) for x in mn], "max": [round(x, 6) for x in mx]},
         }
         if volume is None:
-            out["volume_note"] = "not a closed manifold solid, so volume is meaningless"
+            if non_contiguous and not (boundary or multi or wire):
+                # Watertight, but neighbouring faces disagree on direction.
+                out["volume_note"] = ("watertight, but faces are wound inconsistently (some normals "
+                                      "point inward); recalculate normals to make it a solid")
+            else:
+                out["volume_note"] = "not a closed manifold solid, so volume is meaningless"
         return out
     finally:
         bm.free()

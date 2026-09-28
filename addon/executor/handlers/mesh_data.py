@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+import bmesh
 import bpy
 from mathutils import geometry
 
@@ -56,10 +57,20 @@ def _vec3(value, what):
     return tuple(float(v) for v in value)
 
 
-def _make_object(name, verts, faces, coll, parent, location, smooth):
+def _make_object(name, verts, faces, coll, parent, location, smooth, fix_normals=True):
     me = bpy.data.meshes.new(name)
     me.from_pydata(verts, [], faces)
     me.validate(clean_customdata=False)
+    if fix_normals and faces:
+        # Hand-written face lists often wind faces inconsistently; that reads
+        # as non-manifold and gives no volume. Make every normal point out.
+        bm = bmesh.new()
+        try:
+            bm.from_mesh(me)
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            bm.to_mesh(me)
+        finally:
+            bm.free()
     me.update()
     if smooth:
         me.shade_smooth()
@@ -96,7 +107,7 @@ class MeshDataHandlersMixin:
     @command("create_mesh")
     def create_mesh(self, name="Mesh", vertices=None, faces=None, source=None,
                     collection=None, parent=None, location=None, scale=1.0,
-                    smooth=False, bus_dir=None):
+                    smooth=False, bus_dir=None, fix_normals=True):
         """Create a mesh object from vertex coordinates and face index lists."""
         src_path = None
         if source:
@@ -129,7 +140,8 @@ class MeshDataHandlersMixin:
                 raise ValueError(f"face {i} repeats a vertex index")
             clean_faces.append(idx)
         obj = _make_object(name, verts, clean_faces, _collection(collection),
-                           _parent(parent), _vec3(location, "location"), smooth)
+                           _parent(parent), _vec3(location, "location"), smooth,
+                           fix_normals=bool(fix_normals))
         out = {"created": [_summary(obj)]}
         if src_path:
             out["source"] = src_path

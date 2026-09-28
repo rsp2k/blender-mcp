@@ -113,6 +113,7 @@ class BlenderDataComponent(MCPMixin):
         location: list[float] | None = None,
         scale: float = 1.0,
         smooth: bool = False,
+        fix_normals: bool = True,
         target_uuid: str | None = None,
         _timeout: float = TIMEOUT_MEDIUM,
         bus_id: str | None = None,
@@ -127,8 +128,9 @@ class BlenderDataComponent(MCPMixin):
         For large meshes, upload a JSON file ``{"vertices": [...], "faces":
         [...]}`` with blender_upload and pass its name as ``source``:
         dispatch parameters over ~100 KB can't be recovered if Blender's
-        event stream drops mid-call. Returns face counts and whether the
-        result is a closed manifold solid.
+        event stream drops mid-call. Face winding doesn't matter: normals are
+        made consistent and outward (``fix_normals=False`` keeps yours).
+        Returns face counts and whether the result is a closed manifold solid.
         """
         if source is None and not vertices:
             return _err("invalid_argument", detail="pass vertices (and faces) or a source file")
@@ -136,6 +138,8 @@ class BlenderDataComponent(MCPMixin):
             "name": name, "vertices": vertices, "faces": faces, "source": source,
             "collection": collection, "parent": parent, "location": location,
             "scale": scale, "smooth": smooth,
+            # Only sent when off: add-ons before 2026.927.12 don't take it.
+            **({} if fix_normals else {"fix_normals": False}),
         }, target_uuid, _timeout, bus_id)
 
     @mcp_tool()
