@@ -173,7 +173,7 @@ def find_update_repo():
     return None
 
 
-def draw_update_banner(layout):
+def draw_update_banner(layout, compact: bool = False):
     """Draw an "Update available" banner when the server said we're behind.
 
     No-op when ``state._update_available`` is False, which is the case
@@ -205,6 +205,19 @@ def draw_update_banner(layout):
     latest = getattr(_state, "_latest_addon_version", None) or "?"
     url = getattr(_state, "_addon_download_url", None)
 
+    if compact:
+        # Sidebar: one button naming the new version. The installed one is
+        # already in the panel header, and the sidebar is too narrow for
+        # "old -> new" (it truncated to the old version).
+        row = layout.row()
+        row.scale_y = 1.2
+        if find_update_repo() is not None:
+            row.operator("blendermcp.install_update", text=f"Update to {latest}", icon='IMPORT')
+        elif url:
+            op = row.operator("wm.url_open", text=f"Get {latest}", icon='URL')
+            op.url = url
+        return
+
     box = layout.box()
     col = box.column(align=True)
     col.label(
@@ -221,7 +234,7 @@ def draw_update_banner(layout):
         col.label(text="Add the Blender MCP repository for one-click updates", icon='INFO')
 
 
-def draw_login_section(layout, prefs):
+def draw_login_section(layout, prefs, compact: bool = False):
     """Login / Logout UI block — shared by the prefs panel AND the View3D sidebar.
 
     Factored out (not a method) so both call sites render identically. State
@@ -240,6 +253,18 @@ def draw_login_section(layout, prefs):
 
     has_jwt = bool(prefs.jwt_token)
     is_oauth = bool(prefs.oauth_client_id)
+
+    if compact and has_jwt and not getattr(_state, "_auth_in_progress", False):
+        # Sidebar, signed in: one row, name plus a logout icon.
+        display = (
+            (prefs.user_display_name or "").strip()
+            or (prefs.user_email or "").strip()
+            or "Logged in"
+        )
+        row = layout.row(align=True)
+        row.label(text=display, icon='USER')
+        row.operator("blendermcp.logout", text="", icon='QUIT')
+        return
 
     box = layout.box()
     if getattr(_state, "_auth_in_progress", False):

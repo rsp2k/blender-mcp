@@ -282,6 +282,9 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
         state._latest_addon_version = None
         state._addon_download_url = None
         state._update_available = False
+        # The bus list belongs to the account; the next login refetches it.
+        state._buses = []
+        state._buses_fetch_started = False
 
         self.report({'INFO'}, "Logged out")
         return {'FINISHED'}

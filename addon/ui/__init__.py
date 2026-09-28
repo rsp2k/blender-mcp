@@ -45,11 +45,13 @@ from .operators import (
     BLENDERMCP_OT_TakeBackControl,
     BLENDERMCP_OT_TestConnection,
 )
-from .panel import BLENDERMCP_PT_Panel
+from .panel import BLENDERMCP_PT_Bus, BLENDERMCP_PT_Panel, BLENDERMCP_PT_PointItOut
 
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
     BLENDERMCP_PT_Panel,
+    BLENDERMCP_PT_Bus,
+    BLENDERMCP_PT_PointItOut,
     BLENDERMCP_OT_TestConnection,
     BLENDERMCP_OT_OAuthLogin,
     BLENDERMCP_OT_Logout,
@@ -85,6 +87,8 @@ CLASSES = (
 __all__ = [
     "CLASSES",
     "BLENDERMCP_PT_Panel",
+    "BLENDERMCP_PT_Bus",
+    "BLENDERMCP_PT_PointItOut",
     "BLENDERMCP_OT_OAuthLogin",
     "BLENDERMCP_OT_Logout",
     "BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey",

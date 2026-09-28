@@ -54,6 +54,8 @@ _current_progress = None
 # bus_list_buses MCP tool: {bus_id, name, role, is_personal, owner_user_id,
 # is_owned_by_me, created_at, description}.
 _buses: list = []
+# Set once the sidebar has started its background fetch of _buses.
+_buses_fetch_started: bool = False
 
 # 1.5.8: OAuth in-flight indicator. Set True when the Login worker starts;
 # flipped False by the poll() timer on completion (success OR error). The

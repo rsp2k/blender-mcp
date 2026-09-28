@@ -1,9 +1,10 @@
 """BLENDERMCP_PT_Panel — View3D > Sidebar > BlenderMCP panel.
 
-Setup config (server URL, asset API keys) lives in Edit > Preferences >
-Add-ons > BlenderMCP. The sidebar carries the actions you take *while
-working*: Login/Logout, Connect/Disconnect, asset-integration toggles,
-and live connection status.
+Setup config (server URL, asset integrations and their API keys) lives in
+Edit > Preferences > Add-ons > BlenderMCP. The sidebar carries what you
+use *while working*: consent prompts, the connection switch and status
+(also shown as the header icon), the account row, and subpanels for the
+bus and for marking the selection.
 
 Login UI is shared with the prefs panel via
 :func:`preferences.draw_login_section` so both call sites stay
@@ -137,20 +138,82 @@ def _draw_active_lock_header(layout) -> None:
     )
 
 
+def _bus_name(prefs) -> str:
+    for b in state._buses:
+        if b.get("bus_id") == prefs.default_bus_id and not b.get("is_personal"):
+            return b.get("name", "?")
+    return "Personal"
+
+
+def _connection_status(prefs, client):
+    """(icon, text, offer_retry_now) for the header and the status row."""
+    from .. import connection
+
+    if not prefs.auto_connect:
+        return 'UNLINKED', "Off", False
+    if not prefs.jwt_token:
+        return 'INFO', "Log in to connect", False
+    if not connection.client_alive(client):
+        wait = connection.supervisor().seconds_until_next_attempt()
+        return 'TIME', (f"Retry in {int(wait)}s" if wait else "Starting..."), True
+    if client.connected:
+        return 'CHECKMARK', f"Connected · {_bus_name(prefs)}", False
+    attempt = getattr(client, "reconnect_attempt", 0)
+    next_at = getattr(client, "next_retry_at", None)
+    if next_at is not None:
+        return 'TIME', f"Retry in {int(max(0, next_at - _time.time()))}s", True
+    return 'TIME', (f"Reconnecting ({attempt})" if attempt else "Connecting..."), True
+
+
+def _maybe_fetch_buses(prefs) -> None:
+    """Fetch the bus list once per session in the background, so the Bus
+    subpanel is filled without a manual refresh. The request runs off the
+    main thread (it's a blocking HTTP call) with a snapshot of the two prefs
+    it needs; the result lands via a timer."""
+    if state._buses or state._buses_fetch_started:
+        return
+    state._buses_fetch_started = True
+    import threading
+    from types import SimpleNamespace
+
+    snapshot = SimpleNamespace(jwt_token=prefs.jwt_token, server_url=prefs.server_url)
+
+    def work():
+        from .operators import _api_call
+
+        try:
+            buses = _api_call("GET", "/api/buses", snapshot).get("buses", [])
+        except Exception as e:  # noqa: BLE001 - the Refresh button is the fallback
+            print(f"[BlenderMCP] bus list fetch failed: {e}")
+            return
+
+        def apply():
+            state._buses = buses
+            _bus_client._request_ui_redraw()
+
+        bpy.app.timers.register(apply, first_interval=0.0)
+
+    threading.Thread(target=work, name="blendermcp-buses", daemon=True).start()
+
+
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
-    # Version in the header is set at class-definition time (which runs at
-    # addon register), so it tracks every install of a fresh build.
-    # Reads from ``__version__`` rather than re-derivation, so it stays
-    # in sync with bl_info via the bump script.
-    bl_label = f"Blender MCP {__version__}"
+    bl_label = "Blender MCP"
     bl_idname = "BLENDERMCP_PT_Panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'BlenderMCP'
 
+    def draw_header(self, context):
+        # Connection state stays visible with the panel collapsed.
+        prefs = get_prefs(context)
+        icon, _, _ = _connection_status(prefs, state._client)
+        self.layout.label(icon=icon)
+
+    def draw_header_preset(self, context):
+        self.layout.label(text=__version__)
+
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
         prefs = get_prefs(context)
 
         # --- fastmcp missing: extension installs need a restart, legacy
@@ -164,227 +227,131 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                 box.label(text=line)
             return  # Everything below depends on fastmcp.
 
-        # --- Fatal-error banner — surface auth-fatal failures prominently.
-        # The bus_client sets `fatal_error` when it gives up (e.g. 401 from
-        # the bus server, meaning the JWT is unrecoverable). It also clears
-        # prefs.jwt_token in that case, so the Login section below will show
-        # the un-authed state. The banner here gives the user the WHY and
-        # an obvious next action.
+        # --- Fatal-error banner: the bus_client gave up (e.g. 401, JWT
+        # unrecoverable) and cleared the token; say why and offer re-login.
         client = state._client
         if client is not None and client.fatal_error:
             box = layout.box()
-            box.alert = True  # Blender's native red-tinted alert state
+            box.alert = True
             box.label(text=client.fatal_error, icon='ERROR')
             row = box.row(align=True)
             row.operator("blendermcp.re_login", text="Re-login", icon='URL')
-            # Dismiss clears the banner without taking action — useful when
-            # the user has already moved on (e.g. tested a different server).
-            row.operator(
-                "blendermcp.dismiss_fatal_error", text="Dismiss", icon='X',
-            )
+            row.operator("blendermcp.dismiss_fatal_error", text="Dismiss", icon='X')
 
-        # Cooperative control-lock banners. Pending request is drawn
-        # first (time-sensitive, blocks an LLM until answered); active
-        # lock header goes below it (informational + Take-back). Both
-        # no-op when their state is empty.
+        # Consent prompts first: they block an LLM until answered.
         _draw_pending_control_request(layout)
         _draw_active_lock_header(layout)
-        # Extension-install request lives at the same visual tier as
-        # the control-lock request — both are consent prompts.
         _draw_pending_extension_install(layout)
         _draw_pending_reload(layout)
         _draw_pending_merge(layout)
+        draw_update_banner(layout, compact=True)
 
-        # Version-mismatch banner — no-op unless the server told us we're
-        # behind on the last register_client. Drawn before login so users
-        # see the hint whether or not they're signed in for the moment.
-        draw_update_banner(layout)
-
-        # --- Login / Logout (shared widget with prefs panel) ---
-        draw_login_section(layout, prefs)
-
-        # If not logged in, stop here — Connect needs a JWT, asset toggles
-        # are pointless without a session.
         if not prefs.jwt_token:
+            draw_login_section(layout, prefs)
             return
 
-        # --- Bus selection (Phase I7) ---
-        layout.separator()
-        bus_col = layout.column(align=True)
-        bus_col.label(text="Bus", icon='OUTLINER_COLLECTION')
+        # --- Connection: one switch for intent (pressed = stay connected,
+        # with backoff, and connect on next start). Status comes from the
+        # live client, never the Scene flag, which serializes into .blend.
+        icon, text, retry_now = _connection_status(prefs, client)
+        if not prefs.auto_connect:
+            row = layout.row()
+            row.scale_y = 1.3
+            row.prop(prefs, "auto_connect", text="Connect", toggle=True, icon='UNLINKED')
+        else:
+            row = layout.row(align=True)
+            row.prop(prefs, "auto_connect", text="", toggle=True, icon='LINKED')
+            row.label(text=text, icon=icon)
+            if retry_now:
+                row.operator("blendermcp.reconnect_now", text="", icon='FILE_REFRESH')
+        if client is not None and client.connected:
+            _maybe_fetch_buses(prefs)
+            with client.queue_lock:
+                queued = len(client.job_queue)
+            active = len(client.active_jobs)
+            if queued or active:
+                layout.label(text=f"Running {active} · {queued} queued", icon='SORTTIME')
+        elif client is not None and client.last_error and prefs.auto_connect:
+            row = layout.row()
+            row.alert = True
+            row.label(text=client.last_error[:60], icon='ERROR')
 
-        # Identity row — "You are: <label>" + Copy UUID button.
-        # The label is always derivable (auto-fills from hostname + version
-        # if blank), so we can preview pre-Connect. The UUID is sticky on
-        # disk so once it's been minted (first Connect ever), it stays
-        # the same across restarts — safe to copy at any time.
+        draw_login_section(layout, prefs, compact=True)
+
+
+class _SubPanel:
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'BlenderMCP'
+    bl_parent_id = "BLENDERMCP_PT_Panel"
+
+
+class BLENDERMCP_PT_Bus(_SubPanel, bpy.types.Panel):
+    bl_label = "Bus"
+    bl_idname = "BLENDERMCP_PT_Bus"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(get_prefs(context).jwt_token) and _bus_client.ensure_fastmcp()
+
+    def draw_header_preset(self, context):
+        self.layout.label(text=_bus_name(get_prefs(context)))
+
+    def draw(self, context):
+        layout = self.layout
+        prefs = get_prefs(context)
         client = state._client
-        live_uuid = client.client_uuid if client else (scene.blendermcp_client_id or "")
-        ident_row = bus_col.row(align=True)
-        ident_row.label(
-            text=f"You: {get_client_label(prefs)}",
-            icon='POSE_HLT',
-        )
-        # Disable Copy if no uuid has ever been minted (first run, never
-        # Connected). Otherwise enabled — sticky uuid is always copy-safe.
-        copy_row = ident_row.row(align=True)
-        copy_row.enabled = bool(live_uuid)
-        copy_row.operator(
-            "blendermcp.copy_client_uuid",
-            text="",
-            icon='COPYDOWN',
-        )
-        if live_uuid:
-            bus_col.label(text=f"  uuid: {live_uuid[:24]}…")
+        live_uuid = client.client_uuid if client else (context.scene.blendermcp_client_id or "")
 
-        # Surface the chosen bus + the refresh affordance.
-        chosen_name = "Personal (default)"
-        for b in state._buses:
-            if b.get("bus_id") == prefs.default_bus_id:
-                tag = " (owner)" if b.get("is_owned_by_me") else f" ({b.get('role')})"
-                chosen_name = f"{b.get('name', '?')}{tag}"
-                break
-        row = bus_col.row(align=True)
-        row.label(text=f"Current: {chosen_name}")
+        # Who this Blender is on the bus. The uuid is sticky on disk once
+        # minted, so the copy button is safe any time it exists.
+        row = layout.row(align=True)
+        row.label(text=get_client_label(prefs), icon='POSE_HLT')
+        sub = row.row(align=True)
+        sub.enabled = bool(live_uuid)
+        sub.operator("blendermcp.copy_client_uuid", text="", icon='COPYDOWN')
         row.operator("blendermcp.refresh_buses", text="", icon='FILE_REFRESH')
 
-        # Picker — populated from state._buses. Each button writes
-        # prefs.default_bus_id via wm.context_set_string (Personal = "").
-        if state._buses:
-            from ..preferences import ADDON_PACKAGE_NAME
-            data_path = (
-                f"preferences.addons[\"{ADDON_PACKAGE_NAME}\"]"
-                ".preferences.default_bus_id"
-            )
-            picker = bus_col.column(align=True)
-            picker.scale_y = 0.9
-            for b in state._buses:
-                if b.get("is_personal"):
-                    text = "Personal"
-                    icon = 'USER'
-                    value = ""
-                else:
-                    text = b.get("name", "?")
-                    icon = 'CHECKMARK' if b.get("is_owned_by_me") else 'COMMUNITY'
-                    value = b["bus_id"]
-                op = picker.operator(
-                    "wm.context_set_string",
-                    text=text,
-                    icon=icon,
-                    depress=(prefs.default_bus_id == value),
-                )
-                op.data_path = data_path
-                op.value = value
-        else:
-            bus_col.label(text="(click refresh to populate)", icon='INFO')
+        if not state._buses:
+            layout.label(text="Fetching buses..." if state._buses_fetch_started else "Not loaded yet")
+            return
 
-        # Bus management buttons — only shown when the user has fetched buses
-        if state._buses:
-            mgmt = bus_col.row(align=True)
-            mgmt.operator("blendermcp.create_bus", text="Create", icon='ADD')
-            mgmt.operator("blendermcp.join_bus", text="Join", icon='LINKED')
-            if prefs.default_bus_id:
-                # leave/invite only meaningful on a non-personal bus
-                mgmt2 = bus_col.row(align=True)
-                mgmt2.operator("blendermcp.invite_to_bus", text="Invite", icon='COPYDOWN')
-                mgmt2.operator("blendermcp.leave_bus", text="Leave", icon='X')
+        from ..preferences import ADDON_PACKAGE_NAME
 
-        # --- Connection ---
-        layout.separator()
+        data_path = f"preferences.addons[\"{ADDON_PACKAGE_NAME}\"].preferences.default_bus_id"
         col = layout.column(align=True)
-        col.label(text="Connection", icon='NETWORK_DRIVE')
-
-        # One switch for intent: pressed = stay connected (connect now,
-        # reconnect with backoff, connect on next start); released = off.
-        # Status below is derived from the live client, never from the
-        # Scene flag, which serializes into .blend files.
-        from .. import connection
-
-        armed = prefs.auto_connect
-        col.prop(
-            prefs, "auto_connect",
-            text="Stay connected" if armed else "Connect",
-            toggle=True,
-            icon='LINKED' if armed else 'UNLINKED',
-        )
-        alive = connection.client_alive(client)
-
-        if not armed:
-            col.label(text="Status: Disconnected", icon='CANCEL')
-        elif not prefs.jwt_token:
-            col.label(text="Status: Log in to connect", icon='INFO')
-        elif not alive:
-            wait = connection.supervisor().seconds_until_next_attempt()
-            row = col.row(align=True)
-            if wait:
-                row.label(text=f"Status: Retrying in {int(wait)}s", icon='TIME')
+        for b in state._buses:
+            if b.get("is_personal"):
+                text, icon, value = "Personal", 'USER', ""
             else:
-                row.label(text="Status: Starting...", icon='TIME')
-            row.operator("blendermcp.reconnect_now", text="Now", icon='FILE_REFRESH')
-            if client is not None and client.last_error:
-                col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
+                text = b.get("name", "?")
+                icon = 'CHECKMARK' if b.get("is_owned_by_me") else 'COMMUNITY'
+                value = b["bus_id"]
+            op = col.operator("wm.context_set_string", text=text, icon=icon,
+                              depress=(prefs.default_bus_id == value))
+            op.data_path = data_path
+            op.value = value
 
-        # --- Status (live) — identity row above already shows label + uuid.
-        if client and alive:
-            if client.connected:
-                col.label(text="Status: Connected", icon='CHECKMARK')
-                with client.queue_lock:
-                    qlen = len(client.job_queue)
-                col.label(
-                    text=f"Queue: {qlen} pending  Active: {len(client.active_jobs)}",
-                )
-            elif client.running:
-                # Enriched reconnect status: attempt counter + countdown to
-                # the next retry so extended outages don't look like a
-                # frozen "Connecting..." spinner. next_retry_at is None
-                # during the actual connect attempt itself (versus the
-                # sleep between attempts), so guard the countdown.
-                attempt = getattr(client, "reconnect_attempt", 0)
-                if attempt > 0:
-                    header = f"Status: Reconnecting (attempt {attempt})"
-                else:
-                    header = "Status: Connecting..."
-                col.label(text=header, icon='TIME')
-                next_at = getattr(client, "next_retry_at", None)
-                if next_at is None:
-                    # Mid-attempt: connect is bounded (~20 s) but offer the
-                    # escape hatch anyway rather than a bare spinner.
-                    col.operator(
-                        "blendermcp.reconnect_now",
-                        text="Retry now",
-                        icon='FILE_REFRESH',
-                    )
-                else:
-                    remaining = int(max(0, next_at - _time.time()))
-                    # Countdown + escape hatch on the same row: skips
-                    # the current backoff sleep AND the heartbeat
-                    # detect window by tearing down the client and
-                    # standing up a fresh one with backoff reset.
-                    retry_row = col.row(align=True)
-                    retry_row.label(text=f"Next try in {remaining}s")
-                    retry_row.operator(
-                        "blendermcp.reconnect_now",
-                        text="Now",
-                        icon='FILE_REFRESH',
-                    )
-            if client.last_error:
-                col.label(text=f"Last error: {client.last_error[:60]}", icon='ERROR')
+        row = layout.row(align=True)
+        row.operator("blendermcp.create_bus", text="Create", icon='ADD')
+        row.operator("blendermcp.join_bus", text="Join", icon='LINKED')
+        if prefs.default_bus_id:
+            # Invite/leave only mean something on a shared bus.
+            row = layout.row(align=True)
+            row.operator("blendermcp.invite_to_bus", text="Invite", icon='COPYDOWN')
+            row.operator("blendermcp.leave_bus", text="Leave", icon='X')
 
-        # --- Point things out: marks the assistant can read back with
-        # list_annotations (layer "Marked"). Works connected or not.
-        layout.separator()
-        col = layout.column(align=True)
-        col.label(text="Point it out", icon='GREASEPENCIL')
-        row = col.row(align=True)
+
+class BLENDERMCP_PT_PointItOut(_SubPanel, bpy.types.Panel):
+    """Marks the assistant reads back with list_annotations (layer "Marked")."""
+
+    bl_label = "Point it out"
+    bl_idname = "BLENDERMCP_PT_PointItOut"
+
+    def draw(self, context):
+        row = self.layout.row(align=True)
         row.operator("blendermcp.mark_selection", text="Mark selection", icon='SELECT_SET').style = 'box'
         row.operator("blendermcp.mark_selection", text="", icon='MESH_CIRCLE').style = 'circle'
         row.operator("blendermcp.mark_selection", text="", icon='SORT_ASC').style = 'arrow'
         row.operator("blendermcp.clear_marks", text="", icon='TRASH')
-
-        # --- Asset integrations (toggles only — API keys live in prefs) ---
-        layout.separator()
-        col = layout.column(align=True)
-        col.label(text="Asset Integrations", icon='ASSET_MANAGER')
-        col.prop(prefs, "use_polyhaven", text="Poly Haven")
-        col.prop(prefs, "use_hyper3d", text="Hyper3D Rodin")
-        col.prop(prefs, "use_sketchfab", text="Sketchfab")
