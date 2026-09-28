@@ -108,7 +108,7 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
         elif not notice:
             layout.label(text="Ask for something in this scene.", icon='MONKEY')
 
-        if snap["busy"]:
+        if snap["busy"] and not messages:
             elapsed = ""
             if snap["turn_started_at"]:
                 elapsed = f"  {int(_time.monotonic() - snap['turn_started_at'])}s"

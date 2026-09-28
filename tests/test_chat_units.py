@@ -237,11 +237,11 @@ def test_public_view_never_has_the_key():
 def test_config_defaults_and_parsing():
     c = load_config({})
     assert not c.enabled and c.model == "qwen3" and c.vision_model == "qwen2.5vl"
-    assert (c.max_steps, c.llm_timeout_s, c.turn_timeout_s) == (6, 120, 300)
+    assert (c.max_steps, c.llm_timeout_s, c.turn_timeout_s) == (10, 120, 300)
     assert c.gpu_base_url == "https://blender-chat.gpu.supported.systems/v1"
     c = load_config({"CHAT_ENABLED": "true", "CHAT_MAX_STEPS": "", "CHAT_TOOLS": "a, b",
                      "CHAT_GATEWAY_USERS": "", "GPU_API_KEY": "zz-secret-zz", "CHAT_TURN_TIMEOUT_S": "junk"})
-    assert c.enabled and c.max_steps == 6 and c.tools == {"a", "b"} and c.turn_timeout_s == 300
+    assert c.enabled and c.max_steps == 10 and c.tools == {"a", "b"} and c.turn_timeout_s == 300
     assert c.gateway_allowed("anyone") and not c.gateway_allowed(None)
     assert "zz-secret" not in repr(c)  # key fields are repr=False
 

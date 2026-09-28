@@ -33,7 +33,8 @@ class BLENDERMCP_UL_ChatTranscript(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         role, ico = item.role, (item.icon or "NONE")
         if role == "spacer":
-            layout.label(text="")
+            # Always the active (highlighted) row, so make it the status line.
+            layout.label(text=_status_text(), icon='SORTTIME' if chat_state.busy else 'NONE')
             return
         if role == "user":
             # Your messages sit to the right, like any chat app.
@@ -51,6 +52,17 @@ class BLENDERMCP_UL_ChatTranscript(bpy.types.UIList):
     def filter_items(self, context, data, propname):
         # Keep the list's own filter/sort UI out of the way.
         return [], []
+
+
+def _status_text() -> str:
+    snap = chat_state.snapshot()
+    if snap["busy"]:
+        elapsed = ""
+        if snap["turn_started_at"]:
+            import time
+            elapsed = f"  {int(time.monotonic() - snap['turn_started_at'])}s"
+        return f"{snap['status'] or 'Working…'}{elapsed}"
+    return "Ask a follow-up below"
 
 
 def _ui_scale(context) -> float:

@@ -40,7 +40,7 @@ class ChatConfig:
     gpu_api_key: str = field(default="", repr=False)
     model: str = DEFAULT_MODEL
     vision_model: str = DEFAULT_VISION_MODEL
-    max_steps: int = 6
+    max_steps: int = 10
     max_tokens: int = 2048
     llm_timeout_s: int = 120
     turn_timeout_s: int = 300
@@ -67,7 +67,7 @@ def load_config(env=None) -> ChatConfig:
         gpu_api_key=_get(env, "GPU_API_KEY"),
         model=_get(env, "CHAT_MODEL", DEFAULT_MODEL),
         vision_model=_get(env, "CHAT_VISION_MODEL", DEFAULT_VISION_MODEL),
-        max_steps=_int(env, "CHAT_MAX_STEPS", 6, hi=50),
+        max_steps=_int(env, "CHAT_MAX_STEPS", 10, hi=50),
         max_tokens=_int(env, "CHAT_MAX_TOKENS", 2048, lo=64),
         llm_timeout_s=_int(env, "CHAT_LLM_TIMEOUT_S", 120),
         turn_timeout_s=_int(env, "CHAT_TURN_TIMEOUT_S", 300),

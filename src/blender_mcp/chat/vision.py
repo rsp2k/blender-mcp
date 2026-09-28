@@ -97,7 +97,9 @@ async def look(executor, handler, backend: Backend, question: str) -> tuple[bool
         return False, reply
     key = find_object_key(reply)
     if not key:
-        return False, "The screenshot was taken but not stored, so it can't be looked at."
+        # Say what came back: "not stored" alone hid a dropped session once.
+        return False, ("The screenshot came back without a stored copy, so it can't be "
+                       f"looked at. Reply: {str(reply)[:300]}")
     try:
         if executor.bus_id:
             check_key(executor.bus_id, key)
