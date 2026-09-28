@@ -1,0 +1,81 @@
+# Cases for add_primitive, set_color, place_object offsets and
+# list_scene_objects. Each one used to push models into hand-written
+# vertices, Python, or guessing; all should now be one or two curated calls.
+- id: primitive-box-floor
+  title: Box sitting on the floor, centred at the origin (add_primitive)
+  tags: [primitives, modelling-tools, smoke]
+  setup: empty
+  prompt: >-
+    Add a box named Counter that is 2 m along X, 1 m along Y and 0.9 m tall,
+    sitting on the floor and centred at the origin.
+  approval: never
+  timeout: 150
+  checks:
+    - object_exists: Counter
+    - dims_approx: {name: Counter, dims: [2, 1, 0.9], tol: 0.02}
+    - location_approx: {name: Counter, point: bottom, location: [0, 0, 0], tol: 0.02}
+    - tool_used: add_primitive
+    - tool_not_used: execute_code
+    - max_tool_calls: 4
+
+- id: set-color-quartz
+  title: Warm white quartz without Python (set_color)
+  tags: [materials, modelling-tools, smoke]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0.5))
+      bpy.context.active_object.name = "Counter"
+  prompt: Make the Counter warm white quartz.
+  approval: never
+  timeout: 150
+  checks:
+    - has_material: {name: Counter, color: white, roughness_max: 0.4}
+    - tool_used: set_color
+    - tool_not_used: execute_code
+    - count_type: {type: MESH, eq: 1}
+
+- id: raise-by-offset
+  title: Relative move keeps x/y and parent (place_object offset)
+  tags: [placement, relative, modelling-tools]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0))
+      box = bpy.context.active_object
+      box.name = "Chest"
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0.3, -0.2, 1.1))
+      lid = bpy.context.active_object
+      lid.name = "Lid"
+      lid.scale = (1, 1, 0.2)
+      lid.parent = box
+      lid.matrix_parent_inverse = box.matrix_world.inverted()
+  prompt: Raise the Lid by 0.5 m. Don't move it sideways.
+  approval: never
+  timeout: 150
+  checks:
+    - location_approx: {name: Lid, location: [0.3, -0.2, 1.6], tol: 0.02}
+    - location_approx: {name: Chest, location: [0, 0, 0], tol: 0.001}
+    - python: "bpy.data.objects['Lid'].parent is not None and bpy.data.objects['Lid'].parent.name == 'Chest'"
+    - tool_not_used: execute_code
+    - max_tool_calls: 4
+
+- id: count-big-scene
+  title: Count meshes in a scene with more than ten objects (list_scene_objects)
+  tags: [scene, question, modelling-tools]
+  setup:
+    python: |
+      for i in range(14):
+          bpy.ops.mesh.primitive_cube_add(size=0.4, location=((i % 7) * 1.0, (i // 7) * 1.0, 0.2))
+          bpy.context.active_object.name = f"Tile_{i + 1:02d}"
+      for i in range(3):
+          bpy.ops.object.empty_add(location=(i * 2.0, 4, 1))
+          bpy.context.active_object.name = f"Marker_{i + 1}"
+      bpy.ops.object.light_add(type="POINT", location=(0, 0, 5))
+      for o in bpy.context.view_layer.objects:
+          o.select_set(False)
+  prompt: How many mesh objects are in the scene? Don't change anything.
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: {text: ["14", "fourteen"]}
+    - scene_unchanged: true
+    - max_tool_calls: 3

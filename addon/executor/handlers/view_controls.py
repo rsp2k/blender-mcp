@@ -8,6 +8,8 @@ and flipping shading/overlay switches that pollute screenshots.
 
 from __future__ import annotations
 
+import math
+
 import bpy
 import mathutils
 
@@ -151,15 +153,24 @@ class ViewControlHandlersMixin:
     def place_object(
         self,
         object: str,
-        location,
+        location=None,
         target=None,
         parent: str = None,
         frame: str = "parent",
         track_axis: str = "-Z",
         up_axis: str = "Y",
         lens: float = None,
+        offset=None,
+        rotate_by=None,
     ):
         """Place ``object`` at ``location`` given in a reference frame.
+
+        ``offset`` [dx, dy, dz] moves the object relative to where it is (or
+        to ``location`` when both are given), in world space and metres.
+        ``rotate_by`` [rx, ry, rz] degrees turns it about its own origin
+        around the world axes, on top of its current rotation. Without
+        ``location`` the object keeps its world position. Neither ever
+        changes the parent: only ``parent`` re-parents.
 
         ``lens`` sets a camera's focal length in mm; the camera's existing
         lens is kept when omitted.
@@ -175,8 +186,12 @@ class ViewControlHandlersMixin:
         Without a target the current world rotation and scale are kept.
         """
         obj = _get_object(object)
-        loc = _vec3(location, "location")
+        loc = _vec3(location, "location") if location is not None else None
+        off = _vec3(offset, "offset") if offset is not None else None
+        turn = _vec3(rotate_by, "rotate_by") if rotate_by is not None else None
         tgt = _vec3(target, "target") if target is not None else None
+        if loc is None and off is None and turn is None and tgt is None and parent is None and lens is None:
+            raise ValueError("pass location, offset, rotate_by, target, parent or lens")
         if frame not in ("parent", "world"):
             raise ValueError("frame must be 'parent' or 'world'")
         if lens is not None:
@@ -195,13 +210,17 @@ class ViewControlHandlersMixin:
             else mathutils.Matrix.Identity(4)
         )
 
-        world_loc = ref_matrix @ loc
-        _old_loc, rot, scale = obj.matrix_world.decompose()
+        old_loc, rot, scale = obj.matrix_world.decompose()
+        world_loc = ref_matrix @ loc if loc is not None else old_loc.copy()
+        if off is not None:
+            world_loc = world_loc + off
         if tgt is not None:
             direction = (ref_matrix @ tgt) - world_loc
             if direction.length < 1e-9:
                 raise ValueError("target coincides with location")
             rot = direction.to_track_quat(track_axis, up_axis)
+        if turn is not None:
+            rot = mathutils.Euler([math.radians(a) for a in turn], "XYZ").to_quaternion() @ rot
 
         if new_parent is not None:
             obj.parent = new_parent
@@ -219,6 +238,12 @@ class ViewControlHandlersMixin:
             "local_location": list(obj.location),
             "rotation_euler": list(obj.rotation_euler),
         }
+        if off is not None or turn is not None:
+            result["previous_world_location"] = list(old_loc)
+        if off is not None:
+            result["moved_by"] = list(off)
+        if turn is not None:
+            result["rotated_by_degrees"] = list(turn)
         if obj.type == 'CAMERA':
             result["lens"] = obj.data.lens
         return result
