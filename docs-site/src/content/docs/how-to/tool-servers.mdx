@@ -1,0 +1,62 @@
+---
+title: "Add your own tool servers"
+description: "Give the Chat tab's assistant extra tools by adding MCP servers in the add-on's preferences, such as a PDF reader or a DWG/DXF toolkit. Servers run on your own machine, next to Blender, and work with any chat backend. Includes the wire contract between the add-on and the server."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Chat tab's assistant can use tools from other MCP servers you add, alongside its Blender tools. Add a PDF server and it can read a spec sheet; add a CAD server and it can read a DXF floor plan and hand the walls to `extrude_polygons`. This works with every chat backend: the shared GPU gateway, your Claude key, or an OpenAI-compatible endpoint.
+
+Servers you add run **on your computer**, started by the add-on, even when you give an HTTPS address. They can reach your files, and their credentials never leave your machine. The BlenderMCP server never starts or connects to them itself.
+
+## Add a server
+
+**Edit › Preferences › Add-ons › Blender MCP › Tool servers › Add**, then fill in:
+
+| Field | Example | Notes |
+|---|---|---|
+| Name | `pdf` | Short, lowercase letters, digits and `-`. Shown on tool steps and used in tool names (`pdf__read_text`). |
+| Start with | `uvx mcp-pdf` | A command for a local server, or an `https://` address for a remote one. |
+| Environment | `PDF_ROOT=/home/me/docs` | One `KEY=value` per line, passed to a local server. |
+| Token | `${MY_SERVER_TOKEN}` | For remote servers. Write `${VAR}` to read it from an environment variable, which keeps it out of Blender's preferences file. |
+| Trusted | off | Off: each call asks Allow/Deny in the Chat tab. On: calls run without asking. |
+| Timeout | `60` | Seconds per call. |
+
+Press **Test** to start it and list its tools. Enabled servers start in the background when the add-on connects, so a slow first install (a FreeCAD-based server, say) doesn't hold up chat.
+
+<Aside type="caution">
+A local server runs as you, with your permissions. Add servers you'd be comfortable running from a terminal.
+</Aside>
+
+## Wire contract
+
+### The add-on reports its tools: `blender_report_user_tools` (add-on role only)
+
+```text
+blender_report_user_tools(tools: list[{server, name, description, input_schema, trusted}])
+```
+
+- Replaces the full set for the calling Blender; an empty list clears it. Sent after registration and whenever a server's tools change.
+- Limits: at most 80 tools, `description` cut to 1,000 characters, `input_schema` at most 8 KB of JSON each; oversize entries are dropped and listed.
+- Returns `{"status": "ok", "accepted": 12, "dropped": [{"server", "name", "reason"}]}`.
+- The set lives in server memory for that Blender's session; the add-on re-reports after reconnecting.
+
+### Chat names
+
+The model sees each reported tool as `{server}__{name}`, reduced to `A-Z a-z 0-9 _ -` and 64 characters. A name that collides with a Blender tool or another reported tool gets `_2`, `_3`, … appended; it never replaces a Blender tool. Blender tools come first in the catalog, and the total offered to the model is capped (40 by default, `CHAT_MAX_TOOLS`).
+
+### The server calls a tool: `user_tool_call` command (to the calling Blender only)
+
+Dispatched like any Blender command, and only to the Blender whose add-on started the chat turn:
+
+```json
+{"command": "user_tool_call", "params": {"server": "pdf", "tool": "read_text", "arguments": {"path": "spec.pdf"}, "timeout_s": 60}}
+```
+
+- The add-on looks `server` up in its own preferences. A name it doesn't have is refused: commands and addresses only ever come from the user's preferences, never from the server.
+- The call runs off Blender's main thread. The result is `{"ok": true, "text": "...", "truncated": false}`; text content is joined, images are replaced by a short note, and text is cut to 20,000 characters.
+- A timeout or a crashed server returns `{"ok": false, "text": "<reason>"}`; the add-on restarts a crashed server on its next call.
+
+### Transcript
+
+Tool progress events for these tools carry the chat name plus `"server": "pdf"`, and the Chat tab shows them as `pdf · read_text 1.20 s`. Untrusted servers ask for approval with the usual `BlenderMCP approval:` elicitation, previewing the arguments.
