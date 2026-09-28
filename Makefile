@@ -10,7 +10,7 @@ STORAGE_ON := $(shell grep -qE '^STORAGE_DOMAIN=.+' .env 2>/dev/null && echo 1)
 STORAGE_PROFILE := $(if $(STORAGE_ON),--profile storage,)
 STORAGE_SVC := $(if $(STORAGE_ON),blender-mcp-garage,)
 
-.PHONY: help prod prod-storage dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions canary canary-full
+.PHONY: help prod prod-storage dev down logs restart build rebuild ps shell caddy-reload secret-gen health clean extensions canary canary-full battery
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage: make <target>\n\nTargets:\n"} \
@@ -26,6 +26,9 @@ canary: ## GUI canary against the blender-docker container (ZIP=path to install 
 
 canary-full: ## Canary plus the iptables network-drop step (needs passwordless sudo)
 	uv run scripts/canary/run_canary.py --network $(if $(ZIP),--zip $(ZIP),)
+
+battery: ## Chat test battery against the blender-docker Blender (ARGS="--cases tag:smoke --models gateway:qwen3")
+	uv run scripts/battery/run_battery.py $(ARGS)
 
 # `prod` depends on `extensions` so the compose mount (./dist/extensions -> /srv)
 # is populated before the file-server container starts. Rebuilding on every prod

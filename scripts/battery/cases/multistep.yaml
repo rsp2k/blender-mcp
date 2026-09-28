@@ -1,0 +1,40 @@
+- id: build-chair
+  title: Simple chair from separate parts
+  tags: [multistep, primitives]
+  setup: empty
+  prompt: >-
+    Build a simple chair out of separate box parts: a seat whose top is 0.45 m
+    above the ground, four legs that reach the ground, and a backrest. Name
+    every part starting with Chair_ (for example Chair_Seat, Chair_Leg1).
+  approval: never
+  timeout: 320
+  checks:
+    - count_type: {type: MESH, min: 6}
+    - object_exists: {name_contains: Chair_}
+    - python: >-
+        (lambda ps: len(ps) >= 6
+          and abs(min((o.matrix_world @ Vector(c)).z for o in ps for c in o.bound_box)) < 0.05
+          and max((o.matrix_world @ Vector(c)).z for o in ps for c in o.bound_box) > 0.7)
+        ([o for o in scene.objects if o.name.startswith("Chair_") and o.type == "MESH"])
+    - python: >-
+        (lambda seat: seat is not None
+          and abs(max((seat.matrix_world @ Vector(c)).z for c in seat.bound_box) - 0.45) < 0.06)
+        (next((o for o in scene.objects if "seat" in o.name.lower()), None))
+    - tool_not_used: execute_code
+
+- id: build-table-with-mug
+  title: Table from parts, then a mug on it
+  tags: [multistep, relative]
+  setup: empty
+  prompt:
+    - >-
+      Make a table from boxes: a 1.2 m by 0.8 m top, 0.04 m thick, whose top
+      surface is 0.75 m above the ground, on four legs. Name the top Table_Top.
+    - Put a cylinder named Mug, 0.08 m in diameter and 0.1 m tall, standing on the table top.
+  approval: never
+  timeout: 300
+  checks:
+    - dims_approx: {name: Table_Top, dims: [1.2, 0.8, 0.04], tol: 0.03, any_order: true}
+    - location_approx: {name: Table_Top, point: top, location: [null, null, 0.75], tol: 0.03}
+    - rests_on: {name: Mug, base: Table_Top, tol: 0.02}
+    - dims_approx: {name: Mug, dims: [0.08, 0.08, 0.1], tol: 0.02}
