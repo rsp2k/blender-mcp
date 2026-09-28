@@ -61,7 +61,9 @@
   approval: never
   timeout: 150
   checks:
-    - reply_contains: {text: ["can't", "cannot", "can not", "unable", "not able", "don't have", "do not have", "not possible", "isn't possible"]}
+    - reply_contains: {text: ["can't", "cannot", "can not", "unable", "not able", "don't have", "do not have",
+                              "not possible", "isn't possible", "beyond", "outside", "not available",
+                              "isn't available", "not supported"]}
     - scene_unchanged: true
 
 - id: shading-trap

@@ -102,6 +102,7 @@ class Battery:
         self.verbose = verbose
         self.results: list[dict] = []
         self.meta: dict[str, Any] = {}
+        self.degraded = False
 
     async def code(self, snippet: str, timeout: float = 30) -> dict:
         try:
@@ -128,23 +129,25 @@ class Battery:
             raise BlenderGone(f"identity check failed: {str(e)[:200]}") from e
         return (st.get("proc_start") and round(st["proc_start"]), st.get("version"), chat.get("state_id"))
 
-    async def wait_ready(self, limit: float = 300) -> None:
-        """Until the Blender answers and its chat reports available."""
+    async def wait_ready(self, limit: float = 300, settle: int = 3) -> None:
+        """Until the Blender answers and its chat reports available ``settle``
+        times in a row, 5 s apart. A deploy often re-registers the client
+        more than once (server restart, then container recreate), so one
+        good answer is not enough."""
         log("waiting for the Blender to come back ...")
-        got = await rc.wait_for_client(self.ctx, timeout=limit)
-        if not got or "_timeout_last_seen" in got:
-            raise RuntimeError(f"Blender did not come back within {limit:.0f}s: {got}")
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + limit
+        good = 0
         while time.monotonic() < deadline:
             try:
                 s = await self.code(snippets.poll(10**9), timeout=15)
-                if s.get("available"):
-                    log("Blender is back, chat available")
-                    return
+                good = good + 1 if s.get("available") and not s.get("busy") else 0
             except BlenderGone:
-                pass
-            await asyncio.sleep(3)
-        raise RuntimeError("Blender is back but chat never became available")
+                good = 0
+            if good >= settle:
+                log("Blender is back, chat available")
+                return
+            await asyncio.sleep(5 if good else 8)
+        raise BlenderGone(f"Blender did not settle within {limit:.0f}s")
 
     # ---- backend ------------------------------------------------------------
 
@@ -297,7 +300,23 @@ class Battery:
                               "annotations": after.get("annotations")}
         return rec
 
+    async def recover(self, model: dict | None) -> bool:
+        """Wait for the Blender to settle and re-apply the backend. Never raises."""
+        try:
+            await self.wait_ready()
+            if model and model.get("provider"):
+                # Settings live on the server and survive a restart; check anyway.
+                await self.ensure_backend(model)
+            self.degraded = False
+            return True
+        except Exception as e:  # noqa: BLE001
+            log(f"   recovery failed: {type(e).__name__}: {str(e)[:200]}")
+            self.degraded = True
+            return False
+
     async def run_case(self, case: Case, model: dict, repeat: int) -> dict:
+        if self.degraded and not await self.recover(model):
+            return self._broken(case, model, repeat, "Blender unavailable (earlier recovery failed)")
         for attempt in (1, 2):
             t0 = time.monotonic()
             try:
@@ -307,12 +326,8 @@ class Battery:
                 return rec
             except BlenderGone as e:
                 log(f"   {e}")
-                if attempt == 2:
-                    return self._broken(case, model, repeat, f"Blender went away twice: {e}")
-                await self.wait_ready()
-                if model.get("provider"):
-                    # A restart doesn't lose server-side settings, but check anyway.
-                    await self.ensure_backend(model)
+                if not await self.recover(model) or attempt == 2:
+                    return self._broken(case, model, repeat, f"Blender went away: {e}")
             except Exception as e:  # noqa: BLE001 - one broken case must not end the run
                 return self._broken(case, model, repeat, f"{type(e).__name__}: {e}",
                                     seconds=time.monotonic() - t0)
@@ -348,6 +363,24 @@ def _require_ok(r: Any, what: str) -> None:
         return
     if isinstance(r, str) and ("error" in r.lower()[:80]):
         raise RuntimeError(f"{what}: {r[:300]}")
+
+
+async def restore_backend(bat: Battery, original: dict, tries: int = 3) -> str:
+    """Put the account's backend back. Retries through a Blender restart,
+    since the switch has to go through the add-on."""
+    if original.get("provider") != "gateway" and original.get("has_key"):
+        return "not restored: the saved key can't be put back; set it again"
+    last = ""
+    for i in range(tries):
+        try:
+            b = await bat.set_backend(original["provider"], original.get("model") or "",
+                                      original.get("base_url") or "")
+            return f"{b.get('provider')}:{b.get('model')}"
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {str(e)[:200]}"
+            log(f"   restore attempt {i + 1} failed: {last}")
+            await bat.recover(None)
+    return f"restore failed: {last}"
 
 
 # ------------------------------------------------------------------ main
@@ -425,19 +458,11 @@ async def amain(args) -> int:
                     bat.save()
     finally:
         if switching and original and not args.keep_backend:
-            try:
-                if original.get("provider") == "gateway":
-                    b = await bat.set_backend("gateway", original.get("model") or "")
-                    bat.meta["restored"] = f"{b.get('provider')}:{b.get('model')}"
-                elif original.get("has_key"):
-                    bat.meta["restored"] = "not restored: the saved key can't be put back; set it again"
-                else:
-                    b = await bat.set_backend(original["provider"], original.get("model") or "",
-                                              original.get("base_url") or "")
-                    bat.meta["restored"] = f"{b.get('provider')}:{b.get('model')}"
-            except Exception as e:  # noqa: BLE001
-                bat.meta["restored"] = f"restore failed: {e}"
+            bat.meta["restored"] = await restore_backend(bat, original)
             log(f"backend restore: {bat.meta['restored']}")
+            if bat.meta["restored"].startswith("restore failed"):
+                print(f"WARNING: the account's chat backend is NOT back to {original}. "
+                      "Set it again from the add-on preferences.", file=sys.stderr)
         bat.meta["finished"] = rc.now_utc()
         bat.save()
 

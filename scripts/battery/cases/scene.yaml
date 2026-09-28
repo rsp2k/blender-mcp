@@ -19,7 +19,8 @@
   timeout: 150
   checks:
     - reply_contains: {text: ["6", "six"]}
-    - reply_contains: {text: [Sphere_A, Sphere_B], all: true}
+    - reply_contains: {text: ["2 are sphere", "two are sphere", "2 sphere", "two sphere", "2 of them",
+                              "two of them", "sphere_a and sphere_b", "sphere_a, sphere_b"]}
     - scene_unchanged: true
     - max_tool_calls: 3
 

@@ -41,7 +41,8 @@
   approval: never
   timeout: 240
   checks:
-    - location_approx: {name: Block1, point: bottom, location: [0, 0, 0], tol: 0.05}
+    # x/y unchecked: "at the origin" is read as centre or as corner by different models
+    - location_approx: {name: Block1, point: bottom, location: [null, null, 0], tol: 0.05}
     - rests_on: {name: Block2, base: Block1, tol: 0.05}
     - rests_on: {name: Block3, base: Block2, tol: 0.05}
     - dims_approx: {name: Block3, dims: [1, 1, 1], tol: 0.05}
