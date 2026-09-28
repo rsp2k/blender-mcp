@@ -106,6 +106,7 @@ class Entry:
     # the server name and the tool's name there, sent in user_tool_call.
     user_server: str | None = None
     user_tool: str | None = None
+    user_timeout_s: int | None = None
 
 
 def strip_schema(schema: dict | None) -> dict:

@@ -159,8 +159,8 @@ class Turn:
                     ok, text = await vision.look(self.executor, self.handler, vb,
                                                  str(args.get("question") or ""))
             elif entry.user_server:
-                ok, text = await self.executor.call_user_tool(entry.user_server,
-                                                              entry.user_tool, args)
+                ok, text = await self.executor.call_user_tool(
+                    entry.user_server, entry.user_tool, args, entry.user_timeout_s)
             else:
                 ok, text = await self.executor.call(entry.server_name, args)
         except Exception as e:  # noqa: BLE001 - reported to the model as a failed step

@@ -126,6 +126,41 @@ def test_report_limits_and_reasons():
     assert dropped[0] == {"server": "pdf", "name": "read_text", "reason": "duplicate"}
 
 
+def test_report_timeout_field():
+    items = [
+        tool(name="default"),                                   # missing -> 60
+        {**tool(name="none"), "timeout_s": None},               # null -> 60
+        {**tool(name="low"), "timeout_s": 1},
+        {**tool(name="high"), "timeout_s": 600},
+        {**tool(name="zero"), "timeout_s": 0},
+        {**tool(name="over"), "timeout_s": 601},
+        {**tool(name="float"), "timeout_s": 30.5},
+        {**tool(name="text"), "timeout_s": "60"},
+        {**tool(name="bool"), "timeout_s": True},
+    ]
+    accepted, dropped = user_tools.validate_report(items)
+    assert [(t.name, t.timeout_s) for t in accepted] == [
+        ("default", 60), ("none", 60), ("low", 1), ("high", 600)]
+    assert [(d["name"], d["reason"]) for d in dropped] == [
+        ("zero", "invalid_timeout"), ("over", "invalid_timeout"), ("float", "invalid_timeout"),
+        ("text", "invalid_timeout"), ("bool", "invalid_timeout")]
+    merged = user_tools.merge([], accepted, max_tools=10)
+    assert [e.user_timeout_s for e in merged] == [60, 60, 1, 600]
+
+
+async def test_reported_timeout_is_sent_and_waited_on(cfg, sessions, fake_dispatch):
+    models = FakeModels(oa_call("cad__read_dxf", {"path": "plan.dxf"}), oa_text("ok"))
+    h = harness(cfg, models, sessions)
+    async with h.client() as client:
+        out = await report(client, [{**tool(server="cad", name="read_dxf", trusted=True),
+                                     "timeout_s": 240}])
+        await h.chat(client)
+    assert out["accepted"] == 1
+    call = fake_dispatch.calls[0]
+    assert call["params"]["timeout_s"] == 240
+    assert call["timeout"] == 240 + user_tools.DISPATCH_GRACE_S
+
+
 def test_report_caps_at_80_tools():
     accepted, dropped = user_tools.validate_report([tool(name=f"t{i}") for i in range(83)])
     assert len(accepted) == 80
@@ -284,7 +319,7 @@ async def test_untrusted_tool_asks_then_dispatches_to_the_calling_blender(cfg, s
     assert call["params"] == {"server": "pdf", "tool": "read_text",
                               "arguments": {"path": "spec.pdf", "target_uuid": "keep-me"},
                               "timeout_s": user_tools.CALL_TIMEOUT_S}
-    assert call["timeout"] > user_tools.CALL_TIMEOUT_S
+    assert call["timeout"] == user_tools.CALL_TIMEOUT_S + user_tools.DISPATCH_GRACE_S
     # None of the Blender tools ran for it.
     assert [c["tool"] for c in h.rec.calls] == ["get_scene_info"]
 

@@ -34,8 +34,10 @@ MAX_CHAT_NAME = 64
 MAX_TOOL_NAME = 128
 SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
-# What user_tool_call asks the add-on for; its own per-server setting may be lower.
+# Per-tool timeout_s from the report; the add-on clamps it to its own setting.
 CALL_TIMEOUT_S = 60
+MIN_TIMEOUT_S = 1
+MAX_TIMEOUT_S = 600
 # Extra wait on top, so the add-on's own timeout reply arrives before ours fires.
 DISPATCH_GRACE_S = 15
 
@@ -47,6 +49,7 @@ class UserTool:
     description: str
     input_schema: dict[str, Any]
     trusted: bool
+    timeout_s: int = CALL_TIMEOUT_S
 
 
 # ---- validation --------------------------------------------------------------
@@ -113,6 +116,13 @@ def validate_report(tools: Any) -> tuple[list[UserTool], list[dict]]:
         if size > MAX_SCHEMA_BYTES:
             dropped.append(_drop(item, "schema_too_large"))
             continue
+        timeout_s = item.get("timeout_s", CALL_TIMEOUT_S)
+        if timeout_s is None:
+            timeout_s = CALL_TIMEOUT_S
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, int)
+                or not MIN_TIMEOUT_S <= timeout_s <= MAX_TIMEOUT_S):
+            dropped.append(_drop(item, "invalid_timeout"))
+            continue
         desc = item.get("description")
         seen.add((server, name))
         accepted.append(UserTool(
@@ -120,6 +130,7 @@ def validate_report(tools: Any) -> tuple[list[UserTool], list[dict]]:
             description=(desc if isinstance(desc, str) else "")[:MAX_DESCRIPTION],
             input_schema=schema,
             trusted=item.get("trusted") is True,
+            timeout_s=timeout_s,
         ))
     return accepted, dropped
 
@@ -220,7 +231,7 @@ def merge(catalog: list[Entry], tools: list[UserTool], max_tools: int) -> list[E
         out.append(Entry(
             name=name, server_name=None, description=_describe(tool),
             parameters=tool.input_schema, policy=_policy(tool),
-            user_server=tool.server, user_tool=tool.name,
+            user_server=tool.server, user_tool=tool.name, user_timeout_s=tool.timeout_s,
         ))
     return out
 
@@ -257,7 +268,8 @@ def _parse(reply: str, label: str) -> tuple[bool, str]:
 
 
 async def call(user_sub: str, bus_id: str | None, blender_uuid: str, server: str,
-               tool: str, arguments: dict) -> tuple[bool, str]:
+               tool: str, arguments: dict,
+               timeout_s: int = CALL_TIMEOUT_S) -> tuple[bool, str]:
     """Run one user tool in the calling Blender. Never raises for a failed call."""
     from .. import bus_tools, dispatch_component
 
@@ -268,9 +280,9 @@ async def call(user_sub: str, bus_id: str | None, blender_uuid: str, server: str
     if not resolved.get("ok"):
         return False, f"{label}: the bus is not available ({resolved.get('error')})."
     params = {"server": server, "tool": tool, "arguments": arguments,
-              "timeout_s": CALL_TIMEOUT_S}
+              "timeout_s": timeout_s}
     reply = await dispatch_component._dispatch(
         resolved["bus"], str(resolved["bus_id"]), COMMAND, params,
-        blender_uuid, CALL_TIMEOUT_S + DISPATCH_GRACE_S, caller_sub=user_sub,
+        blender_uuid, timeout_s + DISPATCH_GRACE_S, caller_sub=user_sub,
     )
     return _parse(reply, label)

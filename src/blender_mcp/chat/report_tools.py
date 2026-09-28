@@ -32,9 +32,10 @@ class BlenderUserToolsComponent(MCPMixin):
         """Report the tools of this Blender's own tool servers, for its Chat tab.
 
         ``tools`` is the full set, each ``{server, name, description,
-        input_schema, trusted}``; it replaces any earlier report and an empty
-        list clears it. At most 80 tools, descriptions cut to 1000
-        characters, schemas at most 8 KB of JSON. Returns ``{"status": "ok",
+        input_schema, trusted, timeout_s}``; it replaces any earlier report
+        and an empty list clears it. At most 80 tools, descriptions cut to
+        1000 characters, schemas at most 8 KB of JSON, ``timeout_s`` an int
+        from 1 to 600 (60 when missing). Returns ``{"status": "ok",
         "accepted": n, "dropped": [{server, name, reason}]}``.
         """
         if not _resolve_user_id(ctx):

@@ -33,12 +33,13 @@ A local server runs as you, with your permissions. Add servers you'd be comforta
 ### The add-on reports its tools: `blender_report_user_tools` (add-on role only)
 
 ```text
-blender_report_user_tools(tools: list[{server, name, description, input_schema, trusted}])
+blender_report_user_tools(tools: list[{server, name, description, input_schema, trusted, timeout_s}])
 ```
 
 - Replaces the full set for the calling Blender; an empty list clears it. Sent after registration and whenever a server's tools change.
+- `timeout_s` is the server's Timeout setting in seconds: an integer from 1 to 600, 60 when missing.
 - Limits: at most 80 tools, `description` cut to 1,000 characters, `input_schema` at most 8 KB of JSON each; oversize entries are dropped and listed.
-- Returns `{"status": "ok", "accepted": 12, "dropped": [{"server", "name", "reason"}]}`. A `reason` is one of `too_many_tools`, `invalid_server` (not 1 to 64 of `A-Z a-z 0-9 _ -`), `invalid_name` (empty, over 128 characters, or containing whitespace), `duplicate`, `invalid_schema` (not a JSON object schema) or `schema_too_large`.
+- Returns `{"status": "ok", "accepted": 12, "dropped": [{"server", "name", "reason"}]}`. A `reason` is one of `too_many_tools`, `invalid_server` (not 1 to 64 of `A-Z a-z 0-9 _ -`), `invalid_name` (empty, over 128 characters, or containing whitespace), `duplicate`, `invalid_schema` (not a JSON object schema), `schema_too_large` or `invalid_timeout` (not an integer from 1 to 600).
 - The set lives in server memory for that Blender's session; the add-on re-reports after reconnecting.
 
 ### Chat names
@@ -53,6 +54,7 @@ Dispatched like any Blender command, and only to the Blender whose add-on starte
 {"command": "user_tool_call", "params": {"server": "pdf", "tool": "read_text", "arguments": {"path": "spec.pdf"}, "timeout_s": 60}}
 ```
 
+- `timeout_s` is the value the add-on reported for that tool. The add-on clamps it to the server's Timeout in its own preferences, and the server waits `timeout_s` plus 15 seconds for the reply, so the add-on's own timeout answer arrives first.
 - The server refuses to send `user_tool_call` for anyone else: `blender_submit` and `bus_send_message` answer `chat_only_command`, so MCP clients never reach these tools.
 - The add-on looks `server` up in its own preferences. A name it doesn't have is refused: commands and addresses only ever come from the user's preferences, never from the server.
 - The call runs off Blender's main thread. The result is `{"ok": true, "text": "...", "truncated": false}`; text content is joined, images are replaced by a short note, and text is cut to 20,000 characters.
