@@ -357,7 +357,6 @@ class ToolServerRunner:
     async def _call(self, spec: ServerSpec, tool: str, arguments: dict,
                     timeout_s: float) -> dict:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
         srv = self._servers.get(spec.name)
         if not self._usable(srv, spec):
             if srv is not None:
@@ -367,12 +366,15 @@ class ToolServerRunner:
             if not self._usable(srv, spec):
                 srv = self._start_server(spec)
         srv.spec = spec
+        # Starting a cold server (a uvx download, a heavy import) gets the
+        # runner's start budget; the call's own timeout begins once it's ready.
         try:
-            await asyncio.wait_for(asyncio.shield(srv.ready), max(0.1, deadline - loop.time()))
+            await asyncio.wait_for(asyncio.shield(srv.ready), self.start_timeout_s + 5.0)
         except TimeoutError:
-            return failure(f"{spec.name} didn't start within {timeout_s:g} s")
+            return failure(f"{spec.name} didn't start within {self.start_timeout_s:g} s")
         except Exception as e:  # noqa: BLE001
             return failure(f"{spec.name} couldn't start: {e}")
+        deadline = loop.time() + timeout_s
         try:
             result = await asyncio.wait_for(
                 srv.client.call_tool(tool, arguments or {}, raise_on_error=False),
