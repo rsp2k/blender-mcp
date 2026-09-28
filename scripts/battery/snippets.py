@@ -97,7 +97,8 @@ _ns = {"bpy": bpy, "D": bpy.data, "C": bpy.context, "scene": _scene, "Vector": V
        "objects": bpy.data.objects, "obj": bpy.data.objects.get}
 for key, expr in _EXPRS.items():
     try:
-        _py[key] = {"value": eval(expr, dict(_ns))}
+        # Parenthesised so a YAML block scalar's line breaks are harmless.
+        _py[key] = {"value": eval("(\\n" + expr + "\\n)", dict(_ns))}
     except Exception as e:
         _py[key] = {"error": type(e).__name__ + ": " + str(e)[:200]}
 _out({"file": bpy.data.filepath, "scene": _scene.name, "objects": _objs, "materials": _mats,

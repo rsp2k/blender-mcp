@@ -45,5 +45,6 @@
   timeout: 180
   checks:
     - object_exists: {name: Pet, count: 1}
-    - location_approx: {name: Pet, point: bottom, location: [0, 0, 2], tol: 0.05}
+    # x/y unchecked: "at the origin" is read as centre or as corner by different models
+    - location_approx: {name: Pet, point: bottom, location: [null, null, 2], tol: 0.05}
     - count_type: {type: MESH, eq: 1}
