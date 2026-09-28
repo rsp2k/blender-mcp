@@ -1,9 +1,11 @@
 """Blender UI subpackage — panel + operators.
 
-Two modules:
+Modules:
 
   panel.py     — BLENDERMCP_PT_Panel (the View3D sidebar panel — minimal:
                  status, Connect/Disconnect, asset toggles only)
+  chat_panel.py — BLENDERMCP_PT_Chat (its own "Chat" sidebar tab)
+  chat_operators.py — Send/Stop/Allow/Deny/log + Chat backend operators
   operators.py — OAuthLogin, Logout, StartServer, StopServer, TestConnection,
                  SetFreeTrialHyper3DAPIKey
 
@@ -52,6 +54,8 @@ from .panel import (
     BLENDERMCP_PT_Panel,
     BLENDERMCP_PT_PointItOut,
 )
+from .chat_operators import CHAT_OPERATORS
+from .chat_panel import BLENDERMCP_PT_Chat
 
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
@@ -90,6 +94,8 @@ CLASSES = (
     BLENDERMCP_OT_MarkSelection,
     BLENDERMCP_OT_ClearMarks,
     BLENDERMCP_OT_ShowPanel,
+    BLENDERMCP_PT_Chat,
+    *CHAT_OPERATORS,
 )
 
 __all__ = [
@@ -97,6 +103,7 @@ __all__ = [
     "BLENDERMCP_PT_Panel",
     "BLENDERMCP_PT_Bus",
     "BLENDERMCP_PT_PointItOut",
+    "BLENDERMCP_PT_Chat",
     "BLENDERMCP_OT_OAuthLogin",
     "BLENDERMCP_OT_Logout",
     "BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey",

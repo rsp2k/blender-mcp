@@ -199,6 +199,17 @@ def _update_state_from_register_response(reg_result: Any) -> None:
     state._update_available = latest_tuple > _version.tuple_version
 
 
+def _apply_register_features(payload: dict, worker_mode: bool) -> None:
+    """Pass a register_client result's "features" to the chat panel."""
+    if worker_mode:
+        return
+    try:
+        from ..chat.client import on_registered
+        on_registered(payload)
+    except Exception as e:
+        print(f"[BlenderMCP] Chat feature check skipped: {e}")
+
+
 class BlenderMCPClient:
     """FastMCP client subscribed to the server's _message_bus log channel."""
 
@@ -631,9 +642,11 @@ class BlenderMCPClient:
 
         def _log_err(fut):
             try:
-                fut.result(timeout=0)
+                result = fut.result(timeout=0)
             except Exception as e:
                 print(f"[BlenderMCP] Metadata refresh failed: {e}")
+                return
+            _apply_register_features(_tool_payload(result) or {}, self.worker_mode)
 
         future.add_done_callback(_log_err)
         return True
@@ -754,10 +767,17 @@ class BlenderMCPClient:
                 )
 
                 try:
+                    client_kwargs = {}
+                    if not self.worker_mode:
+                        # Chat approvals ("BlenderMCP approval: ...") arrive
+                        # as elicitations; everything else is declined.
+                        from ..chat.elicitation import handle_elicitation
+                        client_kwargs["elicitation_handler"] = handle_elicitation
                     client = FastMCPClient(
                         transport,
                         message_handler=self._on_message,
                         init_timeout=CONNECT_TIMEOUT_S,
+                        **client_kwargs,
                     )
                     # init_timeout bounds the MCP handshake; the outer
                     # wait_for also covers TCP/TLS connect and anything
@@ -776,6 +796,17 @@ class BlenderMCPClient:
                         raise
                     try:
                         self.client = client
+                        if not self.worker_mode:
+                            # An approval waits up to 120 s for a click; keep
+                            # it from holding up the session's receive loop.
+                            try:
+                                from ..chat.elicitation import (
+                                    install_nonblocking_elicitation,
+                                )
+
+                                install_nonblocking_elicitation(client.session)
+                            except Exception as _el_exc:
+                                print(f"[BlenderMCP] Approval handler setup failed: {_el_exc!r}")
 
                         try:
                             await asyncio.wait_for(
@@ -805,6 +836,7 @@ class BlenderMCPClient:
                                 float(_ka) if isinstance(_ka, (int, float)) and _ka > 0 else None
                             )
                             self.last_stream_message_at = _t.monotonic()
+                            _apply_register_features(_reg, self.worker_mode)
                             # Results of jobs that finished while we were
                             # disconnected go out now that the server knows us.
                             try:

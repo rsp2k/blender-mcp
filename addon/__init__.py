@@ -204,6 +204,16 @@ def register():
         name="Client ID", default="",
     )
 
+    # Chat message field. On WindowManager so it never saves into a .blend;
+    # its update hook sends on Enter.
+    from .ui.chat_operators import on_chat_input_update
+    bpy.types.WindowManager.blendermcp_chat_input = bpy.props.StringProperty(
+        name="Message",
+        description="Type a request and press Enter",
+        default="",
+        update=on_chat_input_update,
+    )
+
     # Register the UI classes (panel + operators).
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
@@ -299,11 +309,24 @@ def unregister():
     from .ui import statusbar as _statusbar
     _statusbar.unregister()
 
+    # A chat turn or approval still in flight belonged to the client that
+    # was just stopped; drop it so a re-registered add-on starts clean.
+    try:
+        from .chat.elicitation import resolve_approval
+        from .chat.state import chat_state
+        resolve_approval(False)
+        chat_state.finish_turn(chat_state.turn, "status", "")
+    except Exception as e:
+        print(f"[BlenderMCP] Error resetting chat state: {e}")
+
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
         except Exception:
             pass
+
+    if hasattr(bpy.types.WindowManager, "blendermcp_chat_input"):
+        del bpy.types.WindowManager.blendermcp_chat_input
 
     # Remove transient Scene props.
     for prop in _TRANSIENT_SCENE_PROPS:
