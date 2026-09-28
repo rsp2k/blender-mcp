@@ -79,7 +79,13 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
             return 0.0
         # Lets the server tell "waiting in the queue" from "Blender is on it".
         submit_job_update(client, job_id, "running")
-        execute_command(client, job_id, command, params)
+        if command == USER_TOOL_CALL:
+            # A tool on one of the user's own MCP servers. It never runs
+            # here: the tool-server loop thread makes the call and reports
+            # the job itself, so a slow server can't stall Blender.
+            dispatch_user_tool_call(client, job_id, params)
+        else:
+            execute_command(client, job_id, command, params)
     elif msg_type == "control_request":
         # Cooperative advisory lock. Auto-grants if the requester is
         # on prefs.pre_authorized_llms; otherwise stashes into state
@@ -97,6 +103,29 @@ def drain_queue(client: "BlenderMCPClient") -> Optional[float]:
     # message types in the wire won't make older addons crash).
 
     return 0.0  # check for next immediately
+
+
+USER_TOOL_CALL = "user_tool_call"
+
+
+def dispatch_user_tool_call(client: "BlenderMCPClient", job_id: str, params: dict) -> None:
+    """Hand a user_tool_call to the tool-server runner and return at once.
+
+    Main thread. The bridge reads the server's settings from the
+    preferences here (never from params) and schedules the call on the
+    runner's own asyncio loop; the reply goes out via submit_job_update
+    from that thread when the call finishes.
+    """
+    try:
+        from ..tool_servers.bridge import handle_user_tool_call
+        handle_user_tool_call(client, job_id, params)
+    except Exception as e:
+        import json
+        submit_job_update(
+            client, job_id, "completed", error="",
+            result=json.dumps({"ok": False, "text": f"tool call failed in Blender: {e}",
+                               "truncated": False}),
+        )
 
 
 def _record_activity(command: str, started: float, ok: bool, error: str = "") -> None:

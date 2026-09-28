@@ -48,6 +48,9 @@ _last_merge_result: Optional[dict] = None
 # report_progress callable for the job currently executing on the main
 # thread (set by the drainer around each job), or None.
 _current_progress = None
+# addon.tool_servers.bridge.ToolServerBridge: the user's own MCP tool
+# servers, running on their own loop thread. Created at first registration.
+_tool_servers = None
 
 # Phase I7: cached list of buses the user is a member of (populated by
 # BLENDERMCP_OT_RefreshBuses, read by the sidebar panel to render the bus

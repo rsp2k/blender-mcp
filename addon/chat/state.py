@@ -135,8 +135,16 @@ def format_duration(ms: Any) -> str:
 
 
 def tool_line(entry: dict) -> str:
-    """One transcript line for a tool step, with any approval wait."""
+    """One transcript line for a tool step, with any approval wait.
+
+    Tools from the user's own tool servers carry "server" and show as
+    "pdf · read_text" rather than the chat name "pdf__read_text".
+    """
     text = str(entry.get("name") or "?")
+    server = entry.get("server")
+    if isinstance(server, str) and server:
+        prefix = f"{server}__"
+        text = f"{server} · {text.removeprefix(prefix)}"
     took = format_duration(entry.get("ms"))
     if took:
         text += f"  {took}"
@@ -293,9 +301,11 @@ class ChatState:
                     self.add_message("assistant", text)
             elif kind == "tool":
                 name = event["name"]
+                server = event.get("server") if isinstance(event.get("server"), str) else None
+                extra = {"server": server} if server else {}
                 if event.get("phase") == "start":
-                    self.status = f"Running {name}…"
-                    self.add_message("tool", "", log=False, name=name, ok=None, ms=None)
+                    self.status = f"Running {tool_line({'name': name, **extra})}…"
+                    self.add_message("tool", "", log=False, name=name, ok=None, ms=None, **extra)
                     return
                 ok, ms, wait = bool(event.get("ok")), event.get("ms"), event.get("wait_ms")
                 for entry in reversed(self.messages):
@@ -306,7 +316,7 @@ class ChatState:
                         self._log.append(format_log_line(entry))
                         break
                 else:
-                    self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait)
+                    self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait, **extra)
 
     def finish_turn(self, turn: int, role: str, text: str,
                     payload: dict | None = None) -> bool:

@@ -208,6 +208,14 @@ def _apply_register_features(payload: dict, worker_mode: bool) -> None:
         on_registered(payload)
     except Exception as e:
         print(f"[BlenderMCP] Chat feature check skipped: {e}")
+    # The server keeps reported tool-server tools per session, so every
+    # registration (first, reconnect, periodic refresh) re-reports them.
+    # Also starts enabled tool servers the first time.
+    try:
+        from ..tool_servers.bridge import on_registered as tool_servers_registered
+        tool_servers_registered()
+    except Exception as e:
+        print(f"[BlenderMCP] Tool-server report skipped: {e}")
 
 
 class BlenderMCPClient:

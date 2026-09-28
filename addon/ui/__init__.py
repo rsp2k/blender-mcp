@@ -57,6 +57,7 @@ from .panel import (
 from .chat_operators import CHAT_OPERATORS
 from .chat_panel import BLENDERMCP_PT_Chat
 from .chat_transcript import BLENDERMCP_PG_ChatRow, BLENDERMCP_UL_ChatTranscript
+from .tool_servers_ui import TOOL_SERVER_CLASSES
 
 #: All bpy.types classes the addon registers; iterated by register() / unregister().
 CLASSES = (
@@ -99,6 +100,7 @@ CLASSES = (
     BLENDERMCP_UL_ChatTranscript,
     BLENDERMCP_PT_Chat,
     *CHAT_OPERATORS,
+    *TOOL_SERVER_CLASSES,
 )
 
 __all__ = [
