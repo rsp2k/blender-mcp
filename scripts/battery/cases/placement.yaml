@@ -1,0 +1,49 @@
+# Relative placement against things already in the scene, and a
+# conversation that builds on the previous turn.
+- id: sphere-on-table
+  title: Sphere resting on top of an existing table
+  tags: [placement, relative, smoke]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(1.5, 0.5, 0.75))
+      t = bpy.context.active_object
+      t.name = "Table"
+      t.scale = (1.2, 0.8, 0.05)
+  prompt: Put a sphere named Ball, 0.3 m in diameter, on top of the table so it rests on its surface.
+  approval: never
+  timeout: 200
+  checks:
+    - object_exists: Ball
+    - dims_approx: {name: Ball, dims: [0.3, 0.3, 0.3], tol: 0.03}
+    - rests_on: {name: Ball, base: Table, tol: 0.03}
+    - dims_approx: {name: Table, dims: [1.2, 0.8, 0.05], tol: 0.01}
+    - tool_not_used: execute_code
+
+- id: move-crate-trap
+  title: Moving an object must use place_object, not Python
+  tags: [placement, trap]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0.5))
+      bpy.context.active_object.name = "Crate"
+  prompt: Move the object named Crate so its origin is at x = 2, y = 3, z = 0.5.
+  approval: never
+  timeout: 150
+  checks:
+    - location_approx: {name: Crate, location: [2, 3, 0.5], tol: 0.02}
+    - tool_not_used: execute_code
+    - max_tool_calls: 4
+
+- id: follow-up-turn
+  title: Second turn refers to the object made in the first
+  tags: [placement, multi-turn]
+  setup: empty
+  prompt:
+    - Add a 1 m cube named Pet at the origin, sitting on the ground.
+    - Now lift it so its bottom is 2 m above the ground. Keep it at the same x and y.
+  approval: never
+  timeout: 180
+  checks:
+    - object_exists: {name: Pet, count: 1}
+    - location_approx: {name: Pet, point: bottom, location: [0, 0, 2], tol: 0.05}
+    - count_type: {type: MESH, eq: 1}

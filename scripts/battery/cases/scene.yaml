@@ -1,0 +1,61 @@
+# Questions answered from the scene. The scene must not change and no
+# approval should be needed: get_scene_info / get_object_info / the viewport
+# are enough.
+- id: count-objects
+  title: Count objects and spheres
+  tags: [scene, question, smoke]
+  setup:
+    python: |
+      for i in range(4):
+          bpy.ops.mesh.primitive_cube_add(size=0.5, location=(i * 1.5, 0, 0.25))
+          bpy.context.active_object.name = f"Box_{i + 1}"
+      for i in range(2):
+          bpy.ops.mesh.primitive_uv_sphere_add(radius=0.3, location=(i * 1.5, 2, 0.3))
+          bpy.context.active_object.name = f"Sphere_{'AB'[i]}"
+      for o in bpy.context.view_layer.objects:
+          o.select_set(False)
+  prompt: How many mesh objects are in the scene, and how many of them are spheres? Don't change anything.
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: {text: ["6", "six"]}
+    - reply_contains: {text: [Sphere_A, Sphere_B], all: true}
+    - scene_unchanged: true
+    - max_tool_calls: 3
+
+- id: highest-object
+  title: Which object is highest
+  tags: [scene, question]
+  setup:
+    python: |
+      for name, z in (("Rock", 0.2), ("Kite", 7.5), ("Bird", 4.0), ("Tree", 2.0)):
+          bpy.ops.mesh.primitive_ico_sphere_add(radius=0.2, location=(0, 0, z))
+          bpy.context.active_object.name = name
+  prompt: Which object is highest up? Answer with its name.
+  approval: never
+  timeout: 120
+  checks:
+    - reply_contains: Kite
+    - reply_not_contains: [Bird is highest, Tree is highest, Rock is highest]
+    - scene_unchanged: true
+
+- id: viewport-color
+  title: What colour is an object (material name gives nothing away)
+  tags: [scene, viewport, vision]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_monkey_add(size=1.5, location=(0, 0, 1))
+      o = bpy.context.active_object
+      o.name = "Mystery"
+      m = bpy.data.materials.new("Mat.001")
+      m.use_nodes = True
+      col = (0.02, 0.45, 0.05, 1.0)
+      m.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = col
+      m.diffuse_color = col
+      o.data.materials.append(m)
+  prompt: What colour is the object named Mystery?
+  approval: never
+  timeout: 180
+  checks:
+    - reply_contains: green
+    - scene_unchanged: true

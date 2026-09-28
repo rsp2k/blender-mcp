@@ -1,0 +1,18 @@
+- id: box-tallest
+  title: Annotate the tallest object
+  tags: [annotations, scene]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=0.5, location=(-3, 0, 0.25))
+      bpy.context.active_object.name = "Short"
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0.5))
+      bpy.context.active_object.name = "Middle"
+      bpy.ops.mesh.primitive_cylinder_add(radius=0.3, depth=3, location=(3, 0, 1.5))
+      bpy.context.active_object.name = "Pillar"
+  prompt: Box the tallest object with an annotation so I can see which one it is.
+  approval: never
+  timeout: 180
+  checks:
+    - annotation_strokes_min: 1
+    - annotation_near: {name: Pillar}
+    - tool_not_used: execute_code

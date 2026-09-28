@@ -1,0 +1,104 @@
+# Real project files, copied into <compose-dir>/projects/battery/ (the
+# originals are never touched). Facts below were read headlessly from the
+# copies with `blender -b <file> --python ...`.
+#
+#   tank-scene.blend            septic-simulator: 34 objects, 30 meshes
+#   pinecil-dock-assembly.blend pinecil case dock: 13 objects, millimetre-sized units
+#   clagstone-spec.blend        model home spec: 504 objects (226 lights, 34 cameras)
+#   terrahawk-hangar-lean.blend drone hangar: opens on an empty "Scene"; the
+#                               content lives in scenes "H1 Closed" .. "H6 Pad Zones"
+#
+# get_scene_info lists only the first 10 objects, so most of these ask
+# about objects the model has to find by name.
+
+- id: tank-warning-material
+  title: "Septic tank: which material does Warning_Light use"
+  tags: [blend, scene, question]
+  setup: {blend: tank-scene.blend}
+  prompt: Which material does the Warning_Light object use?
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: Warning_Light_Material
+    - scene_unchanged: true
+
+- id: tank-raise-lid
+  title: "Septic tank: raise one riser lid by 0.5 m"
+  tags: [blend, placement, edit]
+  setup: {blend: tank-scene.blend}
+  prompt: Raise Riser_Lid_1 by 0.5 m. Leave everything else where it is.
+  approval: never
+  timeout: 150
+  checks:
+    - location_approx: {name: Riser_Lid_1, location: [0, -3, 3.65], tol: 0.02}
+    - location_approx: {name: Riser_Lid_2, location: [0, 3, 3.15], tol: 0.001}
+    - count_type: {type: MESH, eq: 30}
+    - tool_not_used: execute_code
+
+- id: pinecil-tip-length
+  title: "Pinecil dock: how long is the tip"
+  tags: [blend, scene, question]
+  setup: {blend: pinecil-dock-assembly.blend}
+  prompt: How long is the soldering tip (the object ts_tip) along its longest axis, in scene units?
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: "101"
+    - scene_unchanged: true
+
+- id: pinecil-reels-blue
+  title: "Pinecil dock: make both reel parts blue"
+  tags: [blend, materials, edit]
+  setup: {blend: pinecil-dock-assembly.blend}
+  prompt: Make both reel parts, reel_bottom and reel_top, bright blue. Don't change the other parts.
+  approval: allow  # no curated plain-material tool yet, see materials.yaml
+  timeout: 180
+  checks:
+    - has_material: {name_contains: reel_, color: blue, all: true}
+    - has_material: {name: stand, material: mat_printed_black}
+    - has_material: {name: bearing_608, material: mat_steel}
+
+- id: clagstone-count
+  title: "Model home: how many objects"
+  tags: [blend, scene, question]
+  setup: {blend: clagstone-spec.blend}
+  prompt: How many objects are in this scene?
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: "504"
+    - scene_unchanged: true
+
+- id: clagstone-roof-metal
+  title: "Model home: dark grey metal roof"
+  tags: [blend, materials, edit]
+  setup: {blend: clagstone-spec.blend}
+  prompt: Give the Roof object a dark grey standing-seam metal look (a dark grey metallic material).
+  approval: allow  # no curated plain-material tool yet, see materials.yaml
+  timeout: 200
+  checks:
+    - has_material: {name: Roof, metallic_min: 0.5, color: [grey, black]}
+    - count_type: {type: MESH, eq: 123}
+
+- id: terrahawk-find-scenes
+  title: "Drone hangar: the open scene is empty, find the others"
+  tags: [blend, scene, python]
+  setup: {blend: terrahawk-hangar-lean.blend}
+  prompt: This scene looks empty. What other scenes does this file contain?
+  approval: allow
+  timeout: 200
+  checks:
+    - reply_contains: {text: ["H1 Closed", "H2 Open", "H4 Cutaway"], all: true}
+    - scene_unchanged: true
+
+- id: terrahawk-count-h1
+  title: "Drone hangar: count objects in the H1 Closed scene"
+  tags: [blend, scene, question]
+  setup: {blend: terrahawk-hangar-lean.blend, scene: H1 Closed}
+  prompt: How many objects are in the current scene, and what is the scene called?
+  approval: never
+  timeout: 150
+  checks:
+    - reply_contains: "552"
+    - reply_contains: H1 Closed
+    - scene_unchanged: true

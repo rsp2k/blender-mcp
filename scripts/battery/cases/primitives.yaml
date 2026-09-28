@@ -1,0 +1,47 @@
+# Primitives with exact dimensions and placement. All of these fit the
+# curated tools (create_mesh, place_object), so Python is never needed.
+- id: box-exact
+  title: Box with exact dims, resting on the ground off-centre
+  tags: [primitives, placement, smoke]
+  setup: empty
+  prompt: >-
+    Add a box named Crate that is 2 m along X, 1 m along Y and 0.5 m tall.
+    It should rest on the ground (bottom at z = 0), centred at x = 3, y = -1.
+  approval: never
+  timeout: 180
+  checks:
+    - object_exists: Crate
+    - dims_approx: {name: Crate, dims: [2, 1, 0.5], tol: 0.05}
+    - location_approx: {name: Crate, point: bottom, location: [3, -1, 0], tol: 0.05}
+    - tool_not_used: execute_code
+    - no_errors: true
+
+- id: cylinder-column
+  title: Cylinder by radius and height, standing at the origin
+  tags: [primitives, placement]
+  setup: empty
+  prompt: >-
+    Create a cylinder named Column with a radius of 0.25 m and a height of 3 m,
+    standing upright on the ground at the origin.
+  approval: never
+  timeout: 180
+  checks:
+    - object_exists: Column
+    - dims_approx: {name: Column, dims: [0.5, 0.5, 3], tol: 0.05}
+    - location_approx: {name: Column, point: bottom, location: [0, 0, 0], tol: 0.05}
+    - tool_not_used: execute_code
+
+- id: stack-three
+  title: Three cubes stacked on each other
+  tags: [primitives, placement, relative]
+  setup: empty
+  prompt: >-
+    Stack three 1 m cubes named Block1, Block2 and Block3 at the origin.
+    Block1 sits on the ground, Block2 on top of Block1, Block3 on top of Block2.
+  approval: never
+  timeout: 240
+  checks:
+    - location_approx: {name: Block1, point: bottom, location: [0, 0, 0], tol: 0.05}
+    - rests_on: {name: Block2, base: Block1, tol: 0.05}
+    - rests_on: {name: Block3, base: Block2, tol: 0.05}
+    - dims_approx: {name: Block3, dims: [1, 1, 1], tol: 0.05}

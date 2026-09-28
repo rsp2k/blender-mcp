@@ -1,0 +1,32 @@
+# The chat catalog has no tool that makes a plain material: assign_material
+# needs an existing one and make_pbr_material builds from downloaded Poly
+# Haven textures. So a colour request can only be met with execute_code,
+# and these cases allow it; they measure whether the colour comes out right.
+# Tighten to `approval: never` + `tool_not_used: execute_code` once a
+# curated solid-material tool exists.
+- id: color-by-name
+  title: Colour an object by name
+  tags: [materials, smoke]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0.5))
+      bpy.context.active_object.name = "Crate"
+  prompt: Make the Crate bright red.
+  approval: allow
+  timeout: 180
+  checks:
+    - has_material: {name: Crate, color: red}
+    - count_type: {type: MESH, eq: 1}
+
+- id: pbr-gold
+  title: Polished gold PBR material
+  tags: [materials, pbr]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_uv_sphere_add(radius=0.5, location=(0, 0, 0.5))
+      bpy.context.active_object.name = "Trophy"
+  prompt: Give the Trophy a polished gold metal material.
+  approval: allow
+  timeout: 180
+  checks:
+    - has_material: {name: Trophy, metallic_min: 0.8, roughness_max: 0.4, color: [yellow, orange]}
