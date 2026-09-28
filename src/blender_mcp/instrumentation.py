@@ -35,6 +35,8 @@ META_ONLY_TOOLS = frozenset({
     "blender_execute_code",
     "blender_submit",
     "blender_create_access_token",
+    "blender_set_chat_backend",  # carries a provider API key
+    "blender_chat",
 })
 
 try:
@@ -81,7 +83,13 @@ def identify(context: Any) -> dict:
     except Exception:  # noqa: BLE001, S110 - identity lookup must never break a call
         pass
     try:
-        if access_client_id and str(access_client_id).startswith("pat:"):
+        from .client_role import current_downstream_client_id
+
+        downstream = current_downstream_client_id.get() or ""
+        if downstream.startswith("chat:"):
+            # A tool the in-Blender chat ran on the user's behalf (chat/executor.py).
+            out["caller_kind"] = "chat"
+        elif access_client_id and str(access_client_id).startswith("pat:"):
             out["caller_kind"] = str(access_client_id)
         else:
             from .client_role import get_caller_role

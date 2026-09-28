@@ -306,7 +306,17 @@ def build_http_mcp() -> FastMCP:
     install_ping_touch()
 
     auth_provider = _build_auth_provider()
-    server = FastMCP("BlenderMCP", auth=auth_provider)
+    # In-Blender chat samples the model with ctx.sample_step; the add-on has
+    # no sampling capability, so the fallback handler routes each step to the
+    # user's backend (GPU gateway, their Claude key, or an OpenAI-style URL).
+    from .chat.routing import RoutingSamplingHandler
+    chat_handler = RoutingSamplingHandler()
+    server = FastMCP(
+        "BlenderMCP",
+        auth=auth_provider,
+        sampling_handler=chat_handler,
+        sampling_handler_behavior="fallback",
+    )
     # Tool-call instrumentation (fastmcp-feedback), OFF unless QA_LOG is set.
     # Added first: the first middleware added is outermost, so it times and
     # records every call, including ones later middleware rejects.
@@ -384,6 +394,11 @@ def build_http_mcp() -> FastMCP:
     BlenderTextureComponent().register_tools(mcp_server=server, prefix="blender")
     # Job-pump health + remote pump reset (feedback bug-iDJHVyy4e2Q).
     BlenderHealthComponent().register_tools(mcp_server=server, prefix="blender")
+
+    # Chat tab in the add-on (blender_chat + backend settings). Registered
+    # always; blender_chat answers "disabled" unless CHAT_ENABLED is set.
+    from .chat.tools import BlenderChatComponent
+    BlenderChatComponent(chat_handler).register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain
