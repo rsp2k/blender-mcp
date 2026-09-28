@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 
 import httpx
+import httpx2
 import pytest
 from cryptography.fernet import Fernet
 from fastmcp import Client, FastMCP
@@ -47,13 +48,21 @@ def oa_call(name, args, call_id="call_1"):
         "finish_reason": "stop"}]}
 
 
+def _an_message(content, stop_reason):
+    return {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5",
+            "content": content, "stop_reason": stop_reason, "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+
 def an_text(text):
-    return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}
+    return _an_message([{"type": "text", "text": text}], "end_turn")
 
 
-def an_call(name, args, call_id="toolu_1"):
-    return {"content": [{"type": "tool_use", "id": call_id, "name": name, "input": args}],
-            "stop_reason": "tool_use"}
+def an_call(name, args, call_id="toolu_1", thinking=False):
+    content = [{"type": "tool_use", "id": call_id, "name": name, "input": args}]
+    if thinking:
+        content.insert(0, {"type": "thinking", "thinking": "", "signature": "sig-" + call_id})
+    return _an_message(content, "tool_use")
 
 
 class FakeModels:
@@ -65,20 +74,23 @@ class FakeModels:
         self.gate: asyncio.Event | None = None
         self.entered = asyncio.Event()
 
-    async def __call__(self, request: httpx.Request) -> httpx.Response:
+    async def __call__(self, request):
+        # httpx requests from the OpenAI-compatible providers, httpx2 ones from
+        # the Anthropic SDK; answer each in its own library's Response type.
+        response = httpx2.Response if isinstance(request, httpx2.Request) else httpx.Response
         body = json.loads(request.content)
         self.requests.append({"url": str(request.url), "headers": dict(request.headers), "body": body})
         self.entered.set()
         if self.gate is not None:
             await self.gate.wait()
         if not self.script:
-            return httpx.Response(200, json=oa_text("done"))
+            return response(200, json=oa_text("done"))
         item = self.script.pop(0)
         if callable(item):
             item = item(body)
-        if isinstance(item, httpx.Response):
+        if isinstance(item, (httpx.Response, httpx2.Response)):
             return item
-        return httpx.Response(200, json=item)
+        return response(200, json=item)
 
 
 # ---- the in-process server ---------------------------------------------------
@@ -157,6 +169,7 @@ class Harness:
         self.rec = Recorder()
         self.handler = RoutingSamplingHandler(
             transport=httpx.MockTransport(models), session_factory=sessions,
+            anthropic_transport=httpx2.MockTransport(models),
             config_loader=lambda: self.cfg,
         )
         self.component = BlenderChatComponent(self.handler, config_loader=lambda: self.cfg)
@@ -485,7 +498,7 @@ async def test_no_backend_when_gateway_is_limited(cfg, sessions):
 
 async def test_per_user_anthropic_backend(cfg, sessions):
     key = "sk-ant-test-" + "x" * 20
-    models = FakeModels(an_call("create_mesh", {"name": "Lamp", "target_uuid": "nope"}),
+    models = FakeModels(an_call("create_mesh", {"name": "Lamp", "target_uuid": "nope"}, thinking=True),
                         an_text("Made a lamp."))
     h = Harness(cfg, models, sessions)
     async with h.client() as client:
@@ -495,8 +508,8 @@ async def test_per_user_anthropic_backend(cfg, sessions):
         got = json.loads((await client.call_tool("blender_get_chat_backend", {})).content[0].text)
         out = await h.chat(client, "a lamp please")
 
-    assert saved == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-sonnet-5",
-                                                 "base_url": None, "has_key": True}}
+    assert saved == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
+                                                 "base_url": None, "has_key": True, "source": "user"}}
     assert got == saved
     assert key not in json.dumps(saved) + json.dumps(got) + json.dumps(out)
 
@@ -507,19 +520,44 @@ async def test_per_user_anthropic_backend(cfg, sessions):
     assert Fernet(cfg.secret_key.encode()).decrypt(row.api_key_enc.encode()).decode() == key
 
     assert out["status"] == "ok" and out["reply"] == "Made a lamp."
-    assert out["backend"] == {"provider": "anthropic", "model": "claude-sonnet-5"}
+    assert out["backend"] == {"provider": "anthropic", "model": "claude-opus-5"}
     first = models.requests[0]
-    assert first["url"] == "https://api.anthropic.com/v1/messages"
+    assert first["url"].split("?")[0] == "https://api.anthropic.com/v1/messages"
     assert first["headers"]["x-api-key"] == key
     assert first["headers"]["anthropic-version"] == "2023-06-01"
     assert "authorization" not in first["headers"]
-    assert first["body"]["model"] == "claude-sonnet-5"
+    assert first["body"]["model"] == "claude-opus-5"
+    assert first["body"]["max_tokens"] >= 16000 and first["body"]["fallbacks"] == "default"
     assert {t["name"] for t in first["body"]["tools"]} >= {"create_mesh"}
     assert h.rec.named("create_mesh")[0]["args"]["target_uuid"] == BLENDER
     second = models.requests[1]["body"]["messages"]
+    # The first round's thinking block goes back unchanged with its tool_use.
+    assert second[1]["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig-toolu_1"}
     assert second[-1]["role"] == "user"
     assert second[-1]["content"][0]["type"] == "tool_result"
     assert second[-1]["content"][0]["tool_use_id"] == "toolu_1"
+
+
+async def test_server_default_anthropic_backend(cfg, sessions):
+    server_key = "sk-ant-server-" + "z" * 24
+    models = FakeModels(an_call("create_mesh", {"name": "Crate"}), an_text("Made a crate."),
+                        oa_text("from their ollama"))
+    h = Harness(replace(cfg, default_provider="anthropic", anthropic_api_key=server_key), models, sessions)
+    async with h.client() as client:
+        got = json.loads((await client.call_tool("blender_get_chat_backend", {})).content[0].text)
+        out = await h.chat(client, "a crate")
+        # The user's own backend still overrides the server default.
+        await client.call_tool("blender_set_chat_backend", {
+            "provider": "openai", "base_url": "http://ollama.internal:11434/v1", "model": "llama3"})
+        out2 = await h.chat(client)
+    assert got == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
+                                               "base_url": None, "has_key": True, "source": "server"}}
+    assert server_key not in json.dumps(got) + json.dumps(out) + json.dumps(out2)
+    assert out["status"] == "ok" and out["reply"] == "Made a crate."
+    assert out["backend"] == {"provider": "anthropic", "model": "claude-opus-5"}
+    assert models.requests[0]["headers"]["x-api-key"] == server_key
+    assert out2["backend"] == {"provider": "openai", "model": "llama3"}
+    assert models.requests[2]["url"] == "http://ollama.internal:11434/v1/chat/completions"
 
 
 async def test_per_user_openai_backend_and_clear(cfg, sessions):

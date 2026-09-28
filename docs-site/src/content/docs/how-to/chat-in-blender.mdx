@@ -15,11 +15,17 @@ Open **Edit › Preferences › Add-ons › Blender MCP › Chat backend**:
 
 | Backend | What you need | Notes |
 |---|---|---|
-| Shared GPU gateway | Nothing; it's the default | Open models on the server operator's GPUs (qwen3 by default). One conversation turn at a time per account. |
-| Claude API | Your Anthropic API key | `claude-sonnet-5` by default; `claude-opus-5-5` selectable. |
+| Shared GPU gateway | Nothing; it's the default | The server's own backend: open models on the operator's GPUs (qwen3 by default), unless the operator has set a different server default (below). One conversation turn at a time per account. |
+| Claude API | Your Anthropic API key | `claude-opus-5` by default; any Claude model name works, e.g. `claude-opus-5-5`. |
 | OpenAI-compatible | A base URL, a model name, and a key if the endpoint needs one | Ollama, LiteLLM, vLLM, or a hosted OpenAI-style API. The URL must be reachable from the server. |
 
 Press **Save backend**. The key is sent once to the server and the field clears. To change it, enter a new one; to remove it, choose **Clear backend**.
+
+### The server default
+
+Accounts that haven't saved a Claude key or an OpenAI-compatible URL use the server's default backend. It is normally the GPU gateway, but the operator can point it elsewhere, for example at Claude with the server's own key while the local models are paused (`CHAT_DEFAULT_PROVIDER=anthropic` plus `ANTHROPIC_API_KEY`; the model defaults to `claude-opus-5`, or `CHAT_DEFAULT_MODEL`). A backend you saved yourself always wins. The **Current:** line in the preferences says `server default` when you are on it; the server's key is never sent to Blender. `CHAT_GATEWAY_USERS`, when set, limits the server default to the listed accounts, whichever provider it is.
+
+With Claude (your key or the server's), `look_at_viewport` sends the screenshot to Claude itself rather than to the gateway's vision model. Claude calls think adaptively between tool steps, and requests Claude declines are re-run on Anthropic's recommended fallback model where the API supports it (`CHAT_ANTHROPIC_FALLBACKS`, on by default); a request that is still declined ends the turn with a message naming the refusal category. `CHAT_ANTHROPIC_EFFORT` (`low` to `max`) sets the effort level; unset leaves the API's default.
 
 <Aside type="caution">
 With the OpenAI-compatible backend, the base URL is fetched by the server, not by your computer, so `http://localhost:11434` means the server's localhost. Use an address the server can reach.
@@ -85,7 +91,7 @@ blender_set_chat_backend(provider: "gateway"|"anthropic"|"openai", model: str | 
                          base_url: str | None = None, api_key: str | None = None, clear: bool = False)
 ```
 
-Returns `{"status": "ok", "backend": {"provider", "model", "base_url", "has_key"}}`; the key is never returned. Omitting `api_key` keeps the saved key when the provider stays the same; an empty string removes it. Refusals are `{"status": "error", "error", "detail"}` with `error` one of `invalid_provider`, `invalid_argument`, `api_key_required`, `secret_key_not_configured`. `blender_get_chat_backend()` returns the same shape. Arguments to this tool are never recorded by the server's call logging.
+Returns `{"status": "ok", "backend": {"provider", "model", "base_url", "has_key", "source"}}`, where `source` is `user` for a backend the account saved and `server` for the server default (then `has_key` says whether the server has a key for it); no key, the account's or the server's, is ever returned. Omitting `api_key` keeps the saved key when the provider stays the same; an empty string removes it. Refusals are `{"status": "error", "error", "detail"}` with `error` one of `invalid_provider`, `invalid_argument`, `api_key_required`, `secret_key_not_configured`. `blender_get_chat_backend()` returns the same shape. Arguments to this tool are never recorded by the server's call logging.
 
 ### Feature flag
 

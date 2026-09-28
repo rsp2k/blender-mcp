@@ -12,7 +12,7 @@ declarative checks. Results go to <out>/results.json and <out>/report.md.
     uv run scripts/battery/run_battery.py                       # all cases, current backend
     uv run scripts/battery/run_battery.py --cases 'tag:scene'   # by tag
     uv run scripts/battery/run_battery.py --cases 'box-*,trap-*' --models gateway:qwen3,gateway:gemma4
-    uv run scripts/battery/run_battery.py --models anthropic:claude-sonnet-5   # needs ANTHROPIC_API_KEY
+    uv run scripts/battery/run_battery.py --models anthropic:claude-opus-5   # needs ANTHROPIC_API_KEY
     uv run scripts/battery/run_battery.py --list
     make battery ARGS="--cases tag:primitives --repeat 3"
 

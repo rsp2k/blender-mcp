@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -24,7 +25,7 @@ from .catalog import build_catalog
 from .config import ChatConfig, load_config
 from .executor import ChatExecutor
 from .providers import ProviderError
-from .routing import RoutingSamplingHandler, current_backend
+from .routing import RoutingSamplingHandler, current_backend, current_turn
 from .turn import Turn
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ class BlenderChatComponent(MCPMixin):
             cfg.max_tools,
         )
         token = current_backend.set(backend)
+        turn_id = f"{user_sub}:{uuid.uuid4().hex}"
+        turn_token = current_turn.set(turn_id)
         turn = None
         base: dict[str, Any] = {}
         try:
@@ -132,7 +135,9 @@ class BlenderChatComponent(MCPMixin):
                 except ValueError as e:  # sampling not routable (no handler installed)
                     base = {"status": "backend_error", "detail": str(e)}
         finally:
+            current_turn.reset(turn_token)
             current_backend.reset(token)
+            self.handler.end_turn(turn_id)
         base.update({
             "steps": turn.steps if turn else [],
             "elapsed_s": round(time.monotonic() - t0, 1),
@@ -153,13 +158,13 @@ class BlenderChatComponent(MCPMixin):
     ) -> str:
         """Choose the model backend for this account's chat turns.
 
-        ``provider``: ``gateway`` (the shared GPU gateway, the default),
-        ``anthropic`` (your API key; ``model`` defaults to claude-sonnet-5) or
+        ``provider``: ``gateway`` (the server's own backend, the default),
+        ``anthropic`` (your API key; ``model`` defaults to claude-opus-5) or
         ``openai`` (any OpenAI-compatible ``base_url`` + ``model``, key
         optional). The key is stored encrypted and never returned; omit it to
         keep the saved one when only the model changes. ``clear`` removes the
-        setting (back to the gateway). Returns ``{status, backend: {provider,
-        model, base_url, has_key}}``.
+        setting (back to the server's default). Returns ``{status, backend:
+        {provider, model, base_url, has_key, source}}``.
         """
         cfg = self.config_loader()
         user_sub = _resolve_user_id(ctx)
@@ -178,7 +183,9 @@ class BlenderChatComponent(MCPMixin):
     @require_role("addon")
     async def get_chat_backend(self, ctx: Context = None) -> str:
         """This account's chat backend: ``{status, backend: {provider, model,
-        base_url, has_key}}``. The key itself is never returned."""
+        base_url, has_key, source}}``. ``source`` is ``user`` for a backend
+        the account saved, ``server`` for the server's default. No key, the
+        account's or the server's, is ever returned."""
         cfg = self.config_loader()
         user_sub = _resolve_user_id(ctx)
         if not user_sub:

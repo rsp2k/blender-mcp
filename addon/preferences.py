@@ -322,7 +322,9 @@ def draw_login_section(layout, prefs, compact: bool = False):
 
 
 CHAT_PROVIDERS = [
-    ("gateway", "Shared GPU gateway", "Open models on the server operator's GPUs (the default)"),
+    ("gateway", "Shared GPU gateway",
+     "The server's own backend (the default): open models on the operator's GPUs, "
+     "unless the operator has set a different server default"),
     ("anthropic", "Claude API", "Your own Anthropic API key"),
     ("openai", "OpenAI-compatible", "Ollama, LiteLLM, vLLM or a hosted OpenAI-style API"),
 ]
@@ -350,7 +352,9 @@ def draw_chat_backend_section(layout, prefs):
         parts = [name]
         if backend.get("model"):
             parts.append(backend["model"])
-        if backend.get("has_key"):
+        if backend.get("source") == "server":
+            parts.append("server default")
+        elif backend.get("has_key"):
             parts.append("key stored")
         row.label(text="Current: " + " · ".join(parts), icon='CHECKMARK')
     elif connected:
@@ -578,7 +582,7 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         name="Chat model",
         description=(
             "Model name. Leave blank for the provider's default "
-            "(qwen3 on the gateway, claude-sonnet-5 on the Claude API)"
+            "(the server's choice on the gateway, claude-opus-5 on the Claude API)"
         ),
         default="",
     )

@@ -35,10 +35,11 @@ _MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": 
 
 
 def vision_backend(cfg: ChatConfig, user_sub: str | None, turn_backend: Backend | None) -> Backend | None:
-    if cfg.gateway_allowed(user_sub):
-        return Backend("gateway", cfg.vision_model, cfg.gpu_base_url, cfg.gpu_api_key)
+    # Claude reads images itself, whether the key is the user's or the server's.
     if turn_backend is not None and turn_backend.provider == "anthropic":
         return turn_backend
+    if cfg.gateway_allowed(user_sub):
+        return Backend("gateway", cfg.vision_model, cfg.gpu_base_url, cfg.gpu_api_key)
     return None
 
 

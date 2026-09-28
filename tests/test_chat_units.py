@@ -135,30 +135,7 @@ def test_anthropic_message_conversion_merges_and_orders():
                                      "input": {"name": "A"}}
 
 
-async def test_anthropic_request_shape_and_parse():
-    seen = []
-
-    def handler(request):
-        seen.append(request)
-        return httpx.Response(200, json={"content": [
-            {"type": "text", "text": "ok"},
-            {"type": "tool_use", "id": "t1", "name": "create_mesh", "input": {"name": "B"}}]})
-
-    c = await an.complete(_backend("anthropic"), "sys", _history()[:1], TOOLS, tool_choice="none",
-                          transport=httpx.MockTransport(handler))
-    body = json.loads(seen[0].content)
-    assert seen[0].headers["x-api-key"] == "k-secret"
-    assert body["system"] == "sys" and body["tool_choice"] == {"type": "none"}
-    assert body["tools"][0]["input_schema"]["properties"] == {"name": {"type": "string"}}
-    assert c.text == "ok" and c.tool_calls[0].arguments == {"name": "B"}
-
-
-async def test_anthropic_bad_key_message():
-    with pytest.raises(ProviderError, match="rejected the saved key"):
-        await an.complete(_backend("anthropic"), None, _history()[:1], None,
-                          transport=httpx.MockTransport(lambda r: httpx.Response(401, json={})))
-    with pytest.raises(ProviderError, match="no Anthropic API key"):
-        await an.complete(_backend("anthropic", key=""), None, _history()[:1], None)
+# Request shape, errors, refusals and thinking replay: tests/test_chat_anthropic.py.
 
 
 def test_to_result_shape():
@@ -228,8 +205,78 @@ def test_non_fernet_secret_still_works():
 def test_public_view_never_has_the_key():
     row = ChatSettings(user_sub="u", provider="openai", model="m", base_url="http://x", api_key_enc="enc")
     view = chat_settings.public_view(row, ChatConfig())
-    assert view == {"provider": "openai", "model": "m", "base_url": "http://x", "has_key": True}
+    assert view == {"provider": "openai", "model": "m", "base_url": "http://x", "has_key": True,
+                    "source": "user"}
     assert chat_settings.public_view(None, ChatConfig())["provider"] == "gateway"
+    assert chat_settings.public_view(None, ChatConfig())["source"] == "server"
+
+
+# ---- the server-wide default backend -------------------------------------------------
+
+SERVER_KEY = "sk-ant-server-" + "s" * 24
+
+
+def _server_anthropic(**kw):
+    return _cfg(default_provider="anthropic", anthropic_api_key=SERVER_KEY, **kw)
+
+
+async def test_precedence_user_then_server_default_then_nothing(sessions):
+    cfg = _server_anthropic()
+    handler = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: cfg)
+    # No saved backend: the server default, with the server's key and Opus 5.
+    b = await handler.resolve("bob")
+    assert (b.provider, b.model, b.api_key) == ("anthropic", "claude-opus-5", SERVER_KEY)
+    # The user's own backend wins.
+    await chat_settings.save(sessions, cfg, "alice", "anthropic", api_key="alice-key",
+                             model="claude-sonnet-5")
+    b = await handler.resolve("alice")
+    assert (b.model, b.api_key) == ("claude-sonnet-5", "alice-key")
+    await chat_settings.save(sessions, cfg, "carol", "openai", base_url="http://x/v1", model="m")
+    assert (await handler.resolve("carol")).provider == "openai"
+    # A saved "gateway" row means "the server's backend": it follows the default.
+    await chat_settings.save(sessions, cfg, "dave", "gateway", model="gemma4")
+    assert (await handler.resolve("dave")).provider == "anthropic"
+    # Clearing goes back to the default.
+    await chat_settings.save(sessions, cfg, "alice", "gateway", clear=True)
+    assert (await handler.resolve("alice")).api_key == SERVER_KEY
+
+
+async def test_server_default_gateway_is_unchanged_behaviour(sessions):
+    cfg = _cfg()  # CHAT_DEFAULT_PROVIDER unset
+    handler = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: cfg)
+    b = await handler.resolve("bob")
+    assert (b.provider, b.model) == ("gateway", "qwen3")
+    await chat_settings.save(sessions, cfg, "dave", "gateway", model="gemma4")
+    assert (await handler.resolve("dave")).model == "gemma4"
+    cfg2 = _cfg(default_model="gemma4")
+    h2 = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: cfg2)
+    assert (await h2.resolve("bob")).model == "gemma4"
+
+
+async def test_server_default_needs_its_key_and_honours_the_user_list(sessions):
+    no_key = _cfg(default_provider="anthropic")
+    h = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: no_key)
+    assert await h.resolve("bob") is None
+    listed = _server_anthropic(gateway_users=frozenset({"alice"}))
+    h = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: listed)
+    assert (await h.resolve("alice")).provider == "anthropic"
+    assert await h.resolve("bob") is None
+    openai_default = _cfg(default_provider="openai", default_base_url="http://llm/v1",
+                          default_model="llama3", default_api_key="oa-key")
+    h = RoutingSamplingHandler(session_factory=sessions, config_loader=lambda: openai_default)
+    b = await h.resolve("bob")
+    assert (b.provider, b.base_url, b.model, b.api_key) == ("openai", "http://llm/v1", "llama3", "oa-key")
+
+
+def test_public_view_of_server_default_hides_the_server_key():
+    cfg = _server_anthropic()
+    view = chat_settings.public_view(None, cfg)
+    assert view == {"provider": "anthropic", "model": "claude-opus-5", "base_url": None,
+                    "has_key": True, "source": "server"}
+    assert SERVER_KEY not in json.dumps(view) and SERVER_KEY not in repr(cfg)
+    gw_row = ChatSettings(user_sub="u", provider="gateway", model="gemma4")
+    assert chat_settings.public_view(gw_row, cfg)["provider"] == "anthropic"
+    assert chat_settings.public_view(None, _cfg(default_provider="anthropic"))["has_key"] is False
 
 
 # ---- config ------------------------------------------------------------------------
@@ -244,6 +291,13 @@ def test_config_defaults_and_parsing():
     assert c.enabled and c.max_steps == 10 and c.tools == {"a", "b"} and c.turn_timeout_s == 300
     assert c.gateway_allowed("anyone") and not c.gateway_allowed(None)
     assert "zz-secret" not in repr(c)  # key fields are repr=False
+    assert (c.default_provider, c.anthropic_fallbacks, c.anthropic_effort) == ("gateway", True, "")
+    c = load_config({"CHAT_DEFAULT_PROVIDER": "Anthropic", "ANTHROPIC_API_KEY": "zz-ant-zz",
+                     "CHAT_ANTHROPIC_FALLBACKS": "off", "CHAT_ANTHROPIC_EFFORT": "medium"})
+    assert (c.default_provider, c.anthropic_fallbacks, c.anthropic_effort) == ("anthropic", False, "medium")
+    assert "zz-ant" not in repr(c)
+    c = load_config({"CHAT_DEFAULT_PROVIDER": "bogus", "CHAT_ANTHROPIC_EFFORT": "turbo"})
+    assert (c.default_provider, c.anthropic_effort) == ("gateway", "")
 
 
 # ---- executor helpers, vision parsing ------------------------------------------------
@@ -261,6 +315,17 @@ def test_result_ok():
     assert not result_ok('{"status": "failed", "error": "x"}')
     assert not result_ok('{"error": "boom"}')
     assert not result_ok('{"status": "wrong_role"}')
+
+
+def test_vision_uses_claude_when_the_turn_is_on_claude():
+    from blender_mcp.chat.vision import vision_backend
+
+    claude = Backend("anthropic", "claude-opus-5", "https://api.anthropic.com", "k")
+    cfg = _cfg()
+    assert vision_backend(cfg, "alice", claude) is claude
+    gw = vision_backend(cfg, "alice", Backend("gateway", "qwen3", "https://gw", "gpu"))
+    assert (gw.provider, gw.model) == ("gateway", "qwen2.5vl")
+    assert vision_backend(ChatConfig(), "alice", None) is None
 
 
 def test_find_object_key_in_nested_reply():
