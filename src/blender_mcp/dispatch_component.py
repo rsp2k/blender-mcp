@@ -75,6 +75,40 @@ TIMEOUT_MEDIUM = 60.0      # execute_code, rodin job creation
 TIMEOUT_LONG = 180.0       # polyhaven/sketchfab downloads, asset imports
 
 
+def _xyz(value, what: str) -> Optional[list[float]]:
+    if value is None:
+        return None
+    if (not isinstance(value, (list, tuple)) or len(value) != 3
+            or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)):
+        raise ValueError(f"{what} must be [x, y, z] numbers")
+    return [float(v) for v in value]
+
+
+def placement_params(object, location=None, target=None, parent=None, frame="parent",
+                     track_axis="-Z", up_axis="Y", lens=None, offset=None,
+                     rotate_by=None) -> dict:
+    """Validated place_object dispatch params (raises ValueError).
+
+    ``offset`` / ``rotate_by`` are only sent when given, so the existing
+    call shape is unchanged for add-ons that predate them.
+    """
+    loc, off, turn = _xyz(location, "location"), _xyz(offset, "offset"), _xyz(rotate_by, "rotate_by")
+    if loc is None and off is None and turn is None and target is None and not parent and lens is None:
+        raise ValueError("pass location (absolute), offset (relative move), rotate_by, "
+                         "target, parent or lens")
+    if frame not in ("parent", "world"):
+        raise ValueError("frame must be 'parent' or 'world'")
+    params = {
+        "object": object, "location": loc, "target": target, "parent": parent,
+        "frame": frame, "track_axis": track_axis, "up_axis": up_axis, "lens": lens,
+    }
+    if off is not None:
+        params["offset"] = off
+    if turn is not None:
+        params["rotate_by"] = turn
+    return params
+
+
 def _new_job_id() -> str:
     """Short readable job_id; not a UUID4 because we want compact logs."""
     return f"j-{_uuid_mod.uuid4().hex[:12]}"
@@ -1131,13 +1165,15 @@ class BlenderDispatchComponent(MCPMixin):
     async def place_object(
         self,
         object: str,
-        location: list[float],
+        location: Optional[list[float]] = None,
         target: Optional[list[float]] = None,
         parent: Optional[str] = None,
         frame: str = "parent",
         track_axis: str = "-Z",
         up_axis: str = "Y",
         lens: Optional[float] = None,
+        offset: Optional[list[float]] = None,
+        rotate_by: Optional[list[float]] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
@@ -1155,20 +1191,24 @@ class BlenderDispatchComponent(MCPMixin):
         hand-convert through its matrix. frame="world": raw world coords.
         ``target`` aims the object at a point (-Z track, Y up suits
         cameras and lights); without it rotation and scale are kept.
+
+        Relative moves: ``offset`` [dx, dy, dz] (metres, world axes) moves
+        the object from where it is now, so "raise the lid 0.5 m" is
+        offset=[0, 0, 0.5] with no location. ``rotate_by`` [rx, ry, rz]
+        (degrees, world axes) turns it about its own origin on top of its
+        current rotation. Without ``location`` the object keeps its
+        position; with both, offset is added after moving to location.
+        Relative moves never change the parent.
         """
+        try:
+            params = placement_params(object, location, target, parent, frame, track_axis,
+                                      up_axis, lens, offset, rotate_by)
+        except ValueError as e:
+            return json.dumps({"status": "error", "error": "invalid_argument", "detail": str(e)})
         return await self._call(
             ctx,
             "place_object",
-            {
-                "object": object,
-                "location": location,
-                "target": target,
-                "parent": parent,
-                "frame": frame,
-                "track_axis": track_axis,
-                "up_axis": up_axis,
-                "lens": lens,
-            },
+            params,
             target_uuid,
             _timeout,
             bus_id=bus_id,

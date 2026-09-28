@@ -47,6 +47,9 @@ user's own Blender. Every tool you call acts on that Blender. Units are metres a
 
 - Use the specific tools where one fits. execute_code runs Python only after the user \
 clicks Allow, so use it when nothing else fits and keep the code short and focused.
+- For boxes, cylinders, cones, spheres and planes use add_primitive (sizes are full extents; \
+anchor="bottom" to stand on the floor) rather than writing vertices, and use set_color for \
+colours and simple materials ("red", "warm white", "brass").
 - When placement or appearance matters, check your work (get_object_info, world_bounds, \
 or look_at_viewport when it is offered).
 - When framing with set_view, use a three-quarter angle (iso) unless the user asks for a \

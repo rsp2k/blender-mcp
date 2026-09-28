@@ -54,6 +54,25 @@ class SceneHandlersMixin:
             scene_info["selected_objects"] = selected[:50]
             scene_info["selected_count"] = len(selected)
 
+            # Whole-file context the 10-object list can't give: every scene,
+            # and how many objects of each type this one holds.
+            scene = bpy.context.scene
+            type_counts = {}
+            for o in scene.objects:
+                type_counts[o.type] = type_counts.get(o.type, 0) + 1
+            scene_info["total_objects"] = len(scene.objects)
+            scene_info["type_counts"] = dict(sorted(type_counts.items()))
+            scene_info["scenes"] = [
+                {"name": s.name, "active": s == scene, "objects": len(s.objects)}
+                for s in bpy.data.scenes
+            ]
+            scene_info["active_scene"] = scene.name
+            if len(scene.objects) > len(scene_info["objects"]):
+                scene_info["objects_note"] = (
+                    f"first {len(scene_info['objects'])} of {len(scene.objects)} objects; "
+                    "list_scene_objects lists them all with filters"
+                )
+
             print(f"Scene info collected: {len(scene_info['objects'])} objects")
             return scene_info
         except Exception as e:
