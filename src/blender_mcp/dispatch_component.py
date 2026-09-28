@@ -473,12 +473,19 @@ class BlenderDispatchComponent(MCPMixin):
         crop: bool = False,
         crop_margin: float = 0.05,
         store: bool = False,
+        annotations: bool = True,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Save a 3D viewport screenshot on the Blender host.
+
+        ``annotations`` (default on): the scene's visible annotation strokes
+        (yours from annotate_object, the user's from the Annotate tool or the
+        add-on's Mark selection button) are drawn onto the image, as the
+        viewport shows them. The result's ``annotations.drawn`` counts them.
+        Set False for a clean capture.
 
         ``store``: also upload it to object storage; the result's ``stored``
         entry has an ``object_key`` and a short-lived ``download_url``.
@@ -505,6 +512,9 @@ class BlenderDispatchComponent(MCPMixin):
         if crop:
             params["crop"] = True
             params["crop_margin"] = crop_margin
+        if not annotations:
+            # Only sent when off: add-ons older than 2026.927.8 don't take it.
+            params["annotations"] = False
         return await self._call(
             ctx,
             "get_viewport_screenshot",

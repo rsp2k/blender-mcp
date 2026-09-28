@@ -29,7 +29,8 @@ class ViewportHandlersMixin:
 
     @command("get_viewport_screenshot")
     def get_viewport_screenshot(self, max_size=0, filepath=None, format="png",
-                                frame=None, crop=False, crop_margin=0.05):
+                                frame=None, crop=False, crop_margin=0.05,
+                                annotations=True):
         """
         Render the current 3D viewport to an image file.
 
@@ -54,6 +55,8 @@ class ViewportHandlersMixin:
         - crop: crop the image to the objects' projected bounds plus
           crop_margin (the framed objects, else the selection, else all
           visible objects).
+        - annotations: draw the scene's visible annotation strokes onto the
+          image (render.opengl leaves them out). PNG only.
         """
         if bpy.app.background:
             return {"error": "No viewport available in --background mode"}
@@ -127,6 +130,14 @@ class ViewportHandlersMixin:
                 r.image_settings.file_format,
             ) = saved
 
+        drawn = None
+        if annotations and _blender_file_format(format) == "PNG":
+            try:
+                drawn = _paint_annotations(filepath, area, region)
+            except Exception as e:  # noqa: BLE001 - the capture itself succeeded
+                print(f"[BlenderMCP] annotation overlay failed: {e}")
+                drawn = {"error": str(e)}
+
         cropped_box = None
         if crop:
             try:
@@ -174,4 +185,73 @@ class ViewportHandlersMixin:
             result["framed"] = framed.get("framed")
         if crop:
             result["crop_box"] = list(cropped_box) if cropped_box else None
+        if drawn is not None:
+            result["annotations"] = drawn
         return result
+
+
+def _shown_frame(layer, current):
+    """The annotation frame Blender displays at ``current``: the latest
+    keyframe at or before it, or None."""
+    best = None
+    for f in layer.frames:
+        if f.frame_number <= current and (best is None or f.frame_number > best.frame_number):
+            best = f
+    return best
+
+
+def _paint_annotations(filepath, area, region):
+    """Draw the scene's visible annotation strokes onto the PNG at filepath.
+
+    Mirrors what the viewport shows: nothing when its overlays or the
+    annotation overlay are off, hidden layers skipped, each layer's
+    displayed frame, layer colour/thickness/opacity. 3D strokes are
+    projected through the region's view; view-placed strokes use region
+    percentages. Returns counts for the result.
+    """
+    from ... import annotation_overlay as ov
+    from .render import _load_rgba, _redraw, _save_rgba
+
+    space = area.spaces.active
+    overlay = getattr(space, "overlay", None)
+    if overlay is None or not overlay.show_overlays or not overlay.show_annotation:
+        return {"drawn": 0, "reason": "annotation overlay is off in the viewport"}
+    scene = bpy.context.scene
+    ann = getattr(scene, "annotation", None)
+    if ann is None:
+        return {"drawn": 0}
+
+    _redraw(bpy.context.window, area, region)
+    matrix = [list(row) for row in space.region_3d.perspective_matrix]
+    arr = _load_rgba(filepath)
+    size = (arr.shape[1], arr.shape[0])
+    drawn = skipped = 0
+    for layer in ann.layers:
+        if getattr(layer, "annotation_hide", False):
+            continue
+        frame = _shown_frame(layer, scene.frame_current)
+        if frame is None:
+            continue
+        color = tuple(layer.color)
+        thickness = getattr(layer, "thickness", 3)
+        opacity = getattr(layer, "annotation_opacity", 1.0)
+        for stroke in frame.strokes:
+            pts = [tuple(p.co) for p in stroke.points]
+            if len(pts) < 2:
+                continue
+            mode = str(getattr(stroke, "display_mode", "3DSPACE"))
+            if mode == "3DSPACE":
+                lines = ov.project_polyline(pts, matrix, size)
+            elif mode == "2DSPACE":
+                lines = ov.view_polyline(pts, size)
+            else:
+                skipped += 1
+                continue
+            if ov.paint_polylines(arr, lines, color, thickness, opacity):
+                drawn += 1
+    if drawn:
+        _save_rgba(arr, filepath)
+    out = {"drawn": drawn}
+    if skipped:
+        out["skipped"] = skipped
+    return out
