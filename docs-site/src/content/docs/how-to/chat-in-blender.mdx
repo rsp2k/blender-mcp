@@ -1,0 +1,85 @@
+---
+title: "Chat inside Blender"
+description: "Type requests into the add-on's Chat tab and a model carries them out in the same Blender, using the server's tools. Covers choosing a backend (the shared GPU gateway, a local model, or your own Claude API key), approvals for Python, and the wire contract between the add-on and the server."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The add-on has a **Chat** tab in the 3D Viewport sidebar. Type what you want ("put a 2 m cube on the table and box it so I can see it") and a model does it in the Blender you typed in, using the same tools an external MCP client would. Nothing else needs to be installed.
+
+The conversation runs on the server, not in Blender. The add-on sends your message as an ordinary MCP tool call over the connection it already has; the server asks the model, runs the tools it picks against your Blender, and streams progress back into the panel. Your API key, if you use one, is stored on the server encrypted and never kept in Blender's preferences file.
+
+## Pick a backend
+
+Open **Edit › Preferences › Add-ons › Blender MCP › Chat backend**:
+
+| Backend | What you need | Notes |
+|---|---|---|
+| Shared GPU gateway | Nothing; it's the default | Open models on the server operator's GPUs (qwen3 by default). One conversation turn at a time per account. |
+| Claude API | Your Anthropic API key | `claude-sonnet-5` by default; `claude-opus-5-5` selectable. |
+| OpenAI-compatible | A base URL, a model name, and a key if the endpoint needs one | Ollama, LiteLLM, vLLM, or a hosted OpenAI-style API. The URL must be reachable from the server. |
+
+Press **Save backend**. The key is sent once to the server and the field clears. To change it, enter a new one; to remove it, choose **Clear backend**.
+
+<Aside type="caution">
+With the OpenAI-compatible backend, the base URL is fetched by the server, not by your computer, so `http://localhost:11434` means the server's localhost. Use an address the server can reach.
+</Aside>
+
+## Approvals
+
+The model can run Python in your Blender only after you allow it. When it wants to, the Chat tab shows the code and **Allow** / **Deny**. Deny (or no answer within two minutes) tells the model you declined, and it carries on without it. Deleting objects asks the same way.
+
+## What the model can do
+
+A curated set of tools, not all of them: scene and object info, framing the view, looking at the viewport (a vision model describes a screenshot, annotations included), annotating objects, creating meshes and placing them, materials, viewport shading, a quick render from an axis, mesh checks, and Python behind an approval. The set is chosen on the server and may grow.
+
+## The transcript
+
+Recent messages show in the panel. The full conversation, including each tool the model ran, is written to a Blender text block named **BlenderMCP Chat**; **Open log** shows it in a Text Editor. It is saved with your .blend like any text block.
+
+## Wire contract
+
+This is the interface between the add-on and the server, for anyone building another client.
+
+### `blender_chat` (add-on role only)
+
+```text
+blender_chat(message: str, history: list[{role: "user"|"assistant", content: str}] | None)
+```
+
+- The server targets the Blender whose add-on made the call; there is no `target_uuid` argument.
+- `history` is the recent conversation, text only, at most 20 entries. The server keeps no conversation state.
+- The call is long-running (up to the server's turn limit, 5 minutes by default). Progress arrives as MCP progress notifications on the call; each `message` is a JSON object:
+
+```json
+{"t": "status", "text": "Thinking…"}
+{"t": "tool", "name": "create_mesh", "phase": "start"}
+{"t": "tool", "name": "create_mesh", "phase": "end", "ok": true, "ms": 412}
+{"t": "text", "text": "Added a 2 m cube named Table…"}
+```
+
+- The result is a JSON string:
+
+```json
+{"status": "ok", "reply": "…", "steps": [{"tool": "create_mesh", "ok": true, "ms": 412}], "elapsed_s": 9.8,
+ "backend": {"provider": "gateway", "model": "qwen3"}}
+```
+
+- Other statuses: `disabled` (chat is off on this server), `no_backend` (the gateway isn't available to this account and no backend is configured; `hint` says what to do), `busy` (a turn is already running for this account), `backend_error` (the model call failed; `detail` has the reason), `timeout`.
+
+### Approvals are MCP elicitation
+
+For a tool that needs approval, the server sends an `elicitation/create` request on the same session while the call is running. The message starts with `BlenderMCP approval:` and the requested schema has no fields, so the client answers **accept** (allow) or **decline** (deny). Clients should decline elicitations they don't recognise. Unanswered requests are declined by the server after 120 seconds.
+
+### `blender_set_chat_backend` (add-on role only)
+
+```text
+blender_set_chat_backend(provider: "gateway"|"anthropic"|"openai", model: str | None = None,
+                         base_url: str | None = None, api_key: str | None = None, clear: bool = False)
+```
+
+Returns `{"status": "ok", "backend": {"provider", "model", "base_url", "has_key"}}`; the key is never returned. `blender_get_chat_backend()` returns the same shape. Arguments to this tool are never recorded by the server's call logging.
+
+### Feature flag
+
+When chat is enabled, the result of `blender_register_client` includes `"features": ["chat"]`. The add-on shows the Chat tab only then.
