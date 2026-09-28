@@ -161,6 +161,14 @@ services:
       CHAT_TOOLS: ${CHAT_TOOLS:-}
       CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
       CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
+      # Server-wide backend for users who saved none (gateway | anthropic | openai).
+      CHAT_DEFAULT_PROVIDER: ${CHAT_DEFAULT_PROVIDER:-gateway}
+      CHAT_DEFAULT_MODEL: ${CHAT_DEFAULT_MODEL:-}
+      CHAT_DEFAULT_BASE_URL: ${CHAT_DEFAULT_BASE_URL:-}
+      CHAT_DEFAULT_API_KEY: ${CHAT_DEFAULT_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHAT_ANTHROPIC_FALLBACKS: ${CHAT_ANTHROPIC_FALLBACKS:-true}
+      CHAT_ANTHROPIC_EFFORT: ${CHAT_ANTHROPIC_EFFORT:-}
     networks:
       - caddy
       - internal
@@ -294,6 +302,14 @@ services:
       CHAT_TOOLS: ${CHAT_TOOLS:-}
       CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
       CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
+      # Server-wide backend for users who saved none (gateway | anthropic | openai).
+      CHAT_DEFAULT_PROVIDER: ${CHAT_DEFAULT_PROVIDER:-gateway}
+      CHAT_DEFAULT_MODEL: ${CHAT_DEFAULT_MODEL:-}
+      CHAT_DEFAULT_BASE_URL: ${CHAT_DEFAULT_BASE_URL:-}
+      CHAT_DEFAULT_API_KEY: ${CHAT_DEFAULT_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHAT_ANTHROPIC_FALLBACKS: ${CHAT_ANTHROPIC_FALLBACKS:-true}
+      CHAT_ANTHROPIC_EFFORT: ${CHAT_ANTHROPIC_EFFORT:-}
       # Force unbuffered output so uvicorn reload logs flush to `docker logs`.
       PYTHONUNBUFFERED: "1"
     volumes:

@@ -58,23 +58,58 @@ def decrypt(cfg: ChatConfig, token: str) -> str:
         raise ProviderError("the saved API key can't be decrypted any more; save it again") from e
 
 
+def server_default(cfg: ChatConfig) -> Backend | None:
+    """The server-wide backend (CHAT_DEFAULT_*), None when it lacks what it needs."""
+    if cfg.default_provider == "anthropic":
+        if not cfg.anthropic_api_key:
+            return None
+        return Backend("anthropic", cfg.default_model or DEFAULT_ANTHROPIC_MODEL,
+                       DEFAULT_ANTHROPIC_BASE_URL, cfg.anthropic_api_key)
+    if cfg.default_provider == "openai":
+        if not cfg.default_base_url or not cfg.default_model:
+            return None
+        return Backend("openai", cfg.default_model, cfg.default_base_url, cfg.default_api_key)
+    if not cfg.gpu_api_key:
+        return None
+    return Backend("gateway", cfg.default_model or cfg.model, cfg.gpu_base_url, cfg.gpu_api_key)
+
+
+def _own(row: ChatSettings | None) -> bool:
+    """A saved backend of the user's own (their key or URL). A saved "gateway"
+    row only means "the server's backend", so it follows the server default."""
+    return row is not None and row.provider in ("anthropic", "openai")
+
+
 def public_view(row: ChatSettings | None, cfg: ChatConfig) -> dict:
-    """What the add-on may see. Never the key."""
-    if row is None:
-        return {"provider": "gateway", "model": cfg.model, "base_url": None, "has_key": False}
-    return {
-        "provider": row.provider,
-        "model": row.model or {"gateway": cfg.model,
-                               "anthropic": DEFAULT_ANTHROPIC_MODEL}.get(row.provider),
-        "base_url": row.base_url,
-        "has_key": bool(row.api_key_enc),
-    }
+    """What the add-on may see. Never a key, the server's or the user's."""
+    if _own(row):
+        return {
+            "provider": row.provider,
+            "model": row.model or {"anthropic": DEFAULT_ANTHROPIC_MODEL}.get(row.provider),
+            "base_url": row.base_url,
+            "has_key": bool(row.api_key_enc),
+            "source": "user",
+        }
+    provider = cfg.default_provider
+    if provider == "gateway":
+        model = (row.model if row is not None else None) or cfg.default_model or cfg.model
+        has_key = False
+    elif provider == "anthropic":
+        model = cfg.default_model or DEFAULT_ANTHROPIC_MODEL
+        has_key = bool(cfg.anthropic_api_key)
+    else:
+        model = cfg.default_model or None
+        has_key = bool(cfg.default_api_key)
+    return {"provider": provider, "model": model, "base_url": None,
+            "has_key": has_key, "source": "server"}
 
 
 def backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> Backend | None:
     """The backend this user's turns go to, or None when they have none.
 
-    Raises ProviderError when a stored key can't be decrypted.
+    Precedence: the user's own saved backend, then the server default
+    (CHAT_DEFAULT_PROVIDER, gated by CHAT_GATEWAY_USERS like the gateway
+    always was). Raises ProviderError when a stored key can't be decrypted.
     """
     if row is not None and row.provider == "anthropic":
         return Backend("anthropic", row.model or DEFAULT_ANTHROPIC_MODEL,
@@ -83,10 +118,12 @@ def backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None)
     if row is not None and row.provider == "openai":
         return Backend("openai", row.model or "", row.base_url or "",
                        decrypt(cfg, row.api_key_enc) if row.api_key_enc else "")
-    if not cfg.gateway_allowed(user_sub):
+    if not cfg.user_allowed(user_sub):
         return None
-    model = (row.model if row is not None else None) or cfg.model
-    return Backend("gateway", model, cfg.gpu_base_url, cfg.gpu_api_key)
+    backend = server_default(cfg)
+    if backend is not None and backend.provider == "gateway" and row is not None and row.model:
+        backend = Backend("gateway", row.model, backend.base_url, backend.api_key)
+    return backend
 
 
 async def load(session_factory: Callable[[], Any], user_sub: str) -> ChatSettings | None:

@@ -1,7 +1,7 @@
 """Model backends for chat. One call shape for all of them:
 
     await complete(backend, system, messages, tools, max_tokens=..., timeout_s=...)
-        -> Completion(text, tool_calls)
+        -> Completion(text, tool_calls, raw)
 
 ``messages`` are MCP ``SamplingMessage``s and ``tools`` MCP ``Tool``s, as the
 sampling handler receives them; each provider converts to its wire format and
@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PROVIDERS = ("gateway", "anthropic", "openai")
+ANTHROPIC_ONLY = ("replay", "fallbacks", "effort")
 
 
 class ProviderError(Exception):
@@ -45,11 +46,20 @@ class ToolCall:
 class Completion:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Provider-native assistant content (Anthropic: thinking + text + tool_use
+    # blocks as returned), for replay in the next round. None when not needed.
+    raw: list[dict] | None = field(default=None, repr=False)
 
 
 async def complete(backend: Backend, system: str | None, messages, tools, **kw) -> Completion:
     if backend.provider == "anthropic":
         from .anthropic import complete as run
+
+        kw["transport"] = kw.pop("anthropic_transport", None)
     else:
         from .openai_compat import complete as run
+
+        kw.pop("anthropic_transport", None)
+        for k in ANTHROPIC_ONLY:
+            kw.pop(k, None)
     return await run(backend, system, messages, tools, **kw)
