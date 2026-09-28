@@ -151,6 +151,9 @@ def test_transcript_checks():
     r = run({"no_errors": {"tools_ok": True}}, s, turn=turn)
     assert not r["ok"] and r["observed"] == ["tool mesh_health failed"]
     assert not run({"reply_contains": "x"}, s, turn={})["ok"]
+    quoted = {"reply": 'Two: "Sphere_A" and **Sphere_B**.\nI can’t   do that.'}
+    assert run({"reply_contains": "sphere_a and sphere_b"}, s, turn=quoted)["ok"]
+    assert run({"reply_contains": "can't do that"}, s, turn=quoted)["ok"]
 
 
 def test_scene_unchanged():

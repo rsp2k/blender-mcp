@@ -405,11 +405,20 @@ def _texts(check) -> list[str]:
     return [t] if isinstance(t, str) else list(t)
 
 
+_NOISE = str.maketrans("", "", "\"'`*“”‘’")
+
+
+def _norm(text: str) -> str:
+    """Lowercase, without quotes, backticks or markdown emphasis, so
+    ``"Sphere_A" and **Sphere_B**`` matches ``sphere_a and sphere_b``."""
+    return " ".join(text.lower().translate(_NOISE).split())
+
+
 def _j_reply_contains(check, after, before, turn, i):
     reply = (turn.get("reply") or "")
-    low = reply.lower()
+    low = _norm(reply)
     texts = _texts(check)
-    hits = [t for t in texts if t.lower() in low]
+    hits = [t for t in texts if _norm(t) in low]
     # A list means "any of these" unless all: true.
     ok = len(hits) == len(texts) if check.get("all") else bool(hits)
     return _result(check, ok, reply[:240] or "(empty reply)")
@@ -417,7 +426,7 @@ def _j_reply_contains(check, after, before, turn, i):
 
 def _j_reply_not_contains(check, after, before, turn, i):
     reply = (turn.get("reply") or "")
-    hits = [t for t in _texts(check) if t.lower() in reply.lower()]
+    hits = [t for t in _texts(check) if _norm(t) in _norm(reply)]
     return _result(check, not hits, {"found": hits} if hits else "none found")
 
 
