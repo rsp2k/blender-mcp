@@ -38,6 +38,9 @@ dependencies = [
     "fastmcp-feedback[instrumentation]==2026.9.27.3",
     "shapely==2.1.2",
     "minio==7.2.20",
+    # In-Blender chat: Fernet for stored provider keys, httpx for model calls.
+    "cryptography>=48.0.0",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]

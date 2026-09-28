@@ -317,6 +317,24 @@ class ObjectStore:
 
         return await self._admin_call(run)
 
+    async def get_bytes(self, key: str, max_bytes: int) -> bytes:
+        """Read a small object over the internal endpoint (the chat's vision
+        step reads screenshots this way). Refuses objects over ``max_bytes``."""
+        await self.ensure_ready()
+
+        def run():
+            r = self._admin.get_object(self.config.bucket, key)
+            try:
+                data = r.read(max_bytes + 1)
+            finally:
+                r.close()
+                r.release_conn()
+            if len(data) > max_bytes:
+                raise StorageError("object_too_large", f"object is over {max_bytes} bytes")
+            return data
+
+        return await self._admin_call(run)
+
     async def delete(self, key: str) -> None:
         await self.ensure_ready()
         await self.stat(key)  # remove_object is silent on a missing key

@@ -368,7 +368,7 @@ class PersonalAccessToken(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Non-secret display handle, e.g. "bmcp_Ab3xYz9Q", for list/revoke.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -376,6 +376,12 @@ class PersonalAccessToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Matches migration 20260926_0004, which made uniqueness a named index
+    # (a column-level unique=True reads as a different object to alembic check).
+    __table_args__ = (
+        Index("ux_access_token_token_hash", "token_hash", unique=True),
+    )
 
 
 # bus_job.status values. Plain strings rather than a DB enum, so adding a
@@ -420,4 +426,26 @@ class BusJob(Base):
     __table_args__ = (
         Index("ix_bus_job_status_created", "status", "created_at"),
         Index("ix_bus_job_expires_at", "expires_at"),
+    )
+
+
+class ChatSettings(Base):
+    """A user's chat backend: the shared gateway, their Anthropic key, or an
+    OpenAI-compatible endpoint. No row = the gateway with the server default
+    model. ``api_key_enc`` is a Fernet token keyed from CHAT_SECRET_KEY; the
+    plaintext key never leaves the server.
+    """
+
+    __tablename__ = "chat_settings"
+
+    user_sub: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    base_url: Mapped[str | None] = mapped_column(String(512))
+    api_key_enc: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )

@@ -1,0 +1,205 @@
+"""One chat turn: model <-> tool rounds through ``ctx.sample_step``.
+
+``ctx.sample`` would run the loop itself, but its cap is a fixed 100 rounds
+and it has no hook for progress, so the rounds are driven here one
+``sample_step`` at a time. Tools are SamplingTools whose functions report
+progress, ask for approval, and call the real tools through the executor.
+
+Progress events (JSON in the progress notification's ``message``) follow the
+wire contract in docs-site/.../how-to/chat-in-blender.mdx.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from collections import Counter
+from typing import Any
+
+from fastmcp.exceptions import ToolError
+from fastmcp.server.sampling import SamplingTool
+from mcp.types import SamplingMessage, TextContent
+
+from . import vision
+from .catalog import LOOK, Entry
+from .config import ChatConfig
+from .providers import Backend
+from .providers.openai_compat import INVALID_ARGS
+
+logger = logging.getLogger(__name__)
+
+APPROVAL_PREFIX = "BlenderMCP approval:"
+EMPTY_SCHEMA = {"type": "object", "properties": {}}
+MAX_RESULT_CHARS = 8000
+MAX_SCENE_CHARS = 3000
+MAX_HISTORY = 20
+MAX_HISTORY_CHARS = 4000
+DUPLICATE_LIMIT = 2  # the same call (name + args) this many times, then refused
+DECLINED = ("The user declined this action (or did not answer in time). Do not retry "
+            "it; carry on without it, or ask the user what they want instead.")
+FINAL_NUDGE = ("You have used all the tool steps for this message. Reply to the user now "
+               "in plain text: what you did, and anything left undone. Do not call tools.")
+
+SYSTEM_PROMPT = """You are the assistant in the Chat tab of the BlenderMCP add-on, inside the \
+user's own Blender. Every tool you call acts on that Blender. Units are metres and Z is up.
+
+- Use the specific tools where one fits. execute_code runs Python only after the user \
+clicks Allow, so use it when nothing else fits and keep the code short and focused.
+- When placement or appearance matters, check your work (get_object_info, world_bounds, \
+or look_at_viewport when it is offered).
+- If the user declines an action, don't try it again.
+- Reply briefly in plain text: what you did and what you found. No tool-call syntax."""
+
+
+def history_messages(history: list[dict] | None) -> list[SamplingMessage]:
+    """The add-on's recent conversation as sampling messages (text only)."""
+    out: list[SamplingMessage] = []
+    for h in (history or [])[-MAX_HISTORY:]:
+        if not isinstance(h, dict):
+            continue
+        role, content = h.get("role"), h.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            continue
+        out.append(SamplingMessage(role=role, content=TextContent(
+            type="text", text=content[:MAX_HISTORY_CHARS])))
+    return out
+
+
+class Turn:
+    def __init__(self, ctx, cfg: ChatConfig, handler, backend: Backend, executor,
+                 catalog: list[Entry], user_sub: str):
+        self.ctx = ctx
+        self.cfg = cfg
+        self.handler = handler
+        self.backend = backend
+        self.executor = executor
+        self.catalog = catalog
+        self.user_sub = user_sub
+        self.steps: list[dict] = []
+        self.reply = ""
+        self._progress = 0
+        self._seen: Counter[str] = Counter()
+        self._refusals = 0
+
+    # ---- progress ---------------------------------------------------------
+
+    async def emit(self, event: dict) -> None:
+        self._progress += 1
+        try:
+            await self.ctx.report_progress(self._progress, None, json.dumps(event))
+        except Exception as e:  # noqa: BLE001 - a vanished client must not end the turn
+            logger.debug("chat progress not delivered: %s", type(e).__name__)
+
+    # ---- approvals --------------------------------------------------------
+
+    async def approve(self, entry: Entry, args: dict) -> bool:
+        action = entry.policy.action or f"call {entry.name}"
+        message = f"{APPROVAL_PREFIX} the assistant wants to {action}.\n\n{entry.policy.preview(args)}"
+        await self.emit({"t": "status", "text": "Waiting for your approval…"})
+        try:
+            res = await asyncio.wait_for(
+                self.ctx.session.elicit_form(
+                    message=message, requestedSchema=EMPTY_SCHEMA,
+                    related_request_id=self.ctx.request_id,
+                ),
+                timeout=self.cfg.approval_timeout_s,
+            )
+        except TimeoutError:
+            return False
+        except Exception as e:  # noqa: BLE001 - client can't elicit: treat as a decline
+            logger.info("chat approval unavailable: %s", type(e).__name__)
+            return False
+        return getattr(res, "action", None) == "accept"
+
+    # ---- tools ------------------------------------------------------------
+
+    def sampling_tools(self) -> list[SamplingTool]:
+        return [SamplingTool(name=e.name, description=e.description, parameters=e.parameters,
+                             fn=self._tool_fn(e), sequential=True) for e in self.catalog]
+
+    def _tool_fn(self, entry: Entry):
+        async def fn(**kwargs: Any) -> str:
+            return await self.run_tool(entry, kwargs)
+        return fn
+
+    async def run_tool(self, entry: Entry, args: dict) -> str:
+        if INVALID_ARGS in args:
+            raise ToolError(f"The arguments for {entry.name} were not valid JSON; send a JSON object.")
+        sig = entry.name + json.dumps(args, sort_keys=True, default=str)
+        self._seen[sig] += 1
+        if self._seen[sig] > DUPLICATE_LIMIT:
+            self._refusals += 1
+            raise ToolError(f"You already made this exact {entry.name} call {DUPLICATE_LIMIT} "
+                            "times. Use the earlier result or do something different.")
+
+        await self.emit({"t": "tool", "name": entry.name, "phase": "start"})
+        t0 = time.monotonic()
+        try:
+            if entry.policy.needs_confirm(args) and not await self.approve(entry, args):
+                ok, text = False, DECLINED
+            elif entry.name == LOOK:
+                vb = vision.vision_backend(self.cfg, self.user_sub, self.backend)
+                if vb is None:
+                    ok, text = False, "Looking at the viewport is not available."
+                else:
+                    ok, text = await vision.look(self.executor, self.handler, vb,
+                                                 str(args.get("question") or ""))
+            else:
+                ok, text = await self.executor.call(entry.server_name, args)
+        except Exception as e:  # noqa: BLE001 - reported to the model as a failed step
+            ok, text = False, f"{entry.name} failed: {type(e).__name__}: {e}"
+        ms = int((time.monotonic() - t0) * 1000)
+        self.steps.append({"tool": entry.name, "ok": ok, "ms": ms})
+        await self.emit({"t": "tool", "name": entry.name, "phase": "end", "ok": ok, "ms": ms})
+        if len(text) > MAX_RESULT_CHARS:
+            text = text[:MAX_RESULT_CHARS] + f"\n… (truncated, {len(text)} characters in all)"
+        if not ok:
+            raise ToolError(text)
+        return text
+
+    # ---- the loop ---------------------------------------------------------
+
+    async def system_prompt(self) -> str:
+        if not any(e.name == "get_scene_info" for e in self.catalog):
+            return SYSTEM_PROMPT
+        await self.emit({"t": "status", "text": "Reading the scene…"})
+        try:
+            ok, scene = await self.executor.call("blender_get_scene_info", {})
+        except Exception:  # noqa: BLE001 - the summary is optional
+            ok, scene = False, ""
+        if not ok or not scene:
+            return SYSTEM_PROMPT
+        return f"{SYSTEM_PROMPT}\n\nThe scene right now (JSON, may be cut short):\n{scene[:MAX_SCENE_CHARS]}"
+
+    async def run(self, message: str, history: list[dict] | None) -> str:
+        system = await self.system_prompt()
+        messages: list[SamplingMessage] = history_messages(history)
+        messages.append(SamplingMessage(role="user", content=TextContent(type="text", text=message)))
+        tools = self.sampling_tools()
+
+        for _ in range(self.cfg.max_steps):
+            await self.emit({"t": "status", "text": "Thinking…"})
+            step = await self.ctx.sample_step(
+                messages, system_prompt=system, tools=tools, max_tokens=self.cfg.max_tokens,
+            )
+            if step.text:
+                await self.emit({"t": "text", "text": step.text})
+            if not step.is_tool_use:
+                self.reply = step.text or ""
+                return self.reply
+            messages = step.history
+            if self._refusals >= DUPLICATE_LIMIT:
+                break  # the model keeps repeating itself
+
+        messages = [*messages, SamplingMessage(role="user", content=TextContent(type="text", text=FINAL_NUDGE))]
+        await self.emit({"t": "status", "text": "Wrapping up…"})
+        step = await self.ctx.sample_step(
+            messages, system_prompt=system, tools=tools, tool_choice="none",
+            execute_tools=False, max_tokens=self.cfg.max_tokens,
+        )
+        self.reply = step.text or (f"I stopped after {len(self.steps)} tool calls without "
+                                   "finishing. Ask me to continue if you want more.")
+        await self.emit({"t": "text", "text": self.reply})
+        return self.reply

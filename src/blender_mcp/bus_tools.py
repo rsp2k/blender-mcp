@@ -225,6 +225,10 @@ class BlenderBusComponent(MCPMixin):
         # install unregisters the addon while its own operator is still
         # running). Those installs still update through Blender's own
         # Extensions updater, which calls from Blender's code, not ours.
+        from .chat.config import load_config as _chat_config
+
+        if _chat_config().enabled:
+            response["features"] = ["chat"]
         if LATEST_ADDON_VERSION and addon_version:
             response["server"] = {
                 "latest_addon_version": LATEST_ADDON_VERSION,
