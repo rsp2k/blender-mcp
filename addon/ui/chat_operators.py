@@ -75,18 +75,39 @@ class BLENDERMCP_OT_ChatOpenLog(bpy.types.Operator):
 
 
 class BLENDERMCP_OT_ChatClear(bpy.types.Operator):
-    """Clear the messages shown in the Chat tab"""
+    """Delete the conversation on screen"""
 
     bl_idname = "blendermcp.chat_clear"
-    bl_label = "Clear"
+    bl_label = "Delete chat"
     bl_description = (
-        "Clear the panel and start a fresh conversation. "
+        "Delete this conversation, on screen and from your saved chats. "
         "The text-block log is kept"
     )
 
     def execute(self, context):
-        chat_state.clear()
+        from ..chat import history
+        if chat_state.busy:
+            self.report({'WARNING'}, "Wait for the reply, or press Stop first")
+            return {'CANCELLED'}
+        folder = chat_client.chats_dir()
+        if folder and chat_state.conversation_id:
+            history.delete(folder, chat_state.conversation_id)
+        chat_state.load_conversation(None, [])
         chat_client.request_redraw()
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatNew(bpy.types.Operator):
+    """Start a new conversation; the current one stays in your saved chats"""
+
+    bl_idname = "blendermcp.chat_new"
+    bl_label = "New chat"
+    bl_description = "Start a new conversation. The current one is kept in the chat picker"
+
+    def execute(self, context):
+        if not chat_client.new_conversation():
+            self.report({'WARNING'}, "Wait for the reply, or press Stop first")
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -183,6 +204,7 @@ class BLENDERMCP_OT_RefreshChatBackend(bpy.types.Operator):
 
 
 CHAT_OPERATORS = (
+    BLENDERMCP_OT_ChatNew,
     BLENDERMCP_OT_ChatSend,
     BLENDERMCP_OT_ChatStop,
     BLENDERMCP_OT_ChatOpenLog,

@@ -122,15 +122,60 @@ def result_message(payload: dict | None) -> tuple[str, str]:
     return "error", base
 
 
+def format_duration(ms: Any) -> str:
+    """Tool timing in seconds: "0.39 s", "4.3 s", "1m 25s"."""
+    if not isinstance(ms, (int, float)):
+        return ""
+    s = max(0.0, float(ms) / 1000.0)
+    if s < 10:
+        return f"{s:.2f} s"
+    if s < 60:
+        return f"{s:.1f} s"
+    return f"{int(s // 60)}m {int(s % 60):02d}s"
+
+
+def tool_line(entry: dict) -> str:
+    """One transcript line for a tool step, with any approval wait."""
+    text = str(entry.get("name") or "?")
+    took = format_duration(entry.get("ms"))
+    if took:
+        text += f"  {took}"
+    waited = entry.get("wait_ms")
+    if isinstance(waited, (int, float)) and waited >= 1000:
+        text += f" · waited {format_duration(waited)} for you"
+    return text
+
+
+ROLE_ICONS = {"user": "USER", "assistant": "MONKEY", "error": "ERROR", "status": "INFO"}
+
+
+def transcript_rows(messages: list, wrap: Any) -> list[dict]:
+    """Messages as list rows for the Chat tab: wrapped lines, the speaker's icon
+    on each message's first line, and one empty row at the end that the list
+    keeps active so it scrolls to the newest message."""
+    rows: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "tool":
+            ok = m.get("ok")
+            icon = "TIME" if ok is None else ("CHECKMARK" if ok else "ERROR")
+            rows.append({"role": "tool", "text": tool_line(m), "icon": icon})
+            continue
+        lines = wrap(m.get("text") or "") or [""]
+        for i, line in enumerate(lines):
+            rows.append({"role": role or "status", "text": line,
+                         "icon": ROLE_ICONS.get(role, "INFO") if i == 0 else "BLANK1"})
+    rows.append({"role": "spacer", "text": "", "icon": "NONE"})
+    return rows
+
+
 def format_log_line(entry: dict, when: float | None = None) -> str:
     stamp = time.strftime("%H:%M:%S", time.localtime(when if when is not None else time.time()))
     role = entry.get("role")
     text = entry.get("text") or ""
     if role == "tool":
         mark = "ok" if entry.get("ok") else "failed"
-        ms = entry.get("ms")
-        timing = f" {int(ms)} ms" if isinstance(ms, (int, float)) else ""
-        return f"[{stamp}]   tool {entry.get('name')} {mark}{timing}"
+        return f"[{stamp}]   tool {tool_line(entry)} {mark}"
     label = {"user": "You", "assistant": "Assistant", "error": "Error"}.get(role, "Note")
     body = text.replace("\n", "\n    ")
     return f"[{stamp}] {label}: {body}"
@@ -160,12 +205,17 @@ class ChatState:
         # In-flight call: concurrent future, progress handler, bus client.
         self.inflight: tuple | None = None
         self._log = collections.deque()
+        # The saved conversation these messages belong to (history.py).
+        self.conversation_id: str | None = None
+        # Bumped on every transcript change, so the panel knows to rebuild rows.
+        self.revision = 0
 
     # --- transcript -------------------------------------------------------
 
     def add_message(self, role: str, text: str, log: bool = True, **extra: Any) -> dict:
         entry = {"role": role, "text": text, "turn": self.turn, **extra}
         with self.lock:
+            self.revision += 1
             self.messages.append(entry)
             del self.messages[:-MESSAGE_LIMIT]
             if log:
@@ -187,10 +237,32 @@ class ChatState:
 
     def clear(self) -> None:
         with self.lock:
+            self.revision += 1
             self.messages.clear()
             self.last_error = None
             if not self.busy:
                 self.status = ""
+
+    def load_conversation(self, conversation_id: str | None, messages: list) -> bool:
+        """Show a saved conversation. Refused while a turn is running."""
+        with self.lock:
+            if self.busy:
+                return False
+            restored = [dict(m) for m in messages if isinstance(m, dict)][-MESSAGE_LIMIT:]
+            for m in restored:
+                if m.get("role") == "tool" and m.get("ok") is None:
+                    m["ok"] = False
+            self.messages = restored
+            self.conversation_id = conversation_id
+            self.turn = max([m.get("turn", 0) for m in restored if isinstance(m.get("turn"), int)] or [0])
+            self.last_error = None
+            self.status = ""
+            self.revision += 1
+            return True
+
+    def export(self) -> tuple[str | None, list[dict]]:
+        with self.lock:
+            return self.conversation_id, [dict(m) for m in self.messages]
 
     # --- turns ------------------------------------------------------------
 
@@ -225,15 +297,16 @@ class ChatState:
                     self.status = f"Running {name}…"
                     self.add_message("tool", "", log=False, name=name, ok=None, ms=None)
                     return
-                ok, ms = bool(event.get("ok")), event.get("ms")
+                ok, ms, wait = bool(event.get("ok")), event.get("ms"), event.get("wait_ms")
                 for entry in reversed(self.messages):
                     if (entry.get("role") == "tool" and entry.get("name") == name
                             and entry.get("ok") is None and entry.get("turn") == self.turn):
-                        entry["ok"], entry["ms"] = ok, ms
+                        entry["ok"], entry["ms"], entry["wait_ms"] = ok, ms, wait
+                        self.revision += 1
                         self._log.append(format_log_line(entry))
                         break
                 else:
-                    self.add_message("tool", "", name=name, ok=ok, ms=ms)
+                    self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait)
 
     def finish_turn(self, turn: int, role: str, text: str,
                     payload: dict | None = None) -> bool:
@@ -245,6 +318,7 @@ class ChatState:
             self.busy = False
             self.status = ""
             self.inflight = None
+            self.revision += 1
             # Tools that never reported an end are shown as failed.
             for entry in self.messages:
                 if entry.get("role") == "tool" and entry.get("turn") == turn and entry.get("ok") is None:
@@ -302,6 +376,8 @@ class ChatState:
                 "backend_error": self.backend_error,
                 "backend_used": dict(self.backend_used) if self.backend_used else None,
                 "turn_started_at": self.turn_started_at,
+                "revision": self.revision,
+                "conversation_id": self.conversation_id,
             }
 
 

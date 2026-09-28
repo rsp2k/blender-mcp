@@ -52,6 +52,70 @@ def schedule_log_flush() -> None:
         pass
 
 
+def chats_dir() -> str | None:
+    """Where saved conversations live: Blender's config folder, which persists
+    across restarts (and container recreates, on the config volume)."""
+    try:
+        import bpy
+        return bpy.utils.user_resource('CONFIG', path="blender_mcp/chats", create=True)
+    except Exception:  # noqa: BLE001 - chat still works, it just isn't saved
+        return None
+
+
+def persist_current() -> None:
+    """Save the conversation on screen. Main thread (timer or operator)."""
+    from . import history
+    folder = chats_dir()
+    cid, messages = chat_state.export()
+    if folder and cid and messages:
+        try:
+            history.save(folder, cid, messages)
+        except OSError as e:
+            print(f"[BlenderMCP] couldn't save chat: {e}")
+
+
+def schedule_persist() -> None:
+    try:
+        import bpy
+        if not bpy.app.timers.is_registered(persist_current):
+            bpy.app.timers.register(persist_current, first_interval=0.0)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+
+def open_conversation(cid: str) -> bool:
+    """Switch the panel to a saved conversation (saving the current one first)."""
+    from . import history
+    folder = chats_dir()
+    if not folder or chat_state.busy:
+        return False
+    persist_current()
+    ok = chat_state.load_conversation(cid, history.load(folder, cid))
+    request_redraw()
+    return ok
+
+
+def new_conversation() -> bool:
+    if chat_state.busy:
+        return False
+    persist_current()
+    ok = chat_state.load_conversation(None, [])
+    request_redraw()
+    return ok
+
+
+def restore_latest() -> None:
+    """At startup, bring back the most recent conversation. Main thread."""
+    from . import history
+    folder = chats_dir()
+    if not folder or chat_state.has_messages():
+        return
+    latest = history.listing(folder)[:1]
+    if latest:
+        chat_state.load_conversation(latest[0]["id"], history.load(folder, latest[0]["id"]))
+        request_redraw()
+
+
 def _live_client() -> Any | None:
     from .. import connection, state
     client = state._client
@@ -119,6 +183,7 @@ def _finish_from_future(fut: Any, turn: int) -> None:
                 role, text = result_message(payload)
                 chat_state.finish_turn(turn, role, text, payload)
     schedule_log_flush()
+    schedule_persist()
     request_redraw()
 
 
@@ -133,7 +198,11 @@ def send(text: str) -> tuple[bool, str | None]:
         request_redraw()
         return False, problem
     client = _live_client()
+    if chat_state.conversation_id is None:
+        from .history import new_id
+        chat_state.conversation_id = new_id()
     history = chat_state.begin_turn(text)
+    schedule_persist()
     turn = chat_state.turn
     handler = _make_progress_handler(turn)
     try:

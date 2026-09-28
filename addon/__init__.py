@@ -47,7 +47,7 @@ from ._version import __version__, tuple_version
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (2026, 927, 12),  # MUST match addon/_version.py:tuple_version
+    "version": (2026, 927, 13),  # MUST match addon/_version.py:tuple_version
     "blender": (3, 2, 0),  # uses bpy.context.temp_override (3.2+)
     "location": "View3D > Sidebar > BlenderMCP",
     "description": (
@@ -219,6 +219,8 @@ def register():
         bpy.utils.register_class(cls)
     from .ui import statusbar as _statusbar
     _statusbar.register()
+    from .ui import chat_transcript as _chat_transcript
+    _chat_transcript.register_props()
 
     # One-shot migration from legacy Scene properties (pre-Phase-8 installs).
     # Runs against bpy.context.scene if available; safe to no-op otherwise.
@@ -308,6 +310,8 @@ def unregister():
 
     from .ui import statusbar as _statusbar
     _statusbar.unregister()
+    from .ui import chat_transcript as _chat_transcript
+    _chat_transcript.unregister_props()
 
     # A chat turn or approval still in flight belonged to the client that
     # was just stopped; drop it so a re-registered add-on starts clean.

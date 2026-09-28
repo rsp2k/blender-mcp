@@ -13,8 +13,8 @@ import bpy
 
 from .. import connection, state
 from ..chat.state import approval_preview, chat_state, wrap_text
+from .chat_transcript import draw_transcript
 
-VISIBLE_MESSAGES = 12
 PREVIEW_LINES = 8
 
 
@@ -57,11 +57,14 @@ def _draw_approval(layout, snap, wrap) -> None:
         return
     box = layout.box()
     col = box.column(align=True)
-    col.label(text="The model wants to run this", icon='HAND')
     lines, cut = approval_preview(prompt, PREVIEW_LINES)
+    first = True
     for line in lines:
         for piece in wrap(line, reserve=30.0) or [""]:
-            col.label(text=piece)
+            # The server's first line says what the model wants to do.
+            col.label(text=piece[:1].upper() + piece[1:] if first else piece,
+                      icon='HAND' if first else 'NONE')
+            first = False
     if cut:
         col.label(text=f"…{cut} more line(s) in the log", icon='TEXT')
     if snap["approval_since"]:
@@ -70,31 +73,6 @@ def _draw_approval(layout, snap, wrap) -> None:
     row = col.row(align=True)
     row.operator("blendermcp.chat_allow", text="Allow", icon='CHECKMARK')
     row.operator("blendermcp.chat_deny", text="Deny", icon='CANCEL')
-
-
-def _draw_message(layout, msg, wrap) -> None:
-    role = msg.get("role")
-    if role == "tool":
-        ok = msg.get("ok")
-        icon = 'TIME' if ok is None else ('CHECKMARK' if ok else 'ERROR')
-        ms = msg.get("ms")
-        timing = f"  {int(ms)} ms" if isinstance(ms, (int, float)) else ""
-        row = layout.row()
-        row.scale_y = 0.8
-        row.label(text=f"{msg.get('name')}{timing}", icon=icon)
-        return
-    text = msg.get("text") or ""
-    if role == "user":
-        box = layout.box()
-        _label_lines(box.column(align=True), wrap(text, reserve=50.0), 'USER')
-    elif role == "assistant":
-        _label_lines(layout.column(align=True), wrap(text), 'MONKEY')
-    elif role == "error":
-        _label_lines(layout.column(align=True), wrap(text), 'ERROR', alert=True)
-    else:
-        col = layout.column(align=True)
-        col.scale_y = 0.8
-        _label_lines(col, wrap(text), 'INFO')
 
 
 class BLENDERMCP_PT_Chat(bpy.types.Panel):
@@ -113,17 +91,20 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
         snap = chat_state.snapshot()
         wrap = _wrapper(context)
 
+        row = layout.row(align=True)
+        row.enabled = not snap["busy"]
+        row.prop(context.window_manager, "blendermcp_chat_conversation", text="", icon='OUTLINER_DATA_GP_LAYER')
+        row.operator("blendermcp.chat_new", text="", icon='ADD')
+
         notice = _notice(context, snap)
         if notice:
             _label_lines(layout.column(align=True), wrap(notice[0]), notice[1])
 
         _draw_approval(layout, snap, wrap)
 
-        messages = snap["messages"][-VISIBLE_MESSAGES:]
+        messages = snap["messages"]
         if messages:
-            col = layout.column()
-            for msg in messages:
-                _draw_message(col, msg, wrap)
+            draw_transcript(layout, context)
         elif not notice:
             layout.label(text="Ask for something in this scene.", icon='MONKEY')
 
@@ -151,7 +132,7 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.operator("blendermcp.chat_open_log", text="Open log", icon='TEXT')
-        row.operator("blendermcp.chat_clear", text="Clear", icon='TRASH')
+        row.operator("blendermcp.chat_clear", text="Delete chat", icon='TRASH')
         used = snap["backend_used"]
         if used and used.get("model"):
             sub = layout.row()

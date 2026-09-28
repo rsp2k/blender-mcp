@@ -600,3 +600,28 @@ async def test_catalog_strips_aiming_args_and_filters(cfg, sessions):
     custom = {e.name for e in await build_catalog(
         h.server, frozenset({"blender_create_mesh", "list_buses", "submit", "missing"}))}
     assert custom == {"create_mesh"}
+
+
+async def test_time_waiting_for_approval_is_reported_apart(cfg, sessions):
+    models = FakeModels(oa_call("execute_code", {"code": "print(1)"}), oa_text("Ran it."))
+    h = Harness(cfg, models, sessions)
+
+    async def slow_click(message, response_type, params, context):
+        await asyncio.sleep(0.3)  # the user takes a moment
+        return ElicitResult(action="accept")
+
+    h._elicit = slow_click
+    async with h.client() as client:
+        out = await h.chat(client)
+    step = out["steps"][0]
+    assert step["wait_ms"] >= 300 and step["ms"] < step["wait_ms"]
+    end = [e for e in h.events if e.get("t") == "tool" and e.get("phase") == "end"][0]
+    assert end["wait_ms"] == step["wait_ms"] and end["ms"] == step["ms"]
+
+
+async def test_steps_without_approval_carry_no_wait(cfg, sessions):
+    models = FakeModels(oa_call("get_scene_info", {}), oa_text("Here it is."))
+    h = Harness(cfg, models, sessions)
+    async with h.client() as client:
+        out = await h.chat(client)
+    assert "wait_ms" not in out["steps"][0]

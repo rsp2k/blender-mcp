@@ -55,9 +55,11 @@ blender_chat(message: str, history: list[{role: "user"|"assistant", content: str
 {"t": "status", "text": "Thinking…"}
 {"t": "tool", "name": "create_mesh", "phase": "start"}
 {"t": "tool", "name": "create_mesh", "phase": "end", "ok": true, "ms": 412}
+{"t": "tool", "name": "execute_code", "phase": "end", "ok": true, "ms": 4310, "wait_ms": 81200}
 {"t": "text", "text": "Added a 2 m cube named Table…"}
 ```
 
+- `ms` is the tool's own time. `wait_ms` appears only when the step asked for approval, and is the time spent waiting for the user.
 - The result is a JSON string:
 
 ```json

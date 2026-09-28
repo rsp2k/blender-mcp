@@ -49,6 +49,8 @@ user's own Blender. Every tool you call acts on that Blender. Units are metres a
 clicks Allow, so use it when nothing else fits and keep the code short and focused.
 - When placement or appearance matters, check your work (get_object_info, world_bounds, \
 or look_at_viewport when it is offered).
+- When framing with set_view, use a three-quarter angle (iso) unless the user asks for a \
+specific view: straight-on views of flat objects read as a blank rectangle.
 - If the user declines an action, don't try it again.
 - Reply briefly in plain text: what you did and what you found. No tool-call syntax."""
 
@@ -136,8 +138,15 @@ class Turn:
 
         await self.emit({"t": "tool", "name": entry.name, "phase": "start"})
         t0 = time.monotonic()
+        wait_ms = None
         try:
-            if entry.policy.needs_confirm(args) and not await self.approve(entry, args):
+            approved = True
+            if entry.policy.needs_confirm(args):
+                w0 = time.monotonic()
+                approved = await self.approve(entry, args)
+                # Time spent on the user, reported apart from the tool's own time.
+                wait_ms = int((time.monotonic() - w0) * 1000)
+            if not approved:
                 ok, text = False, DECLINED
             elif entry.name == LOOK:
                 vb = vision.vision_backend(self.cfg, self.user_sub, self.backend)
@@ -150,9 +159,12 @@ class Turn:
                 ok, text = await self.executor.call(entry.server_name, args)
         except Exception as e:  # noqa: BLE001 - reported to the model as a failed step
             ok, text = False, f"{entry.name} failed: {type(e).__name__}: {e}"
-        ms = int((time.monotonic() - t0) * 1000)
-        self.steps.append({"tool": entry.name, "ok": ok, "ms": ms})
-        await self.emit({"t": "tool", "name": entry.name, "phase": "end", "ok": ok, "ms": ms})
+        ms = int((time.monotonic() - t0) * 1000) - (wait_ms or 0)
+        step = {"tool": entry.name, "ok": ok, "ms": ms}
+        if wait_ms is not None:
+            step["wait_ms"] = wait_ms
+        self.steps.append(step)
+        await self.emit({"t": "tool", "name": entry.name, "phase": "end", **{k: v for k, v in step.items() if k != "tool"}})
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + f"\n… (truncated, {len(text)} characters in all)"
         if not ok:
