@@ -26,7 +26,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy.props import (
+    BoolProperty,
+    CollectionProperty,
+    EnumProperty,
+    IntProperty,
+    StringProperty,
+)
+
+from .tool_servers.props import BLENDERMCP_PG_ToolServer
 
 if TYPE_CHECKING:
     pass
@@ -592,6 +600,12 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         default="",
     )
 
+    # --- Tool servers (Bring Your Own Tools) ---
+    # Commands and addresses live only here; the server names which one to
+    # call and the add-on looks it up (addon/tool_servers/bridge.py).
+    tool_servers: CollectionProperty(type=BLENDERMCP_PG_ToolServer)
+    tool_servers_index: IntProperty(default=0)
+
     def draw(self, context):
         """Draw the prefs panel in Edit > Preferences > Add-ons > BlenderMCP."""
         layout = self.layout
@@ -625,6 +639,11 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         # --- Chat backend ---
         layout.separator()
         draw_chat_backend_section(layout, self)
+
+        # --- Tool servers ---
+        layout.separator()
+        from .ui.tool_servers_ui import draw_tool_servers_section
+        draw_tool_servers_section(layout, self)
 
         # --- Asset integrations ---
         layout.separator()

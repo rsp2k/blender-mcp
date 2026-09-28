@@ -191,9 +191,12 @@ def register():
     from . import state  # noqa: F401  (re-imported here to make the symbol exist on `addon`)
     from .client.bus_client import ensure_fastmcp, fastmcp_problem_lines
     from .preferences import BlenderMCPPreferences, migrate_from_scene
+    from .tool_servers.props import BLENDERMCP_PG_ToolServer
     from .ui import CLASSES as _CLASSES
 
     # AddonPreferences is the home for all user config since Phase 8.
+    # Its tool_servers CollectionProperty needs the item type registered first.
+    bpy.utils.register_class(BLENDERMCP_PG_ToolServer)
     bpy.utils.register_class(BlenderMCPPreferences)
 
     # Transient Scene props (per-session state that never leaves Blender).
@@ -298,6 +301,14 @@ def unregister():
     except Exception as e:
         print(f"[BlenderMCP] Error stopping background workers: {e}")
 
+    # Stop the user's tool servers (and their loop thread) before the bus
+    # client, so none of them outlives the add-on.
+    try:
+        from .tool_servers.bridge import shutdown as stop_tool_servers
+        stop_tool_servers()
+    except Exception as e:
+        print(f"[BlenderMCP] Error stopping tool servers: {e}")
+
     # Stop any running client; state owns the singletons since phase 6.
     if state._client is not None:
         try:
@@ -340,6 +351,19 @@ def unregister():
     # Unregister AddonPreferences last (panel/operators reference it).
     try:
         bpy.utils.unregister_class(BlenderMCPPreferences)
+    except Exception:
+        pass
+    try:
+        from .tool_servers.props import BLENDERMCP_PG_ToolServer
+        bpy.utils.unregister_class(BLENDERMCP_PG_ToolServer)
+    except Exception:
+        pass
+    # Timers must not fire into a torn-down module.
+    try:
+        from .tool_servers import bridge as _ts_bridge
+        for fn in (_ts_bridge._sync_timer, _ts_bridge._registered_timer):
+            if bpy.app.timers.is_registered(fn):
+                bpy.app.timers.unregister(fn)
     except Exception:
         pass
 
