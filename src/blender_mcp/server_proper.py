@@ -399,6 +399,8 @@ def build_http_mcp() -> FastMCP:
     # always; blender_chat answers "disabled" unless CHAT_ENABLED is set.
     from .chat.tools import BlenderChatComponent
     BlenderChatComponent(chat_handler).register_tools(mcp_server=server, prefix="blender")
+    from .chat.report_tools import BlenderUserToolsComponent
+    BlenderUserToolsComponent().register_tools(mcp_server=server, prefix="blender")
 
     # Bus-driven extension install (consent-gated via the addon's
     # sidebar banner). Companion list_installed_extensions is a plain

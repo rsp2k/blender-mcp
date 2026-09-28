@@ -265,6 +265,9 @@ class MessageBus:
             # Drop the session→uuid index entry too.
             if self._manager is not None and removed.session is not None:
                 self._manager.forget_session(removed.session)
+            # Tools its add-on reported for chat go with it.
+            from .chat.user_tools import registry as user_tool_sets
+            user_tool_sets.forget(self.bus_id, client_uuid)
             self.last_activity = time.time()
             logger.info("Unregistered client %s on bus %s", client_uuid, self.bus_id)
         return removed is not None

@@ -65,11 +65,15 @@ class BlenderJobComponent(MCPMixin):
         ``{"status": "queued", "job_id": ...}``; follow up with
         blender_job_status(job_id, wait_seconds=50) and blender_job_result.
         """
+        from .chat.user_tools import COMMAND as USER_TOOL_COMMAND
         from .dispatch_component import _new_job_id, _pick_blender_target, _route_job
 
         user_id = _resolve_user_id(ctx)
         if not user_id:
             return _err("unauthenticated")
+        if command == USER_TOOL_COMMAND:
+            # Only the Blender's own chat may reach its tool servers.
+            return _err("chat_only_command", command=command)
         resolved = await resolve_bus(user_id, bus_id)
         if not resolved["ok"]:
             return json.dumps(resolved)

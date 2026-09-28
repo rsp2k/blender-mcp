@@ -279,6 +279,13 @@ class BlenderBusComponent(MCPMixin):
         if not user_id:
             return json.dumps({"status": "error", "error": "unauthenticated"})
 
+        from .chat.user_tools import COMMAND as USER_TOOL_COMMAND
+
+        if isinstance(payload, dict) and payload.get("command") == USER_TOOL_COMMAND:
+            # Only the Blender's own chat may reach its tool servers.
+            return json.dumps({"status": "error", "error": "chat_only_command",
+                               "command": USER_TOOL_COMMAND})
+
         if target_uuid:
             routing = {"type": "direct", "target_uuid": target_uuid}
         elif group_id:

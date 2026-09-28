@@ -19,7 +19,7 @@ from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool
 from ..bus_tools import _resolve_user_id, _session_from_ctx
 from ..client_role import require_role
 from . import settings as chat_settings
-from . import vision
+from . import user_tools, vision
 from .catalog import build_catalog
 from .config import ChatConfig, load_config
 from .executor import ChatExecutor
@@ -109,6 +109,10 @@ class BlenderChatComponent(MCPMixin):
         catalog = await build_catalog(
             ctx.fastmcp, cfg.tools or None,
             vision=vision.available(cfg, user_sub, backend),
+        )
+        catalog = user_tools.merge(
+            catalog, user_tools.registry.get(bus_id, blender_uuid, _session_from_ctx(ctx)),
+            cfg.max_tools,
         )
         token = current_backend.set(backend)
         turn = None
