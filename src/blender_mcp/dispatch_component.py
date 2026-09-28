@@ -431,14 +431,24 @@ class BlenderDispatchComponent(MCPMixin):
     @mcp_tool()
     async def get_scene_info(
         self,
+        scene: str | None = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
         """Snapshot of the active Blender scene: name, object count, first N objects,
-        and what the user has picked: active_object, selected_objects, selected_count."""
-        return await self._call(ctx, "get_scene_info", {}, target_uuid, _timeout, bus_id=bus_id)
+        and what the user has picked: active_object, selected_objects, selected_count.
+        ``scenes`` lists every scene in the file with its object count.
+        ``scene``: summarise that scene instead, without switching to it."""
+        from .modelling_tools import scene_param
+
+        try:
+            name = scene_param(scene)
+        except ValueError as e:
+            return json.dumps({"status": "error", "error": "invalid_argument", "detail": str(e)})
+        params = {"scene": name} if name is not None else {}
+        return await self._call(ctx, "get_scene_info", params, target_uuid, _timeout, bus_id=bus_id)
 
     @mcp_tool()
     async def get_object_info(
@@ -508,6 +518,7 @@ class BlenderDispatchComponent(MCPMixin):
         crop_margin: float = 0.05,
         store: bool = False,
         annotations: bool = True,
+        deselect: bool = False,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
@@ -520,6 +531,9 @@ class BlenderDispatchComponent(MCPMixin):
         add-on's Mark selection button) are drawn onto the image, as the
         viewport shows them. The result's ``annotations.drawn`` counts them.
         Set False for a clean capture.
+
+        ``deselect``: capture with nothing selected, so orange selection
+        outlines don't colour the objects; the selection is restored after.
 
         ``store``: also upload it to object storage; the result's ``stored``
         entry has an ``object_key`` and a short-lived ``download_url``.
@@ -549,6 +563,9 @@ class BlenderDispatchComponent(MCPMixin):
         if not annotations:
             # Only sent when off: add-ons older than 2026.927.8 don't take it.
             params["annotations"] = False
+        if deselect:
+            # Only sent when on; add-ons before it drop the unknown key.
+            params["deselect"] = True
         return await self._call(
             ctx,
             "get_viewport_screenshot",

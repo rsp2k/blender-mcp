@@ -55,10 +55,10 @@ Foundational tools. No gating; always available when at least one Blender peer i
 ### `blender_get_scene_info`
 
 ```python
-blender_get_scene_info(target_uuid: str | None = None, _timeout: float = 30) -> str
+blender_get_scene_info(scene: str | None = None, target_uuid: str | None = None, _timeout: float = 30) -> str
 ```
 
-Snapshot of the active scene: name, object count, first ~10 objects, materials count.
+Snapshot of the active scene: name, object count, first ~10 objects, materials count, type counts and the user's selection. `scenes` lists every scene in the file with its object count and which one is active. Pass `scene` to summarise another scene without switching the user to it; an unknown name comes back as an error listing the scenes. `blender_list_scene_objects` takes the same `scene` argument for the full object list.
 
 ### `blender_get_object_info`
 
@@ -99,12 +99,18 @@ blender_get_viewport_screenshot(
     filepath: str | None = None,
     max_size: int = 0,
     format: str = "png",
+    frame: list[str] | None = None,
+    crop: bool = False,
+    crop_margin: float = 0.05,
+    store: bool = False,
+    annotations: bool = True,
+    deselect: bool = False,
     target_uuid: str | None = None,
     _timeout: float = 30,
 ) -> str
 ```
 
-Save a 3D viewport screenshot on the Blender host. `filepath` is a path on the Blender machine; leave it out and the image goes to a unique file under Blender's temp dir (`blender_mcp_screenshots/`, cleared when Blender exits). Either way the result's `filepath` says where it was written. `max_size` caps the longest edge in pixels; `0` (the default) keeps the viewport's native resolution. `format` is `png` or `jpg`.
+Save a 3D viewport screenshot on the Blender host. `deselect=True` captures with nothing selected or active, so selection outlines don't tint the objects, then puts the selection and active object back exactly as they were; the chat's `look_at_viewport` always asks for it. Add-ons older than this parameter ignore it. `filepath` is a path on the Blender machine; leave it out and the image goes to a unique file under Blender's temp dir (`blender_mcp_screenshots/`, cleared when Blender exits). Either way the result's `filepath` says where it was written. `max_size` caps the longest edge in pixels; `0` (the default) keeps the viewport's native resolution. `format` is `png` or `jpg`.
 
 ### `blender_get_console_output`
 

@@ -54,16 +54,18 @@ blender_chat(message: str, history: list[{role: "user"|"assistant", content: str
 ```json
 {"t": "status", "text": "Thinking…"}
 {"t": "tool", "name": "create_mesh", "phase": "start"}
-{"t": "tool", "name": "create_mesh", "phase": "end", "ok": true, "ms": 412}
+{"t": "tool", "name": "create_mesh", "phase": "end", "ok": true, "ms": 412, "head": "{\"object\": \"Table\", …"}
 {"t": "tool", "name": "execute_code", "phase": "end", "ok": true, "ms": 4310, "wait_ms": 81200}
+{"t": "tool", "name": "add_primitive", "phase": "end", "ok": false, "ms": 3, "error": "{\"status\": \"error\", \"error\": \"invalid_argument\", …"}
 {"t": "text", "text": "Added a 2 m cube named Table…"}
 ```
 
 - `ms` is the tool's own time. `wait_ms` appears only when the step asked for approval, and is the time spent waiting for the user.
+- A failed step carries `error`, the start of its error text (at most 300 characters, whitespace collapsed), so a fast argument rejection can be told from a failure inside Blender. A successful step carries `head`, the first 160 characters of its result. Both are optional: clients must not require them. The add-on keeps them on the step's transcript entry and writes a failed step's `error` to the chat log.
 - The result is a JSON string:
 
 ```json
-{"status": "ok", "reply": "…", "steps": [{"tool": "create_mesh", "ok": true, "ms": 412}], "elapsed_s": 9.8,
+{"status": "ok", "reply": "…", "steps": [{"tool": "create_mesh", "ok": true, "ms": 412, "head": "…"}], "elapsed_s": 9.8,
  "backend": {"provider": "gateway", "model": "qwen3"}}
 ```
 

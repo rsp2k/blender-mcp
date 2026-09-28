@@ -30,7 +30,7 @@ class ViewportHandlersMixin:
     @command("get_viewport_screenshot")
     def get_viewport_screenshot(self, max_size=0, filepath=None, format="png",
                                 frame=None, crop=False, crop_margin=0.05,
-                                annotations=True):
+                                annotations=True, deselect=False):
         """
         Render the current 3D viewport to an image file.
 
@@ -57,6 +57,9 @@ class ViewportHandlersMixin:
           visible objects).
         - annotations: draw the scene's visible annotation strokes onto the
           image (render.opengl leaves them out). PNG only.
+        - deselect: capture with nothing selected or active, so selection
+          outlines don't tint the objects; the selection and active object
+          are put back afterwards.
         """
         if bpy.app.background:
             return {"error": "No viewport available in --background mode"}
@@ -110,7 +113,10 @@ class ViewportHandlersMixin:
             r.resolution_percentage = 100
             r.image_settings.file_format = _blender_file_format(format)
 
-            with bpy.context.temp_override(area=area, region=region):
+            from ...selection_guard import deselected
+
+            with deselected(bpy.context.view_layer, bool(deselect)), \
+                    bpy.context.temp_override(area=area, region=region):
                 # view_context=True renders through the viewport's current
                 # view matrix (persp / ortho / camera as displayed) instead
                 # of the scene's active camera.

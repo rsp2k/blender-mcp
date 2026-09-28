@@ -15,7 +15,9 @@ the report says what was actually there.
 from __future__ import annotations
 
 import colorsys
+import json
 import math
+import re
 from typing import Any
 
 # type -> parameter used when the check is given a scalar instead of a mapping
@@ -501,3 +503,57 @@ _JUDGES = {
 def python_exprs(checks: list[dict]) -> dict[str, str]:
     """{index: expr} for the checks Blender has to evaluate."""
     return {str(i): c["expr"] for i, c in enumerate(checks) if c["check"] == "python"}
+
+
+# ----------------------------------------------------------------- snapshot sanity
+
+TOOL_HEAD_CHARS = 160
+CREATING_TOOLS = ("add_primitive", "create_mesh")
+_OBJECT_KEY = re.compile(r'"object"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _created_names(tools: list[dict]) -> list[str]:
+    """Objects successful creating tools reported, read from each step's result head."""
+    out = []
+    for t in tools or []:
+        if not t.get("ok") or t.get("name") not in CREATING_TOOLS:
+            continue
+        m = _OBJECT_KEY.search(t.get("head") or "")
+        if m:
+            try:
+                out.append(json.loads(f'"{m.group(1)}"'))
+            except ValueError:
+                out.append(m.group(1))
+    return out
+
+
+def claimed_missing(reply: str, checks: list[dict], tools: list[dict], after: dict) -> list[str]:
+    """Names the turn says exist but the snapshot lacks: objects a creating tool
+    reported, and objects the checks look for that the reply names. Non-empty
+    means the snapshot may have been taken too early and is worth retaking."""
+    have = {o["name"].lower() for o in _objects(after)}
+    text = (reply or "").lower()
+    claimed = list(_created_names(tools))
+    for c in checks or []:
+        name = c.get("name")
+        if c.get("check") in _SELECTOR_CHECKS and c.get("check") != "object_absent" \
+                and isinstance(name, str) and name and name.lower() in text:
+            claimed.append(name)
+    return sorted({n for n in claimed if n.lower() not in have})
+
+
+def tool_records(msgs: list[dict]) -> list[dict]:
+    """The turn's tool steps from the add-on's chat messages, with the error
+    text of failed ones and the start of successful results when the server
+    sent them."""
+    out = []
+    for m in msgs:
+        if m.get("role") != "tool":
+            continue
+        t = {"name": m.get("name"), "ok": m.get("ok"), "ms": m.get("ms"), "turn": m.get("turn")}
+        if m.get("error"):
+            t["error"] = str(m["error"])
+        if m.get("head"):
+            t["head"] = str(m["head"])[:TOOL_HEAD_CHARS]
+        out.append(t)
+    return out

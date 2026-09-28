@@ -130,10 +130,11 @@ def build_server(rec: Recorder, handler: RoutingSamplingHandler, component: Blen
 
     @server.tool(name="blender_get_viewport_screenshot")
     async def get_viewport_screenshot(max_size: int = 800, store: bool = False,
+                                      deselect: bool = False,
                                       target_uuid: str | None = None, _timeout: float = 30.0,
                                       bus_id: str | None = None) -> str:
         rec.record("get_viewport_screenshot", max_size=max_size, store=store,
-                   target_uuid=target_uuid, bus_id=bus_id)
+                   deselect=deselect, target_uuid=target_uuid, bus_id=bus_id)
         inner = {"filepath": "/tmp/v.png", "stored": {
             "state": "uploaded", "object_key": f"{bus_id}/{'a' * 32}/viewport.png"}}
         return json.dumps({"status": "completed", "result": json.dumps(inner)})
@@ -574,6 +575,7 @@ async def test_look_at_viewport(cfg, sessions, monkeypatch):
     assert out["status"] == "ok" and out["reply"] == "Yes, it's red."
     shot = h.rec.named("get_viewport_screenshot")[0]["args"]
     assert shot["store"] is True and shot["max_size"] == 1024 and shot["target_uuid"] == BLENDER
+    assert shot["deselect"] is True  # selection outlines must not colour the answer
     assert store.keys == [f"{BUS}/{'a' * 32}/viewport.png"]
     vis = models.requests[1]["body"]
     assert vis["model"] == cfg.vision_model
@@ -625,3 +627,18 @@ async def test_steps_without_approval_carry_no_wait(cfg, sessions):
     async with h.client() as client:
         out = await h.chat(client)
     assert "wait_ms" not in out["steps"][0]
+
+
+async def test_failed_step_carries_its_error_text(cfg, sessions):
+    # get_object_info without its required name: rejected by the server at once.
+    models = FakeModels(oa_call("get_object_info", {}), oa_call("get_scene_info", {}),
+                        oa_text("Could not."))
+    h = Harness(cfg, models, sessions)
+    async with h.client() as client:
+        out = await h.chat(client)
+    bad, good = out["steps"][0], out["steps"][1]
+    assert bad["ok"] is False and "name" in bad["error"] and len(bad["error"]) <= 300
+    assert "head" not in bad
+    assert good["ok"] is True and "error" not in good and "Cube" in good["head"]
+    ends = [e for e in h.events if e.get("t") == "tool" and e.get("phase") == "end"]
+    assert ends[0]["error"] == bad["error"] and ends[1]["head"] == good["head"]

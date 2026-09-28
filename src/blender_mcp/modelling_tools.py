@@ -112,14 +112,38 @@ def color_params(objects, color, roughness=None, metallic=None, name=None) -> di
             "roughness": roughness, "metallic": metallic, "name": name}
 
 
-def list_params(type=None, name_contains=None, collection=None, limit=100, offset=0) -> dict:
+MAX_NAME_CHARS = 255  # Blender caps names at 63 bytes; this only rejects nonsense
+
+
+def scene_param(scene) -> str | None:
+    """A scene name to inspect, or None for the active scene (raises ValueError)."""
+    if scene is None:
+        return None
+    if not isinstance(scene, str):
+        raise ValueError("scene must be a scene name (a string)")  # noqa: TRY004 - reported as invalid_argument
+    name = scene.strip()
+    if not name:
+        return None
+    if len(name) > MAX_NAME_CHARS:
+        raise ValueError("scene name is too long")
+    return scene
+
+
+def list_params(type=None, name_contains=None, collection=None, limit=100, offset=0,
+                scene=None) -> dict:
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_LIST_LIMIT:
         raise ValueError(f"limit must be a whole number from 1 to {MAX_LIST_LIMIT}")
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ValueError("offset must be a whole number, 0 or more")
-    return {"type": type.upper() if isinstance(type, str) and type else None,
-            "name_contains": name_contains or None, "collection": collection or None,
-            "limit": limit, "offset": offset}
+    params = {"type": type.upper() if isinstance(type, str) and type else None,
+              "name_contains": name_contains or None, "collection": collection or None,
+              "limit": limit, "offset": offset}
+    name = scene_param(scene)
+    if name is not None:
+        # Only sent when given: an older add-on would drop it and answer for
+        # the active scene, which its "scene" field then shows.
+        params["scene"] = name
+    return params
 
 
 class BlenderModellingComponent(MCPMixin):
@@ -218,12 +242,16 @@ class BlenderModellingComponent(MCPMixin):
         collection: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        scene: str | None = None,
         target_uuid: str | None = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: str | None = None,
         ctx: Context = None,
     ) -> str:
-        """List every object in the active scene (get_scene_info shows only the first 10).
+        """List every object in a scene (get_scene_info shows only the first 10).
+
+        ``scene``: a scene name to list without switching the user's active
+        scene (default: the active one). get_scene_info names every scene.
 
         Each row: name, type, parent, collections, world location,
         dimensions (metres) and material names. Filters: ``type`` (MESH,
@@ -235,7 +263,7 @@ class BlenderModellingComponent(MCPMixin):
         null, call again with offset=next_offset.
         """
         try:
-            params = list_params(type, name_contains, collection, limit, offset)
+            params = list_params(type, name_contains, collection, limit, offset, scene)
         except ValueError as e:
             return _err("invalid_argument", detail=str(e))
         return await self._send(ctx, "list_scene_objects", params, target_uuid, _timeout, bus_id)

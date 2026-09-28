@@ -51,12 +51,14 @@ sys.path.insert(0, str(HERE.parent / "canary"))
 import run_canary as rc
 import snippets
 from cases import Case, CaseError, blend_files, load_cases
-from checks import judge_all, python_exprs
+from checks import claimed_missing, judge_all, python_exprs, tool_records
 from report import render_markdown, summarize
 
 DEFAULT_UUID = "blender-801c42b0-5855-4a13-89dc-6bbc56cf680e"
 CONTAINER_PROJECTS = "/home/blender/projects"
 POLL_S = 3.0
+IDLE_WAIT_S = 20.0  # longest wait for the add-on to drain before the after-snapshot
+RESNAPSHOT_DELAY_S = 3.0
 PROVIDERS = ("gateway", "anthropic", "openai")
 
 
@@ -274,16 +276,28 @@ class Battery:
         for text in case.prompts:
             if not await self.turn(text, case, state_id, rec):
                 break
-        after = await self.code(snippets.snapshot(python_exprs(case.checks)), timeout=60)
+        msgs = rec.pop("_msgs")
+        last = rec.pop("_last_turn", None)
+        rec["tools"] = tool_records(msgs)
+        rec["reply"] = "\n".join(m.get("text") or "" for m in msgs
+                                 if m.get("role") == "assistant" and m.get("turn") == last).strip()
+
+        await self.wait_idle()
+        exprs = python_exprs(case.checks)
+        after = await self.code(snippets.snapshot(exprs), timeout=60)
+        missing = claimed_missing(rec["reply"], case.checks, rec["tools"], after)
+        if missing:
+            # Seen once: an object reported created was absent from the
+            # snapshot and present on a rerun. Retake it once and say so.
+            log(f"   snapshot lacks {missing}; retaking it")
+            await asyncio.sleep(RESNAPSHOT_DELAY_S)
+            await self.wait_idle()
+            after = await self.code(snippets.snapshot(exprs), timeout=60)
+            still = claimed_missing(rec["reply"], case.checks, rec["tools"], after)
+            rec["resnapshot"] = {"missing_first": missing, "missing_after_retry": still}
         if await self.identity() != ident:
             raise BlenderGone("Blender restarted during the case")
 
-        msgs = rec.pop("_msgs")
-        last = rec.pop("_last_turn", None)
-        rec["tools"] = [{"name": m.get("name"), "ok": m.get("ok"), "ms": m.get("ms"),
-                         "turn": m.get("turn")} for m in msgs if m.get("role") == "tool"]
-        rec["reply"] = "\n".join(m.get("text") or "" for m in msgs
-                                 if m.get("role") == "assistant" and m.get("turn") == last).strip()
         rec["errors"] += [m.get("text") for m in msgs if m.get("role") == "error"]
         rec["statuses"] = [m.get("text") for m in msgs if m.get("role") == "status"]
         turn_data = {"reply": rec["reply"], "tools": rec["tools"], "errors": rec["errors"]}
@@ -299,6 +313,19 @@ class Battery:
         rec["scene_after"] = {"objects": len(after.get("objects") or []),
                               "annotations": after.get("annotations")}
         return rec
+
+    async def wait_idle(self, limit: float = IDLE_WAIT_S) -> bool:
+        """Until no chat turn runs and no dispatch is queued in the add-on.
+        False when it didn't get there in ``limit`` seconds (carries on)."""
+        deadline = time.monotonic() + limit
+        while True:
+            s = await self.code(snippets.IDLE, timeout=15)
+            if not s.get("busy") and not s.get("queued"):
+                return True
+            if time.monotonic() > deadline:
+                log(f"   add-on still busy after {limit:.0f}s: {s}")
+                return False
+            await asyncio.sleep(0.5)
 
     async def recover(self, model: dict | None) -> bool:
         """Wait for the Blender to settle and re-apply the backend. Never raises."""

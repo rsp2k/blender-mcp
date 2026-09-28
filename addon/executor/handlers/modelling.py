@@ -26,6 +26,7 @@ from ..registry import command
 from .annotations import resolve_targets
 from .booleans import mesh_health
 from .mesh_data import _collection, _parent
+from .scene import scene_named
 
 MAX_LIST_LIMIT = 500
 _MATERIAL_TYPES = ("MESH", "CURVE", "SURFACE", "META", "FONT")
@@ -137,7 +138,7 @@ def _targets(objects):
     return out
 
 
-def _object_row(obj):
+def _object_row(obj, view_layer=None):
     mw = obj.matrix_world
     row = {
         "name": obj.name,
@@ -149,7 +150,11 @@ def _object_row(obj):
         "materials": list(dict.fromkeys(
             s.material.name for s in obj.material_slots if s.material is not None)),
     }
-    if not obj.visible_get():
+    try:
+        visible = obj.visible_get(view_layer=view_layer) if view_layer else obj.visible_get()
+    except (TypeError, RuntimeError):
+        visible = True
+    if not visible:
         row["hidden"] = True
     return row
 
@@ -251,9 +256,10 @@ class ModellingHandlersMixin:
 
     @command("list_scene_objects")
     def list_scene_objects(self, type=None, name_contains=None, collection=None,
-                           limit=100, offset=0):
-        """Every object in the active scene, filtered and paged, sorted by name."""
-        scene = bpy.context.scene
+                           limit=100, offset=0, scene=None):
+        """Every object in the active scene (or the one named ``scene``, without
+        switching to it), filtered and paged, sorted by name."""
+        scene = scene_named(scene)
         limit = max(1, min(int(limit), MAX_LIST_LIMIT))
         offset = max(0, int(offset))
         objs = list(scene.objects)
@@ -274,14 +280,19 @@ class ModellingHandlersMixin:
             objs = [o for o in objs if needle in o.name.lower()]
         objs.sort(key=lambda o: o.name)
         page = objs[offset:offset + limit]
+        if scene == bpy.context.scene:
+            layer = bpy.context.view_layer
+        else:
+            layer = scene.view_layers[0] if len(scene.view_layers) else None
         nxt = offset + len(page)
         return {
             "scene": scene.name,
+            "active_scene": bpy.context.scene.name,
             "total_objects": len(scene.objects),
             "type_counts": dict(sorted(type_counts.items())),
             "matching": len(objs),
             "offset": offset,
             "returned": len(page),
             "next_offset": nxt if nxt < len(objs) else None,
-            "objects": [_object_row(o) for o in page],
+            "objects": [_object_row(o, layer) for o in page],
         }
