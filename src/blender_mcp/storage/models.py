@@ -427,3 +427,25 @@ class BusJob(Base):
         Index("ix_bus_job_status_created", "status", "created_at"),
         Index("ix_bus_job_expires_at", "expires_at"),
     )
+
+
+class ChatSettings(Base):
+    """A user's chat backend: the shared gateway, their Anthropic key, or an
+    OpenAI-compatible endpoint. No row = the gateway with the server default
+    model. ``api_key_enc`` is a Fernet token keyed from CHAT_SECRET_KEY; the
+    plaintext key never leaves the server.
+    """
+
+    __tablename__ = "chat_settings"
+
+    user_sub: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    base_url: Mapped[str | None] = mapped_column(String(512))
+    api_key_enc: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
