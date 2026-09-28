@@ -288,6 +288,66 @@ def draw_login_section(layout, prefs):
         )
 
 
+CHAT_PROVIDERS = [
+    ("gateway", "Shared GPU gateway", "Open models on the server operator's GPUs (the default)"),
+    ("anthropic", "Claude API", "Your own Anthropic API key"),
+    ("openai", "OpenAI-compatible", "Ollama, LiteLLM, vLLM or a hosted OpenAI-style API"),
+]
+_CHAT_PROVIDER_NAMES = {key: name for key, name, _desc in CHAT_PROVIDERS}
+
+
+def draw_chat_backend_section(layout, prefs):
+    """Chat backend settings. The key is sent once and never stored here."""
+    from . import connection
+    from . import state as _state
+    from .chat.state import chat_state
+
+    col = layout.column(align=True)
+    col.label(text="Chat backend", icon='OUTLINER_OB_SPEAKER')
+    client = _state._client
+    connected = bool(connection.client_alive(client) and client.connected)
+    if connected and chat_state.available is False:
+        col.label(text="This server doesn't offer chat.", icon='INFO')
+        return
+
+    backend = chat_state.backend
+    row = col.row(align=True)
+    if backend:
+        name = _CHAT_PROVIDER_NAMES.get(backend.get("provider"), backend.get("provider") or "?")
+        parts = [name]
+        if backend.get("model"):
+            parts.append(backend["model"])
+        if backend.get("has_key"):
+            parts.append("key stored")
+        row.label(text="Current: " + " · ".join(parts), icon='CHECKMARK')
+    elif connected:
+        row.label(text="Current: not loaded yet", icon='QUESTION')
+    else:
+        row.label(text="Connect to see or change the backend", icon='UNLINKED')
+    refresh = row.row(align=True)
+    refresh.enabled = connected
+    refresh.operator("blendermcp.refresh_chat_backend", text="", icon='FILE_REFRESH')
+    if backend and backend.get("base_url"):
+        col.label(text=f"URL: {backend['base_url']}")
+    if chat_state.backend_error:
+        err = col.row()
+        err.alert = True
+        err.label(text=chat_state.backend_error[:90], icon='ERROR')
+
+    col.separator()
+    col.prop(prefs, "chat_provider", text="Provider")
+    col.prop(prefs, "chat_model", text="Model")
+    if prefs.chat_provider == 'openai':
+        col.prop(prefs, "chat_base_url", text="Base URL")
+        col.label(text="Fetched by the server, so localhost means the server", icon='INFO')
+    if prefs.chat_provider != 'gateway':
+        col.prop(prefs, "chat_api_key", text="API key")
+    row = col.row(align=True)
+    row.enabled = connected
+    row.operator("blendermcp.save_chat_backend", text="Save backend", icon='EXPORT')
+    row.operator("blendermcp.clear_chat_backend", text="Clear backend", icon='X')
+
+
 class BlenderMCPPreferences(bpy.types.AddonPreferences):
     """User-scoped configuration for the BlenderMCP addon."""
 
@@ -472,6 +532,41 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         default="https://mcp.blender.bet/extensions/index.json",
     )
 
+    # --- Chat backend ---
+    # Provider, model and URL are harmless to keep. chat_api_key is only a
+    # staging field: Save backend sends it and clears it right away.
+    chat_provider: EnumProperty(
+        name="Chat provider",
+        description="Which model service the server uses for your chat turns",
+        items=CHAT_PROVIDERS,
+        default="gateway",
+    )
+    chat_model: StringProperty(
+        name="Chat model",
+        description=(
+            "Model name. Leave blank for the provider's default "
+            "(qwen3 on the gateway, claude-sonnet-5 on the Claude API)"
+        ),
+        default="",
+    )
+    chat_base_url: StringProperty(
+        name="Base URL",
+        description=(
+            "OpenAI-compatible endpoint, e.g. https://llm.example.com/v1. "
+            "The server fetches it, so it must be reachable from the server"
+        ),
+        default="",
+    )
+    chat_api_key: StringProperty(
+        name="API key",
+        description=(
+            "Sent to the server once when you press Save backend, then "
+            "cleared. It is stored on the server encrypted, never here"
+        ),
+        subtype="PASSWORD",
+        default="",
+    )
+
     def draw(self, context):
         """Draw the prefs panel in Edit > Preferences > Add-ons > BlenderMCP."""
         layout = self.layout
@@ -501,6 +596,10 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         # --- Login / Logout ---
         col.separator()
         draw_login_section(layout, self)
+
+        # --- Chat backend ---
+        layout.separator()
+        draw_chat_backend_section(layout, self)
 
         # --- Asset integrations ---
         layout.separator()
