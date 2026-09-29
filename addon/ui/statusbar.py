@@ -64,7 +64,9 @@ def draw_statusbar(self, context):
         return
     if prompt:
         row.alert = True
-        row.operator("blendermcp.show_panel", text=f"MCP: {prompt}", icon='ERROR')
+        op = row.operator("blendermcp.show_panel", text=f"MCP: {prompt}", icon='ERROR')
+        if _chat_approval_pending():
+            op.category = "Chat"
     else:
         icon, _, _ = _connection_status(prefs, state._client)
         row.operator("blendermcp.show_panel", text="MCP", icon=icon, emboss=False)

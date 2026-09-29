@@ -249,21 +249,18 @@ def show_chat() -> str:
     return PRELUDE + """
 _reader = _mod(".chat.reader")
 _win = bpy.context.window_manager.windows[0]
-_area = next((a for a in _win.screen.areas if a.type == 'VIEW_3D'), None)
-_done = {"sidebar": False, "reader": False}
-if _area is not None:
-    _area.spaces.active.show_region_ui = True
-    for _r in _area.regions:
-        if _r.type == 'UI':
-            try:
-                _r.active_panel_category = "Chat"
-                _done["sidebar"] = True
-            except (TypeError, AttributeError):
-                pass
-    _area.tag_redraw()
-    with bpy.context.temp_override(window=_win, screen=_win.screen, area=_area):
+_done = {"reader": False}
+_first = next((a for a in _win.screen.areas if a.type == 'VIEW_3D'), None)
+if _first is not None:
+    # The Reader first: splitting the viewport resets its sidebar tab.
+    with bpy.context.temp_override(window=_win, screen=_win.screen, area=_first):
         if not _reader.is_open(bpy.context):
             _reader.toggle(bpy.context)
         _done["reader"] = _reader.is_open(bpy.context)
+# The sidebar tab can't be picked from a script (read-only in Blender 5.x);
+# it keeps whatever tab it last had, so click Chat once in that Blender.
+for _area in [a for a in _win.screen.areas if a.type == 'VIEW_3D']:
+    _area.spaces.active.show_region_ui = True
+    _area.tag_redraw()
 _out(_done)
 """

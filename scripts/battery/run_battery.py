@@ -220,7 +220,9 @@ class Battery:
             await self.code(snippets.run_setup_python(s["python"]), timeout=60)
         try:
             # For whoever is watching; the run doesn't depend on it.
-            await self.code(snippets.show_chat())
+            shown = await self.code(snippets.show_chat())
+            if not shown.get("reader"):
+                log(f"   (Chat tab for watchers: {shown})")
         except Exception as e:  # noqa: BLE001
             log(f"   (couldn't open the Chat tab for watchers: {e})")
 

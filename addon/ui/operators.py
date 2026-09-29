@@ -1305,6 +1305,9 @@ class BLENDERMCP_OT_ClearMarks(bpy.types.Operator):
         return {'FINISHED'}
 
 
+_PANELS = {"BlenderMCP": "BLENDERMCP_PT_Panel", "Chat": "BLENDERMCP_PT_Chat"}
+
+
 class BLENDERMCP_OT_ShowPanel(bpy.types.Operator):
     """Open the 3D Viewport sidebar on the Blender MCP tab."""
 
@@ -1321,11 +1324,20 @@ class BLENDERMCP_OT_ShowPanel(bpy.types.Operator):
             self.report({'WARNING'}, "No 3D Viewport in this workspace")
             return {'CANCELLED'}
         area.spaces.active.show_region_ui = True
+        switched = False
         for region in area.regions:
             if region.type == 'UI':
                 try:
                     region.active_panel_category = self.category
+                    switched = True
                 except (TypeError, AttributeError):
-                    pass
+                    # Read-only in Blender 5.x: no script can pick the tab.
+                    switched = region.active_panel_category == self.category
         area.tag_redraw()
+        if not switched and self.category in _PANELS:
+            # Show the panel as a popover right where the user clicked.
+            try:
+                bpy.ops.wm.call_panel(name=_PANELS[self.category], keep_open=True)
+            except RuntimeError as e:
+                self.report({'INFO'}, f"Open the {self.category} tab in the sidebar ({e})")
         return {'FINISHED'}
