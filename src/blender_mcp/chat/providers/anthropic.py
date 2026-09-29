@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 MIN_MAX_TOKENS = 16000
 MAX_RETRIES = 2  # the SDK retries 408/409/429/5xx and connection errors
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+ADVISOR_BETA = "advisor-tool-2026-03-01"
+ADVISOR_TOOL = "advisor_20260301"
+# Said to the advisor, which reads the system prompt as context: it's the
+# advice length, not the executor's, that drives the advisor's cost.
+ADVISOR_NOTE = (
+    "\n\nYou can call advisor, a stronger model that sees this whole conversation, "
+    "before a multi-part build, when a request is ambiguous in a way the scene doesn't "
+    "settle, or when a step keeps failing. Skip it for lookups and single edits. "
+    "(Advisor: keep your guidance under 80 words, as concrete steps.)"
+)
+PAUSE_LIMIT = 3  # pause_turn continuations per call
 # Models that take ``fallbacks: "default"`` (refusals re-run server-side).
 FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5-1")
 # Models that 400 on forced tool use (tool_choice any/tool).
@@ -158,20 +169,25 @@ def system_blocks(system: str) -> list[dict]:
 
 def build_request(backend: Backend, system: str | None, messages: list[dict], tools, *,
                   max_tokens: int, temperature: float | None, tool_choice: str | None,
-                  fallbacks: bool, effort: str) -> dict[str, Any]:
+                  fallbacks: bool, effort: str, advisor: str = "",
+                  advisor_max_tokens: int = 2048) -> dict[str, Any]:
     req: dict[str, Any] = {
         "model": backend.model,
         "max_tokens": max(MIN_MAX_TOKENS, max_tokens or 0),
         "messages": messages,
     }
+    use_advisor = bool(advisor) and bool(tools) and advisor != backend.model
     if system:
-        req["system"] = system_blocks(system)
+        req["system"] = system_blocks(system + ADVISOR_NOTE if use_advisor else system)
     # Automatic caching for the growing tail: each round of a turn reuses the
     # whole prefix of the round before it.
     req["cache_control"] = dict(CACHE)
     if tools:
         req["tools"] = [{"name": t.name, "description": t.description or "",
                          "input_schema": t.inputSchema} for t in tools]
+        if use_advisor:
+            req["tools"].append({"type": ADVISOR_TOOL, "name": "advisor", "model": advisor,
+                                 "max_tokens": max(1024, int(advisor_max_tokens))})
         choice = tool_choice_for(tool_choice, backend.model)
         if choice:
             req["tool_choice"] = choice
@@ -181,9 +197,14 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
     if temperature is not None and allows_sampling(backend.model):
         # Not in the SDK 1.x signature; only older models accept it at all.
         extra["temperature"] = temperature
+    betas = []
     if fallbacks and supports_fallbacks(backend.model):
-        req["betas"] = [FALLBACK_BETA]
+        betas.append(FALLBACK_BETA)
         req["fallbacks"] = "default"
+    if use_advisor:
+        betas.append(ADVISOR_BETA)
+    if betas:
+        req["betas"] = betas
     if extra:
         req["extra_body"] = extra
     return req
@@ -194,11 +215,21 @@ def _log_usage(backend: Backend, message: Any) -> None:
     u = getattr(message, "usage", None)
     if u is None:
         return
-    logger.info("anthropic usage model=%s in=%s cache_read=%s cache_write=%s out=%s",
+    advice = [it for it in (getattr(u, "iterations", None) or [])
+              if _field(it, "type") == "advisor_message"]
+    logger.info("anthropic usage model=%s in=%s cache_read=%s cache_write=%s out=%s%s",
                 backend.model, getattr(u, "input_tokens", None),
                 getattr(u, "cache_read_input_tokens", None),
                 getattr(u, "cache_creation_input_tokens", None),
-                getattr(u, "output_tokens", None))
+                getattr(u, "output_tokens", None),
+                "" if not advice else (
+                    f" advisor_calls={len(advice)}"
+                    f" advisor_in={sum(_field(it, 'input_tokens') or 0 for it in advice)}"
+                    f" advisor_out={sum(_field(it, 'output_tokens') or 0 for it in advice)}"))
+
+
+def _field(obj: Any, name: str) -> Any:
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
 # ---- response ----------------------------------------------------------------
@@ -310,6 +341,8 @@ async def complete(
     replay: Replay | None = None,
     fallbacks: bool = True,
     effort: str = "",
+    advisor: str = "",
+    advisor_max_tokens: int = 2048,
     **_ignored: Any,
 ) -> Completion:
     """``transport`` is an httpx2 transport for tests (httpx2.MockTransport)."""
@@ -321,11 +354,13 @@ async def complete(
     def request(msgs: list[dict]) -> dict[str, Any]:
         return build_request(backend, system, msgs, tools, max_tokens=max_tokens,
                              temperature=temperature, tool_choice=tool_choice,
-                             fallbacks=fallbacks, effort=effort)
+                             fallbacks=fallbacks, effort=effort, advisor=advisor,
+                             advisor_max_tokens=advisor_max_tokens)
 
     async with make_client(backend, timeout_s, transport) as client:
         stripped = False
         attempts = 0
+        pauses = 0
         while True:
             attempts += 1
             try:
@@ -341,6 +376,12 @@ async def complete(
             except anthropic.AnthropicError as e:
                 raise _translate(e, backend, timeout_s) from e
             _log_usage(backend, message)
+            if getattr(message, "stop_reason", None) == "pause_turn" and pauses < PAUSE_LIMIT:
+                # A server tool (the advisor) was still running: send the
+                # partial turn back as-is and the API carries on from it.
+                pauses += 1
+                wire = [*wire, {"role": "assistant", "content": raw_content(message)}]
+                continue
             result = parse_message(message, allowed)
             if result.text or result.tool_calls:
                 return result

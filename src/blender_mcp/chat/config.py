@@ -69,6 +69,10 @@ class ChatConfig:
     # Claude API request options.
     anthropic_fallbacks: bool = True
     anthropic_effort: str = ""  # empty = the API's default
+    # A stronger model the Claude backend may consult mid-turn (advisor tool);
+    # empty = off. The advice is capped per call.
+    anthropic_advisor: str = ""
+    anthropic_advisor_max_tokens: int = 2048
 
     def user_allowed(self, user_sub: str | None) -> bool:
         """May this user use the server's own backends (gateway or default)?"""
@@ -102,4 +106,6 @@ def load_config(env=None) -> ChatConfig:
         anthropic_api_key=_get(env, "ANTHROPIC_API_KEY"),
         anthropic_fallbacks=_get(env, "CHAT_ANTHROPIC_FALLBACKS").lower() not in _OFF,
         anthropic_effort=_choice(env, "CHAT_ANTHROPIC_EFFORT", EFFORTS, ""),
+        anthropic_advisor=_get(env, "CHAT_ANTHROPIC_ADVISOR"),
+        anthropic_advisor_max_tokens=max(1024, _int(env, "CHAT_ANTHROPIC_ADVISOR_MAX_TOKENS", 2048)),
     )

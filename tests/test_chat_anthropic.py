@@ -317,3 +317,49 @@ def test_the_turn_builds_its_prompt_with_the_shared_marker():
 
     from blender_mcp.chat import turn
     assert "SCENE_MARKER" in inspect.getsource(turn.Turn.system_prompt)
+
+
+# ---- advisor -----------------------------------------------------------------
+
+ADVICE = [{"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}},
+          {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_1",
+           "content": {"type": "advisor_redacted_result", "encrypted_content": "enc"}}]
+
+
+async def test_advisor_tool_beta_and_note_when_set():
+    api = FakeAPI(message([{"type": "text", "text": "ok"}], model="claude-sonnet-5"))
+    await run(api, model="claude-sonnet-5", advisor="claude-opus-5", advisor_max_tokens=2048)
+    body = api.body()
+    assert body["tools"][-1] == {"type": "advisor_20260301", "name": "advisor",
+                                 "model": "claude-opus-5", "max_tokens": 2048}
+    assert "advisor-tool-2026-03-01" in api.requests[0].headers["anthropic-beta"]
+    assert "Advisor: keep your guidance under 80 words" in body["system"][0]["text"]
+
+
+async def test_no_advisor_for_the_same_model_or_without_tools():
+    api = FakeAPI(message([{"type": "text", "text": "a"}]), message([{"type": "text", "text": "b"}]))
+    await run(api, advisor="claude-opus-5")  # executor is claude-opus-5 already
+    await run(api, model="claude-sonnet-5", tools=[], advisor="claude-opus-5")
+    for i in (0, 1):
+        assert all(t.get("type") != "advisor_20260301" for t in api.body(i).get("tools", []))
+        assert "advisor" not in api.requests[i].headers.get("anthropic-beta", "")
+
+
+async def test_paused_turn_is_resumed_with_its_partial_content():
+    api = FakeAPI(message([{"type": "text", "text": "Let me plan."}, ADVICE[0]],
+                          stop_reason="pause_turn", model="claude-sonnet-5"),
+                  message([ADVICE[1], {"type": "tool_use", "id": "t1", "name": "create_mesh",
+                                       "input": {"name": "B"}}],
+                          stop_reason="tool_use", model="claude-sonnet-5"))
+    c = await run(api, model="claude-sonnet-5", advisor="claude-opus-5")
+    second = api.body(1)["messages"]
+    assert second[-1]["role"] == "assistant"
+    assert second[-1]["content"][-1]["type"] == "server_tool_use"
+    assert c.tool_calls[0].name == "create_mesh"
+
+
+async def test_advice_blocks_are_kept_for_replay():
+    api = FakeAPI(message([*ADVICE, {"type": "tool_use", "id": "t1", "name": "create_mesh",
+                                     "input": {}}], stop_reason="tool_use", model="claude-sonnet-5"))
+    c = await run(api, model="claude-sonnet-5", advisor="claude-opus-5")
+    assert [b["type"] for b in c.raw] == ["server_tool_use", "advisor_tool_result", "tool_use"]
