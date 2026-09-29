@@ -1,0 +1,6 @@
+.env
+projects/*
+!projects/.gitkeep
+compose.override.yml
+.backups/
+.upgrade-error-*

@@ -395,13 +395,18 @@ def _require_ok(r: Any, what: str) -> None:
 async def restore_backend(bat: Battery, original: dict, tries: int = 3) -> str:
     """Put the account's backend back. Retries through a Blender restart,
     since the switch has to go through the add-on."""
-    if original.get("provider") != "gateway" and original.get("has_key"):
+    if (original.get("provider") != "gateway" and original.get("has_key")
+            and original.get("source") != "server"):
         return "not restored: the saved key can't be put back; set it again"
     last = ""
     for i in range(tries):
         try:
-            b = await bat.set_backend(original["provider"], original.get("model") or "",
-                                      original.get("base_url") or "")
+            if original.get("source") == "server":
+                # It was following the server default: saved "gateway" does that again.
+                b = await bat.set_backend("gateway", "", "")
+            else:
+                b = await bat.set_backend(original["provider"], original.get("model") or "",
+                                          original.get("base_url") or "")
             return f"{b.get('provider')}:{b.get('model')}"
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:200]}"
@@ -442,7 +447,9 @@ async def amain(args) -> int:
     log(f"current backend: {original}")
     bat.meta["original_backend"] = original
     switching = any(m["provider"] for m in models)
-    if switching and original and original.get("has_key") and not args.allow_key_loss:
+    # A key on the server's default backend isn't the account's; switching can't lose it.
+    own_key = bool(original and original.get("has_key") and original.get("source") != "server")
+    if switching and own_key and not args.allow_key_loss:
         others = {m["provider"] for m in models if m["provider"]} - {original.get("provider")}
         if others:
             print("The account has a saved API key for its current backend and switching provider "
