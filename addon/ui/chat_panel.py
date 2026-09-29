@@ -88,8 +88,10 @@ def _draw_model_chip(layout, snap) -> None:
     if label and advisor:
         label += f" › {advisor.removeprefix('Claude ')}"
     row = layout.row(align=True)
+    ico = icon_id("clip_mascot")
+    kwargs = {"icon_value": ico} if ico else {"icon": 'MONKEY'}
     row.operator("blendermcp.chat_backend_settings",
-                 text=label or "Choose a model", icon='MONKEY')
+                 text=label or "Choose a model", **kwargs)
 
 
 def _draw_clip(layout, context) -> None:
@@ -106,6 +108,15 @@ def _draw_clip(layout, context) -> None:
 def _latest_turn(messages: list) -> dict | None:
     turns = reader.turns(messages)
     return turns[-1] if turns else None
+
+
+def _mascot_label(layout, text: str) -> None:
+    """A label with Clip, the assistant's avatar (MONKEY if the icon didn't load)."""
+    ico = icon_id("clip_mascot")
+    if ico:
+        layout.label(text=text, icon_value=ico)
+    else:
+        layout.label(text=text, icon='MONKEY')
 
 
 def _draw_turn(layout, context, snap, wrap) -> None:
@@ -142,7 +153,7 @@ def _draw_turn(layout, context, snap, wrap) -> None:
     header = reader.reply_header(turn, who)
     if failed:
         header += f" · {failed} failed"
-    col.label(text=header, icon='MONKEY')
+    _mascot_label(col, header)
 
     # The last reply is the answer; earlier ones are narration between steps.
     reply = (turn["replies"][-1].get("text") or "") if turn["replies"] else ""
@@ -228,6 +239,11 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         return chat_state.available is not False or chat_state.has_messages()
+
+    def draw_header(self, context):
+        ico = icon_id("clip_mascot")
+        if ico:
+            self.layout.label(text="", icon_value=ico)
 
     def draw(self, context):
         layout = self.layout

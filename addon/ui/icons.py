@@ -12,9 +12,10 @@ def register() -> None:
     global _collection
     import bpy.utils.previews
     _collection = bpy.utils.previews.new()
-    path = os.path.join(ICON_DIR, "binder-clip.png")
-    if os.path.exists(path):
-        _collection.load("binder_clip", path, 'IMAGE')
+    for key, filename in (("binder_clip", "binder-clip.png"), ("clip_mascot", "clip-mascot.png")):
+        path = os.path.join(ICON_DIR, filename)
+        if os.path.exists(path):
+            _collection.load(key, path, 'IMAGE')
 
 
 def unregister() -> None:
