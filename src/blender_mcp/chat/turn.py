@@ -25,7 +25,7 @@ from mcp.types import SamplingMessage, TextContent
 from . import vision
 from .catalog import LOOK, Entry
 from .config import ChatConfig
-from .providers import Backend
+from .providers import SCENE_MARKER, Backend
 from .providers.openai_compat import INVALID_ARGS
 
 logger = logging.getLogger(__name__)
@@ -224,7 +224,7 @@ class Turn:
             ok, scene = False, ""
         if not ok or not scene:
             return SYSTEM_PROMPT
-        return f"{SYSTEM_PROMPT}\n\nThe scene right now (JSON, may be cut short):\n{scene[:MAX_SCENE_CHARS]}"
+        return f"{SYSTEM_PROMPT}{SCENE_MARKER}{scene[:MAX_SCENE_CHARS]}"
 
     async def run(self, message: str, history: list[dict] | None) -> str:
         system = await self.system_prompt()

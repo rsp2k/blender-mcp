@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PROVIDERS = ("gateway", "anthropic", "openai")
+# Where the per-turn scene snapshot starts in the system prompt. Everything
+# before it is the same on every request, so providers can cache it.
+SCENE_MARKER = "\n\nThe scene right now (JSON, may be cut short):\n"
 ANTHROPIC_ONLY = ("replay", "fallbacks", "effort")
 
 

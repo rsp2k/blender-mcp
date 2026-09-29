@@ -22,7 +22,7 @@ import anthropic
 import httpx2
 from mcp.types import ImageContent, TextContent, ToolResultContent, ToolUseContent
 
-from . import Backend, Completion, ProviderError, ToolCall
+from . import SCENE_MARKER, Backend, Completion, ProviderError, ToolCall
 from .textcalls import normalize_name
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def _base(model: str) -> str:
 def _matches(model: str, names: tuple[str, ...]) -> bool:
     m = _base(model)
     # Exact id, or a dated/Vertex snapshot of it; "claude-opus-5-5" is not "claude-opus-5".
-    return any(m == n or m.startswith(n + "-20") or m.startswith(n + "@") for n in names)
+    return any(m == n or m.startswith((n + "-20", n + "@")) for n in names)
 
 
 def allows_sampling(model: str) -> bool:
@@ -141,6 +141,21 @@ def strip_thinking(messages: list[dict]) -> list[dict]:
             for m in messages]
 
 
+CACHE = {"type": "ephemeral"}
+
+
+def system_blocks(system: str) -> list[dict]:
+    """The system prompt as blocks, with a cache breakpoint after the part that
+    never changes. Tools render before system, so that one marker caches the
+    tool definitions and the rules together; the per-turn scene snapshot goes
+    in a second block after it."""
+    static, marker, scene = system.partition(SCENE_MARKER)
+    blocks = [{"type": "text", "text": static, "cache_control": dict(CACHE)}]
+    if marker:
+        blocks.append({"type": "text", "text": (marker + scene).lstrip("\n")})
+    return blocks
+
+
 def build_request(backend: Backend, system: str | None, messages: list[dict], tools, *,
                   max_tokens: int, temperature: float | None, tool_choice: str | None,
                   fallbacks: bool, effort: str) -> dict[str, Any]:
@@ -150,7 +165,10 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
         "messages": messages,
     }
     if system:
-        req["system"] = system
+        req["system"] = system_blocks(system)
+    # Automatic caching for the growing tail: each round of a turn reuses the
+    # whole prefix of the round before it.
+    req["cache_control"] = dict(CACHE)
     if tools:
         req["tools"] = [{"name": t.name, "description": t.description or "",
                          "input_schema": t.inputSchema} for t in tools]
@@ -169,6 +187,18 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
     if extra:
         req["extra_body"] = extra
     return req
+
+
+def _log_usage(backend: Backend, message: Any) -> None:
+    """One line per call, so cache hits can be checked in the server log."""
+    u = getattr(message, "usage", None)
+    if u is None:
+        return
+    logger.info("anthropic usage model=%s in=%s cache_read=%s cache_write=%s out=%s",
+                backend.model, getattr(u, "input_tokens", None),
+                getattr(u, "cache_read_input_tokens", None),
+                getattr(u, "cache_creation_input_tokens", None),
+                getattr(u, "output_tokens", None))
 
 
 # ---- response ----------------------------------------------------------------
@@ -310,6 +340,7 @@ async def complete(
                 raise _translate(e, backend, timeout_s) from e
             except anthropic.AnthropicError as e:
                 raise _translate(e, backend, timeout_s) from e
+            _log_usage(backend, message)
             result = parse_message(message, allowed)
             if result.text or result.tool_calls:
                 return result

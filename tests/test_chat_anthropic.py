@@ -77,7 +77,8 @@ async def test_request_shape_defaults_for_opus_5():
     assert "temperature" not in body and "top_p" not in body and "top_k" not in body
     assert "thinking" not in body  # Opus 5 runs adaptive thinking by default
     assert body["fallbacks"] == "default"
-    assert body["system"] == "sys"
+    assert body["system"] == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+    assert body["cache_control"] == {"type": "ephemeral"}  # automatic caching for the tail
     assert body["tool_choice"] == {"type": "auto"}
     assert body["tools"][0] == {"name": "create_mesh", "description": "make a mesh",
                                 "input_schema": TOOLS[0].inputSchema}
@@ -297,3 +298,22 @@ async def test_rejected_replayed_thinking_retries_without_it():
     assert c.text == "Recovered."
     assert api.body(1)["messages"][1]["content"][0]["type"] == "thinking"
     assert all(b["type"] != "thinking" for b in api.body(2)["messages"][1]["content"])
+
+
+def test_scene_snapshot_goes_after_the_cache_breakpoint():
+    from blender_mcp.chat.providers import SCENE_MARKER
+    from blender_mcp.chat.providers.anthropic import system_blocks
+
+    blocks = system_blocks(f"RULES{SCENE_MARKER}{{\"objects\": 3}}")
+    assert blocks[0] == {"type": "text", "text": "RULES", "cache_control": {"type": "ephemeral"}}
+    assert "cache_control" not in blocks[1]
+    assert blocks[1]["text"].startswith("The scene right now") and blocks[1]["text"].endswith('{"objects": 3}')
+    # No scene (the catalog has no get_scene_info): one cached block.
+    assert system_blocks("RULES") == [{"type": "text", "text": "RULES", "cache_control": {"type": "ephemeral"}}]
+
+
+def test_the_turn_builds_its_prompt_with_the_shared_marker():
+    import inspect
+
+    from blender_mcp.chat import turn
+    assert "SCENE_MARKER" in inspect.getsource(turn.Turn.system_prompt)
