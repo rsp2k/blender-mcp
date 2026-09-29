@@ -15,7 +15,7 @@
   --iw-accent-hover: var(--sl-color-accent-high);
   /* Blender's own selection orange, so the pointer reads as "this one". */
   --iw-ring: #ffa033;
-  --iw-mono: var(--sl-font-mono);
+  --iw-mono: var(--__sl-font-mono, ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace);
 
   container-type: inline-size;
   width: 100%;
