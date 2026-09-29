@@ -26,11 +26,17 @@ export const prerender = true;
       content="Connect Claude or any MCP client to the Blender you're running. Install the add-on from mcp.blender.bet/install in about two minutes."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preload" as="image" href="/img/onboarding/web/01.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/img/mascot/clip-512.png" />
   </head>
   <body>
     <div class="page">
       <main class="hero">
+        <figure class="mascot">
+          <img src="/img/mascot/clip-512.png" width="512" height="512"
+               alt="Clip, a dark blue binder clip with big eyes, waving one wire handle like an arm." />
+          <figcaption>Clip carries what you point at to the model.</figcaption>
+        </figure>
+        <div class="hero-text">
         <h1>BlenderMCP</h1>
         <p class="tag">
           Connect Claude, or any MCP client, to the Blender you're running.
@@ -41,6 +47,7 @@ export const prerender = true;
           <a class="cta primary" href="#install">Install the add-on</a>
           <a class="cta" href="https://docs.blender.bet/">Read the docs</a>
           <a class="cta" href="https://docs.blender.bet/explanation/use-cases/">Use cases</a>
+        </div>
         </div>
       </main>
 
