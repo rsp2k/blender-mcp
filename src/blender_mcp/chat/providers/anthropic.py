@@ -37,10 +37,16 @@ ADVISOR_TOOL = "advisor_20260301"
 # Said to the advisor, which reads the system prompt as context: it's the
 # advice length, not the executor's, that drives the advisor's cost.
 ADVISOR_NOTE = (
-    "\n\nYou can call advisor, a stronger model that sees this whole conversation, "
-    "before a multi-part build, when a request is ambiguous in a way the scene doesn't "
-    "settle, or when a step keeps failing. Skip it for lookups and single edits. "
-    "(Advisor: keep your guidance under 80 words, as concrete steps.)"
+    "\n\nYou have an advisor tool backed by a stronger model. It takes no parameters: "
+    "calling advisor() forwards this whole conversation, including the scene and every "
+    "tool result so far.\n"
+    "Hard rule: if a request creates, moves or fixes three or more objects, or needs "
+    "several parts to fit together (touching, evenly spaced, ordered, mirrored), call "
+    "advisor after you have looked at the scene and before your first change. Also call it "
+    "when a step fails twice, or before reaching for execute_code. Skip it for lookups and "
+    "single edits.\n"
+    "Give the advice serious weight; if a measurement contradicts it, trust the measurement.\n"
+    "(Advisor: keep your guidance under 80 words, as concrete steps with numbers.)"
 )
 PAUSE_LIMIT = 3  # pause_turn continuations per call
 # Models that take ``fallbacks: "default"`` (refusals re-run server-side).
@@ -210,15 +216,15 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
     return req
 
 
-def _log_usage(backend: Backend, message: Any) -> None:
+def _log_usage(backend: Backend, message: Any, offered: str = "") -> None:
     """One line per call, so cache hits can be checked in the server log."""
     u = getattr(message, "usage", None)
     if u is None:
         return
     advice = [it for it in (getattr(u, "iterations", None) or [])
               if _field(it, "type") == "advisor_message"]
-    logger.info("anthropic usage model=%s in=%s cache_read=%s cache_write=%s out=%s%s",
-                backend.model, getattr(u, "input_tokens", None),
+    logger.info("anthropic usage model=%s advisor_offered=%s in=%s cache_read=%s cache_write=%s out=%s%s",
+                backend.model, offered or "-", getattr(u, "input_tokens", None),
                 getattr(u, "cache_read_input_tokens", None),
                 getattr(u, "cache_creation_input_tokens", None),
                 getattr(u, "output_tokens", None),
@@ -375,7 +381,9 @@ async def complete(
                 raise _translate(e, backend, timeout_s) from e
             except anthropic.AnthropicError as e:
                 raise _translate(e, backend, timeout_s) from e
-            _log_usage(backend, message)
+            sent = request(wire)
+            _log_usage(backend, message, next((t.get("model", "") for t in sent.get("tools", [])
+                                               if t.get("type") == ADVISOR_TOOL), ""))
             if getattr(message, "stop_reason", None) == "pause_turn" and pauses < PAUSE_LIMIT:
                 # A server tool (the advisor) was still running: send the
                 # partial turn back as-is and the API carries on from it.
