@@ -84,6 +84,9 @@ def _draw_approval(layout, snap, wrap) -> None:
 def _draw_model_chip(layout, snap) -> None:
     backend = snap["backend_used"] or snap["backend"]
     label = reader.model_label(backend)
+    advisor = reader.model_label({"model": (snap["backend"] or {}).get("advisor")})
+    if label and advisor:
+        label += f" › {advisor.removeprefix('Claude ')}"
     row = layout.row(align=True)
     row.operator("blendermcp.chat_backend_settings",
                  text=label or "Choose a model", icon='MONKEY')

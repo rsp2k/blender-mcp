@@ -11,11 +11,13 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from ..storage.models import ChatSettings
+from . import advisors
 from .config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_ANTHROPIC_MODEL, ChatConfig
 from .providers import PROVIDERS, Backend, ProviderError
 
@@ -83,12 +85,14 @@ def _own(row: ChatSettings | None) -> bool:
 def public_view(row: ChatSettings | None, cfg: ChatConfig) -> dict:
     """What the add-on may see. Never a key, the server's or the user's."""
     if _own(row):
+        model = row.model or {"anthropic": DEFAULT_ANTHROPIC_MODEL}.get(row.provider)
         return {
             "provider": row.provider,
-            "model": row.model or {"anthropic": DEFAULT_ANTHROPIC_MODEL}.get(row.provider),
+            "model": model,
             "base_url": row.base_url,
             "has_key": bool(row.api_key_enc),
             "source": "user",
+            **advisor_view(model, row.provider, row, cfg),
         }
     provider = cfg.default_provider
     if provider == "gateway":
@@ -101,10 +105,44 @@ def public_view(row: ChatSettings | None, cfg: ChatConfig) -> dict:
         model = cfg.default_model or None
         has_key = bool(cfg.default_api_key)
     return {"provider": provider, "model": model, "base_url": None,
-            "has_key": has_key, "source": "server"}
+            "has_key": has_key, "source": "server",
+            **advisor_view(model, provider, row, cfg)}
+
+
+def _advisor_choice(row: ChatSettings | None) -> str | None:
+    return getattr(row, "advisor", None) if row is not None else None
+
+
+def with_advisor(backend: Backend | None, row: ChatSettings | None, cfg: ChatConfig) -> Backend | None:
+    """The backend with the advisor it may use this turn (Claude only)."""
+    if backend is None or backend.provider != "anthropic":
+        return backend
+    pick = advisors.effective(backend.model, _advisor_choice(row), cfg.anthropic_advisor,
+                              cfg.anthropic_advisors)
+    return replace(backend, advisor=pick)
+
+
+def advisor_view(model: str | None, provider: str, row: ChatSettings | None,
+                 cfg: ChatConfig) -> dict:
+    """What the add-on shows for escalation: the options for this model,
+    the account's saved choice, and what a turn would actually use."""
+    if provider != "anthropic" or not model:
+        return {"advisor": "", "advisor_choice": _advisor_choice(row), "advisors": []}
+    return {
+        "advisor": advisors.effective(model, _advisor_choice(row), cfg.anthropic_advisor,
+                                      cfg.anthropic_advisors),
+        "advisor_choice": _advisor_choice(row),
+        "advisor_default": advisors.effective(model, None, cfg.anthropic_advisor,
+                                              cfg.anthropic_advisors),
+        "advisors": advisors.allowed_for(model, cfg.anthropic_advisors),
+    }
 
 
 def backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> Backend | None:
+    return with_advisor(_backend_for(row, cfg, user_sub), row, cfg)
+
+
+def _backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> Backend | None:
     """The backend this user's turns go to, or None when they have none.
 
     Precedence: the user's own saved backend, then the server default
@@ -149,8 +187,11 @@ async def save(
     base_url: str | None = None,
     api_key: str | None = None,
     clear: bool = False,
+    advisor: str | None = None,
 ) -> ChatSettings | None:
-    """Create, update or (``clear``) delete the user's row. Returns the row."""
+    """Create, update or (``clear``) delete the user's row. Returns the row.
+    ``advisor``: None leaves it as saved, "" follows the server, "off" or a
+    model id sets it."""
     async with session_factory() as s:
         row = await s.get(ChatSettings, user_sub)
         if clear:
@@ -190,5 +231,42 @@ async def save(
         row.model = model
         row.base_url = base_url
         row.api_key_enc = enc
+        if advisor is not None:
+            row.advisor = check_advisor(advisor, row, cfg)
+        await s.commit()
+        return row
+
+
+def check_advisor(advisor: str, row: ChatSettings | None, cfg: ChatConfig) -> str | None:
+    """Validate an advisor choice against the account's current model."""
+    pick = advisors.base_model(advisor)
+    if not pick:
+        return None
+    if pick == advisors.OFF:
+        return advisors.OFF
+    backend = _backend_for(row, cfg, "check") if row is not None else server_default(cfg)
+    model = backend.model if backend is not None and backend.provider == "anthropic" else ""
+    if not model:
+        raise SettingsError("invalid_argument", "escalation needs a Claude model")
+    allowed = advisors.allowed_for(model, cfg.anthropic_advisors)
+    if pick not in allowed:
+        raise SettingsError("invalid_argument",
+                            f"{model} can't escalate to {pick} here; choose one of {allowed}")
+    return pick
+
+
+async def save_advisor(session_factory: Callable[[], Any], cfg: ChatConfig, user_sub: str,
+                       advisor: str) -> ChatSettings | None:
+    """Set only the advisor. An account without a saved backend gets a
+    "gateway" row, which keeps following the server's backend."""
+    async with session_factory() as s:
+        row = await s.get(ChatSettings, user_sub)
+        value = check_advisor(advisor, row, cfg)
+        if row is None:
+            if value is None:
+                return None
+            row = ChatSettings(user_sub=user_sub, provider="gateway")
+            s.add(row)
+        row.advisor = value
         await s.commit()
         return row

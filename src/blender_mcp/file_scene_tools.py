@@ -125,6 +125,7 @@ class BlenderFileSceneComponent(MCPMixin):
         self,
         empty: bool = True,
         discard_unsaved: bool = False,
+        factory: bool = False,
         target_uuid: str | None = None,
         _timeout: float = TIMEOUT_MEDIUM,
         bus_id: str | None = None,
@@ -133,10 +134,14 @@ class BlenderFileSceneComponent(MCPMixin):
         """Start a new file. ``empty`` (default) gives a scene with no objects;
         ``empty=false`` loads the user's startup file (usually cube, light and
         camera; the reply lists any startup defaults found). Refuses to drop
-        unsaved changes unless ``discard_unsaved``.
+        unsaved changes unless ``discard_unsaved``. ``factory`` uses Blender's
+        stock startup scene instead of the user's (repeatable tests).
         """
+        params = {"empty": empty, "discard_unsaved": discard_unsaved}
+        if factory:
+            params["factory"] = True  # older add-ons drop the unknown key
         return await self._call(
-            ctx, "new_file", {"empty": empty, "discard_unsaved": discard_unsaved},
+            ctx, "new_file", params,
             target_uuid, _timeout, bus_id=bus_id,
         )
 

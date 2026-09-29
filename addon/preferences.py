@@ -366,6 +366,17 @@ def draw_chat_backend_section(layout, prefs):
     refresh.operator("blendermcp.refresh_chat_backend", text="", icon='FILE_REFRESH')
     if backend and backend.get("base_url"):
         col.label(text=f"URL: {backend['base_url']}")
+    if backend and backend.get("provider") == "anthropic" and backend.get("advisors"):
+        from .chat.reader import model_label
+        eff = backend.get("advisor") or ""
+        choice = backend.get("advisor_choice")
+        shown = model_label({"model": eff}) or "Off"
+        if choice is None:
+            shown += " (server default)"
+        row = col.row(align=True)
+        row.enabled = connected
+        row.label(text="Escalate to", icon='TRIA_UP')
+        row.menu("BLENDERMCP_MT_ChatAdvisor", text=shown)
     if chat_state.backend_error:
         err = col.row()
         err.alert = True

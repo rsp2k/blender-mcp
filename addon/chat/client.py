@@ -25,6 +25,7 @@ from .state import (
 
 CHAT_TOOL = "blender_chat"
 SET_BACKEND_TOOL = "blender_set_chat_backend"
+SET_ADVISOR_TOOL = "blender_set_chat_advisor"
 GET_BACKEND_TOOL = "blender_get_chat_backend"
 # The server stops a turn at its own limit (5 min by default) and approvals
 # count toward it; this only catches a server that never answers.
@@ -339,6 +340,11 @@ def set_backend(provider: str, model: str = "", base_url: str = "",
     if api_key:
         args["api_key"] = api_key
     return _call_backend_tool(SET_BACKEND_TOOL, args)
+
+
+def set_advisor(advisor: str) -> str | None:
+    """"" follows the server's default, "off" turns escalation off."""
+    return _call_backend_tool(SET_ADVISOR_TOOL, {"advisor": advisor})
 
 
 def clear_backend(provider: str) -> str | None:

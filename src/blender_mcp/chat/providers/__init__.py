@@ -33,6 +33,8 @@ class Backend:
     model: str
     base_url: str
     api_key: str = field(default="", repr=False)
+    # Claude only: the model this one may escalate to mid-turn ("" = none).
+    advisor: str = ""
 
     def public(self) -> dict:
         return {"provider": self.provider, "model": self.model}

@@ -142,7 +142,7 @@ class RoutingSamplingHandler:
                 "replay": lambda ids: self.thinking.get(scope, ids),
                 "fallbacks": cfg.anthropic_fallbacks,
                 "effort": cfg.anthropic_effort,
-                "advisor": cfg.anthropic_advisor,
+                "advisor": backend.advisor,
                 "advisor_max_tokens": cfg.anthropic_advisor_max_tokens,
             }
         c = await complete(

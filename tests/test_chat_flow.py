@@ -28,6 +28,13 @@ from blender_mcp.chat.tools import BlenderChatComponent
 from blender_mcp.chat.turn import APPROVAL_PREFIX
 from blender_mcp.storage.models import ChatSettings
 
+
+def _no_advisor(view: dict) -> dict:
+    """The view without the escalation keys (tested on their own)."""
+    if "backend" in view:
+        return {**view, "backend": _no_advisor(view["backend"])}
+    return {k: v for k, v in view.items() if not k.startswith("advisor")}
+
 USER = "user-sub-1"
 BLENDER = "blender-uuid-1"
 BUS = "11111111-1111-1111-1111-111111111111"
@@ -509,7 +516,7 @@ async def test_per_user_anthropic_backend(cfg, sessions):
         got = json.loads((await client.call_tool("blender_get_chat_backend", {})).content[0].text)
         out = await h.chat(client, "a lamp please")
 
-    assert saved == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
+    assert _no_advisor(saved) == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
                                                  "base_url": None, "has_key": True, "source": "user"}}
     assert got == saved
     assert key not in json.dumps(saved) + json.dumps(got) + json.dumps(out)
@@ -551,7 +558,7 @@ async def test_server_default_anthropic_backend(cfg, sessions):
         await client.call_tool("blender_set_chat_backend", {
             "provider": "openai", "base_url": "http://ollama.internal:11434/v1", "model": "llama3"})
         out2 = await h.chat(client)
-    assert got == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
+    assert _no_advisor(got) == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
                                                "base_url": None, "has_key": True, "source": "server"}}
     assert server_key not in json.dumps(got) + json.dumps(out) + json.dumps(out2)
     assert out["status"] == "ok" and out["reply"] == "Made a crate."

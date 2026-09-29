@@ -443,6 +443,8 @@ class ChatSettings(Base):
     model: Mapped[str | None] = mapped_column(String(128))
     base_url: Mapped[str | None] = mapped_column(String(512))
     api_key_enc: Mapped[str | None] = mapped_column(Text)
+    # Model a Claude backend may escalate to; None = the server's default, "off" = none.
+    advisor: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

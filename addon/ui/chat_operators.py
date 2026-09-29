@@ -106,6 +106,45 @@ class BLENDERMCP_OT_ChatUndoTurn(bpy.types.Operator):
         return {'FINISHED'} if undone else {'CANCELLED'}
 
 
+class BLENDERMCP_OT_SetChatAdvisor(bpy.types.Operator):
+    """Choose the model your chat may escalate to"""
+
+    bl_idname = "blendermcp.set_chat_advisor"
+    bl_label = "Escalate to"
+    bl_description = (
+        "When a request needs more thought, your chat model can consult this "
+        "stronger model mid-reply. It costs that model's rates for the advice only"
+    )
+
+    advisor: bpy.props.StringProperty(default="")
+
+    def execute(self, context):
+        problem = chat_client.set_advisor(self.advisor)
+        if problem:
+            self.report({'WARNING'}, problem)
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BLENDERMCP_MT_ChatAdvisor(bpy.types.Menu):
+    bl_idname = "BLENDERMCP_MT_ChatAdvisor"
+    bl_label = "Escalate to"
+
+    def draw(self, context):
+        layout = self.layout
+        backend = chat_state.backend or {}
+        default = backend.get("advisor_default") or ""
+        op = layout.operator("blendermcp.set_chat_advisor",
+                             text=f"Server default ({reader.model_label({'model': default}) or 'off'})",
+                             icon='WORLD')
+        op.advisor = ""
+        layout.operator("blendermcp.set_chat_advisor", text="Off", icon='CANCEL').advisor = "off"
+        layout.separator()
+        for model in backend.get("advisors") or []:
+            layout.operator("blendermcp.set_chat_advisor",
+                            text=reader.model_label({"model": model}), icon='TRIA_UP').advisor = model
+
+
 class BLENDERMCP_OT_ChatBackendSettings(bpy.types.Operator):
     """Choose which model answers in the Chat tab"""
 
@@ -259,6 +298,8 @@ CHAT_OPERATORS = (
     BLENDERMCP_OT_ChatReader,
     BLENDERMCP_OT_ChatUndoTurn,
     BLENDERMCP_OT_ChatBackendSettings,
+    BLENDERMCP_OT_SetChatAdvisor,
+    BLENDERMCP_MT_ChatAdvisor,
     BLENDERMCP_OT_ChatClear,
     BLENDERMCP_OT_ChatAllow,
     BLENDERMCP_OT_ChatDeny,

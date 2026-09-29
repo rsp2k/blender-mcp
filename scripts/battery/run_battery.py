@@ -204,7 +204,7 @@ class Battery:
         s = case.setup
         base = s.get("base", "empty")
         if base == "empty":
-            r = await self.tool("blender_new_file", {"empty": False, "discard_unsaved": True})
+            r = await self.tool("blender_new_file", {"empty": False, "discard_unsaved": True, "factory": True})
             _require_ok(r, "new_file")
             await self.code(snippets.remove_default_cube())
         elif base == "blend":

@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from .advisors import parse_allowlist
+
 DEFAULT_GPU_BASE_URL = "https://blender-chat.gpu.supported.systems/v1"
 DEFAULT_MODEL = "qwen3"
 DEFAULT_VISION_MODEL = "qwen2.5vl"
@@ -73,6 +75,9 @@ class ChatConfig:
     # empty = off. The advice is capped per call.
     anthropic_advisor: str = ""
     anthropic_advisor_max_tokens: int = 2048
+    # Models accounts may escalate to (CHAT_ANTHROPIC_ADVISORS); empty = any
+    # the API allows for their model.
+    anthropic_advisors: frozenset[str] = frozenset()
 
     def user_allowed(self, user_sub: str | None) -> bool:
         """May this user use the server's own backends (gateway or default)?"""
@@ -107,5 +112,6 @@ def load_config(env=None) -> ChatConfig:
         anthropic_fallbacks=_get(env, "CHAT_ANTHROPIC_FALLBACKS").lower() not in _OFF,
         anthropic_effort=_choice(env, "CHAT_ANTHROPIC_EFFORT", EFFORTS, ""),
         anthropic_advisor=_get(env, "CHAT_ANTHROPIC_ADVISOR"),
+        anthropic_advisors=parse_allowlist(_get(env, "CHAT_ANTHROPIC_ADVISORS")),
         anthropic_advisor_max_tokens=max(1024, _int(env, "CHAT_ANTHROPIC_ADVISOR_MAX_TOKENS", 2048)),
     )

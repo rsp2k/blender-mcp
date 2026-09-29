@@ -349,11 +349,14 @@ class FileSceneHandlersMixin:
         return {"reverted": bpy.data.filepath, **_file_state()}
 
     @command("new_file", undo=False)
-    def new_file(self, empty: bool = True, discard_unsaved: bool = False):
-        """Start a new file: an empty scene, or the user's startup file."""
+    def new_file(self, empty: bool = True, discard_unsaved: bool = False, factory: bool = False):
+        """Start a new file: an empty scene, or the user's startup file.
+        ``factory`` uses Blender's stock startup (cube, light, camera) instead
+        of the user's, e.g. for repeatable tests; preferences are untouched."""
         _refuse_if_dirty(discard_unsaved, "starting a new file")
-        bpy.ops.wm.read_homefile(use_empty=empty, load_ui=False)
-        return {"new_file": True, "empty": empty,
+        kwargs = {"use_factory_startup": True} if factory else {}
+        bpy.ops.wm.read_homefile(use_empty=empty, load_ui=False, **kwargs)
+        return {"new_file": True, "empty": empty, "factory": bool(factory),
                 "startup_defaults": find_startup_defaults(bpy.context.scene), **_file_state()}
 
     # --- #16 startup leftovers ----------------------------------------------------

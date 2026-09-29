@@ -29,6 +29,13 @@ from blender_mcp.chat.routing import RoutingSamplingHandler, to_result
 from blender_mcp.chat.vision import find_object_key
 from blender_mcp.storage.models import ChatSettings
 
+
+def _no_advisor(view: dict) -> dict:
+    """The view without the escalation keys (tested on their own)."""
+    if "backend" in view:
+        return {**view, "backend": _no_advisor(view["backend"])}
+    return {k: v for k, v in view.items() if not k.startswith("advisor")}
+
 ALLOWED = {"create_mesh", "get_scene_info"}
 TOOLS = [Tool(name="create_mesh", description="make a mesh",
               inputSchema={"type": "object", "properties": {"name": {"type": "string"}}})]
@@ -205,7 +212,7 @@ def test_non_fernet_secret_still_works():
 def test_public_view_never_has_the_key():
     row = ChatSettings(user_sub="u", provider="openai", model="m", base_url="http://x", api_key_enc="enc")
     view = chat_settings.public_view(row, ChatConfig())
-    assert view == {"provider": "openai", "model": "m", "base_url": "http://x", "has_key": True,
+    assert _no_advisor(view) == {"provider": "openai", "model": "m", "base_url": "http://x", "has_key": True,
                     "source": "user"}
     assert chat_settings.public_view(None, ChatConfig())["provider"] == "gateway"
     assert chat_settings.public_view(None, ChatConfig())["source"] == "server"
@@ -271,7 +278,7 @@ async def test_server_default_needs_its_key_and_honours_the_user_list(sessions):
 def test_public_view_of_server_default_hides_the_server_key():
     cfg = _server_anthropic()
     view = chat_settings.public_view(None, cfg)
-    assert view == {"provider": "anthropic", "model": "claude-opus-5", "base_url": None,
+    assert _no_advisor(view) == {"provider": "anthropic", "model": "claude-opus-5", "base_url": None,
                     "has_key": True, "source": "server"}
     assert SERVER_KEY not in json.dumps(view) and SERVER_KEY not in repr(cfg)
     gw_row = ChatSettings(user_sub="u", provider="gateway", model="gemma4")

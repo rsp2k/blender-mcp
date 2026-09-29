@@ -184,6 +184,26 @@ class BlenderChatComponent(MCPMixin):
 
     @mcp_tool()
     @require_role("addon")
+    async def set_chat_advisor(self, advisor: str, ctx: Context = None) -> str:
+        """Choose the model this account's Claude chat may escalate to.
+
+        ``advisor``: a model id from ``backend.advisors`` (see
+        blender_get_chat_backend), ``off``, or empty to follow the server's
+        default. Returns ``{status, backend}`` like blender_get_chat_backend.
+        """
+        cfg = self.config_loader()
+        user_sub = _resolve_user_id(ctx)
+        if not user_sub:
+            return _dump({"status": "error", "error": "unauthenticated"})
+        try:
+            row = await chat_settings.save_advisor(self.handler.session_factory, cfg,
+                                                   user_sub, advisor or "")
+        except chat_settings.SettingsError as e:
+            return _dump({"status": "error", "error": e.code, "detail": e.detail})
+        return _dump({"status": "ok", "backend": chat_settings.public_view(row, cfg)})
+
+    @mcp_tool()
+    @require_role("addon")
     async def get_chat_backend(self, ctx: Context = None) -> str:
         """This account's chat backend: ``{status, backend: {provider, model,
         base_url, has_key, source}}``. ``source`` is ``user`` for a backend
