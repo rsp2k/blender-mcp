@@ -143,6 +143,12 @@ def _install_lifecycle_handlers() -> None:
             handlers.append(_on_blend_load_post)
     except Exception as e:
         print(f"[BlenderMCP] Could not install load_post handler: {e}")
+    # One undo step per command, plus the change watcher behind undo_since.
+    try:
+        from . import undo_steps
+        undo_steps.register()
+    except Exception as e:  # noqa: BLE001  never block add-on (un)registration
+        print(f"[BlenderMCP] Could not install undo handlers: {e}")
 
 
 def _uninstall_lifecycle_handlers() -> None:
@@ -156,6 +162,11 @@ def _uninstall_lifecycle_handlers() -> None:
             handlers.remove(_on_blend_load_post)
     except Exception as e:
         print(f"[BlenderMCP] Could not remove load_post handler: {e}")
+    try:
+        from . import undo_steps
+        undo_steps.unregister()
+    except Exception as e:  # noqa: BLE001  never block add-on (un)registration
+        print(f"[BlenderMCP] Could not remove undo handlers: {e}")
 
 
 def _line_buffer_stdout() -> None:

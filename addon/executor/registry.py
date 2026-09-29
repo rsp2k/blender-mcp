@@ -15,8 +15,9 @@ not in a faraway `if scene.use_X:` block.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,26 @@ class CommandSpec:
             how to enable the integration. Without it a gated-off command
             answers "Unknown command type", which reads like a missing
             feature rather than a switched-off one.
+        undo: Whether the command changes the scene and so gets one undo
+            step ("BlenderMCP: <name>"). False for read-only commands. May
+            also be a predicate over the params, for commands that only
+            sometimes change things (e.g. a dry_run flag).
     """
 
     name: str
     func: Callable
-    gate: Optional[Callable[[Any], bool]] = None
-    disabled_hint: Optional[str] = None
+    gate: Callable[[Any], bool] | None = None
+    disabled_hint: str | None = None
+    undo: bool | Callable[[dict], bool] = True
+
+    def wants_undo(self, params: dict) -> bool:
+        """True when this call should become an undo step."""
+        if callable(self.undo):
+            try:
+                return bool(self.undo(params if isinstance(params, dict) else {}))
+            except Exception:  # noqa: BLE001  a broken predicate errs toward undoable
+                return True
+        return bool(self.undo)
 
 
 COMMAND_REGISTRY: dict[str, CommandSpec] = {}
@@ -48,8 +63,9 @@ COMMAND_REGISTRY: dict[str, CommandSpec] = {}
 def command(
     name: str,
     *,
-    gate: Optional[Callable[[Any], bool]] = None,
-    disabled_hint: Optional[str] = None,
+    gate: Callable[[Any], bool] | None = None,
+    disabled_hint: str | None = None,
+    undo: bool | Callable[[dict], bool] = True,
 ) -> Callable:
     """Register a handler method under ``name``.
 
@@ -64,6 +80,8 @@ def command(
         def download_polyhaven_asset(self, asset_id, asset_type, ...):
             ...
 
+    Read-only commands pass ``undo=False`` so they push no undo step.
+
     The decorator returns the function unchanged so normal method-style
     calls (``self.method()``) keep working alongside the dispatch path.
     """
@@ -71,6 +89,7 @@ def command(
     def decorator(fn: Callable) -> Callable:
         COMMAND_REGISTRY[name] = CommandSpec(
             name=name, func=fn, gate=gate, disabled_hint=disabled_hint,
+            undo=undo,
         )
         return fn
 

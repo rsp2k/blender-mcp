@@ -98,7 +98,7 @@ def _fresh_token(client) -> tuple[str, int]:
 class WorkerHandlersMixin:
     """Headless background workers and the result-reload offer."""
 
-    @command("spawn_worker")
+    @command("spawn_worker", undo=False)
     def spawn_worker(self):
         """Save a copy of the scene and start a headless worker on it."""
         _require_gui("spawn_worker")
@@ -177,7 +177,7 @@ class WorkerHandlersMixin:
             "expires_at": deadline,
         }
 
-    @command("stop_worker")
+    @command("stop_worker", undo=False)
     def stop_worker(self, worker_uuid: str):
         """Terminate a worker this Blender spawned (SIGTERM, then SIGKILL)."""
         _require_gui("stop_worker")
@@ -191,7 +191,7 @@ class WorkerHandlersMixin:
         return {"worker_uuid": worker_uuid, "pid": info["pid"], "exited": exited,
                 "returncode": returncode, "worker_dir": info["dir"], "known": True}
 
-    @command("list_workers")
+    @command("list_workers", undo=False)
     def list_workers(self):
         """Workers this Blender spawned that are still running."""
         _require_gui("list_workers")
@@ -202,7 +202,7 @@ class WorkerHandlersMixin:
             for uuid, w in state._workers.items()
         ]}
 
-    @command("offer_reload")
+    @command("offer_reload", undo=False)
     def offer_reload(self, path: str, message: str = ""):
         """Show a banner offering to open ``path`` in this Blender. Never
         reloads on its own; the user clicks Reload or Dismiss."""
@@ -219,7 +219,7 @@ class WorkerHandlersMixin:
             _request_ui_redraw()
         return {"offered": True, "path": str(p), "unsaved_changes": bool(bpy.data.is_dirty)}
 
-    @command("offer_merge")
+    @command("offer_merge", undo=False)
     def offer_merge(self, path: str, collections: list, message: str = "", mode: str = "replace"):
         """Show a banner offering to merge ``collections`` from ``path`` into
         this scene. Never merges on its own; the user clicks Merge or Dismiss."""
@@ -244,13 +244,13 @@ class WorkerHandlersMixin:
         return {"offered": True, "path": str(p), "collections": names, "mode": mode,
                 "present_in_scene": live}
 
-    @command("get_merge_result")
+    @command("get_merge_result", undo=False)
     def get_merge_result(self):
         """The pending merge offer (if not yet answered) and the last merge's report."""
         _require_gui("get_merge_result")
         return {"pending": state._pending_merge, "last_result": state._last_merge_result}
 
-    @command("worker_exit")
+    @command("worker_exit", undo=False)
     def worker_exit(self):
         """Ask this worker to finish: it unregisters and exits after replying."""
         if not is_worker_mode():

@@ -48,7 +48,7 @@ class PolyhavenHandlersMixin:
     `search_polyhaven_assets`, `download_polyhaven_asset`, `set_texture`.
     """
 
-    @command("get_polyhaven_categories", gate=_polyhaven_enabled, disabled_hint=POLYHAVEN_DISABLED_HINT)
+    @command("get_polyhaven_categories", gate=_polyhaven_enabled, disabled_hint=POLYHAVEN_DISABLED_HINT, undo=False)
     def get_polyhaven_categories(self, asset_type):
         """Get categories for a specific asset type from Polyhaven"""
         try:
@@ -63,7 +63,7 @@ class PolyhavenHandlersMixin:
         except Exception as e:
             return {"error": str(e)}
 
-    @command("search_polyhaven_assets", gate=_polyhaven_enabled, disabled_hint=POLYHAVEN_DISABLED_HINT)
+    @command("search_polyhaven_assets", gate=_polyhaven_enabled, disabled_hint=POLYHAVEN_DISABLED_HINT, undo=False)
     def search_polyhaven_assets(self, asset_type=None, categories=None):
         """Search for assets from Polyhaven with optional filtering"""
         try:
@@ -820,7 +820,7 @@ class PolyhavenHandlersMixin:
             background_visible=background_visible, **kwargs,
         )
 
-    @command("get_polyhaven_status")
+    @command("get_polyhaven_status", undo=False)
     def get_polyhaven_status(self):
         """Get the current status of PolyHaven integration"""
         enabled = get_prefs().use_polyhaven

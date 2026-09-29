@@ -306,7 +306,7 @@ class FileSceneHandlersMixin:
 
     # --- #5 save / open ---------------------------------------------------------
 
-    @command("save_file")
+    @command("save_file", undo=False)
     def save_file(self, path: str | None = None, copy: bool = False, compress: bool = False,
                   create_dirs: bool = False):
         """Save the open .blend (to its own path, or to ``path``)."""
@@ -327,7 +327,7 @@ class FileSceneHandlersMixin:
         return {"saved": target, "copy": copy, "size_bytes": os.path.getsize(target),
                 **_file_state()}
 
-    @command("open_file")
+    @command("open_file", undo=False)
     def open_file(self, path: str, discard_unsaved: bool = False, load_ui: bool = False):
         """Open a .blend, refusing to drop unsaved work unless told to."""
         target = _require_blend(path)
@@ -339,7 +339,7 @@ class FileSceneHandlersMixin:
         return {"opened": target, "discarded_unsaved": before["is_dirty"],
                 "scenes": [s.name for s in bpy.data.scenes], **_file_state()}
 
-    @command("revert_file")
+    @command("revert_file", undo=False)
     def revert_file(self, discard_unsaved: bool = False):
         """Reload the open file from disk."""
         if not bpy.data.filepath:
@@ -348,7 +348,7 @@ class FileSceneHandlersMixin:
         bpy.ops.wm.revert_mainfile()
         return {"reverted": bpy.data.filepath, **_file_state()}
 
-    @command("new_file")
+    @command("new_file", undo=False)
     def new_file(self, empty: bool = True, discard_unsaved: bool = False):
         """Start a new file: an empty scene, or the user's startup file."""
         _refuse_if_dirty(discard_unsaved, "starting a new file")
@@ -358,7 +358,7 @@ class FileSceneHandlersMixin:
 
     # --- #16 startup leftovers ----------------------------------------------------
 
-    @command("scene_defaults")
+    @command("scene_defaults", undo=lambda p: bool(p.get("remove")))
     def scene_defaults(self, remove: bool = False, kinds=None):
         """Find (and optionally remove) untouched startup cube/light/camera."""
         if isinstance(kinds, str):
@@ -402,7 +402,7 @@ class FileSceneHandlersMixin:
 
     # --- #17 interior faces --------------------------------------------------------
 
-    @command("remove_interior")
+    @command("remove_interior", undo=lambda p: not p.get("dry_run"))
     def remove_interior(self, object: str, method: str = "faces", dry_run: bool = False):
         """Flip inside-out faces and delete buried faces or enclosed shells."""
         if method not in ("faces", "shells"):
@@ -448,7 +448,7 @@ class FileSceneHandlersMixin:
 
     # --- #27 glTF export -------------------------------------------------------------
 
-    @command("export_gltf")
+    @command("export_gltf", undo=False)
     def export_gltf(self, path: str, objects=None, format: str = "glb", audit: bool = True,
                     auto_fix: bool = False, create_dirs: bool = False):
         """Export glTF after auditing materials the exporter would empty out."""

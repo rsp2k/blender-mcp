@@ -88,7 +88,7 @@ class ViewControlHandlersMixin:
     """set_frame, look_through, place_object, world_from_local,
     set_viewport_shading, set_viewport_overlays."""
 
-    @command("set_frame")
+    @command("set_frame", undo=False)
     def set_frame(self, frame: int, apply_markers: bool = True):
         """Jump to a frame and apply timeline-marker camera binding.
 
@@ -248,7 +248,7 @@ class ViewControlHandlersMixin:
             result["lens"] = obj.data.lens
         return result
 
-    @command("world_from_local")
+    @command("world_from_local", undo=False)
     def world_from_local(self, object: str, point, inverse: bool = False):
         """Convert a point between ``object``'s local frame and world.
 
@@ -267,7 +267,7 @@ class ViewControlHandlersMixin:
             "result": list(result),
         }
 
-    @command("set_viewport_shading")
+    @command("set_viewport_shading", undo=False)
     def set_viewport_shading(
         self,
         type: str = None,
@@ -328,7 +328,7 @@ class ViewControlHandlersMixin:
             "render_engine": bpy.context.scene.render.engine,
         }
 
-    @command("set_viewport_overlays")
+    @command("set_viewport_overlays", undo=False)
     def set_viewport_overlays(self, flags: dict = None, all_viewports: bool = False):
         """Toggle View3DOverlay booleans by name, e.g.
         {"show_relationship_lines": false, "show_extras": false}.
