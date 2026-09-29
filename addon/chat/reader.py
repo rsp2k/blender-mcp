@@ -61,6 +61,21 @@ def _rule(label: str) -> str:
     return head + "─" * max(3, RULE_WIDTH - len(head))
 
 
+STEP_ERROR_CHARS = 160
+_ERROR_FIELD = re.compile(r'"error":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def step_error(text: str) -> str:
+    """The readable part of a failed step's error: the inner "error" field
+    when the add-on's JSON reply came through, cut to one short line."""
+    raw = str(text or "")
+    found = _ERROR_FIELD.findall(raw)
+    if found:
+        raw = found[-1].encode().decode("unicode_escape", errors="replace")
+    raw = " ".join(raw.split())
+    return raw if len(raw) <= STEP_ERROR_CHARS else raw[:STEP_ERROR_CHARS - 1] + "…"
+
+
 def turns(messages: list) -> list[dict]:
     """Group messages by turn: the user's message, the steps, the replies."""
     out: list[dict] = []
@@ -116,7 +131,7 @@ def render_document(messages: list, backend: dict | None = None) -> str:
                 mark = "…" if ok is None else ("✓" if ok else "✗")
                 row = f"  {mark} {tool_line(s)}"
                 if ok is False and s.get("error"):
-                    row += f": {s['error']}"
+                    row += f": {step_error(s['error'])}"
                 lines.append(row)
             if t["steps"]:
                 lines.append("")
@@ -239,3 +254,38 @@ def toggle(context) -> str:
         pass
     space.top = latest_turn_line(space.text.as_string())
     return "Reader opened"
+
+
+def invalidate() -> None:
+    """Force the next sync to rewrite the text block."""
+    _synced[0] = None
+
+
+def _resync_later() -> None:
+    invalidate()
+    try:
+        sync()
+    except Exception as e:  # noqa: BLE001
+        print(f"[BlenderMCP] Chat reader update failed: {e}")
+
+
+def _on_undo_redo(*_args) -> None:
+    # The text block is ID data, so undo/redo rolls it back with the scene;
+    # the conversation itself lives in chat_state and didn't change.
+    import bpy
+    if not bpy.app.timers.is_registered(_resync_later):
+        bpy.app.timers.register(_resync_later, first_interval=0.0)
+
+
+def register_handlers() -> None:
+    import bpy
+    for hook in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if _on_undo_redo not in hook:
+            hook.append(_on_undo_redo)
+
+
+def unregister_handlers() -> None:
+    import bpy
+    for hook in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if _on_undo_redo in hook:
+            hook.remove(_on_undo_redo)

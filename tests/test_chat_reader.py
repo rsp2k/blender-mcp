@@ -58,3 +58,10 @@ def test_reading_starts_at_the_newest_turn():
     doc = reader.render_document(MESSAGES + [{"role": "user", "text": "again", "turn": 2}])
     i = reader.latest_turn_line(doc)
     assert doc.split("\n")[i].startswith("── You") and doc.split("\n")[i + 1] == "again"
+
+
+def test_step_error_keeps_the_inner_message():
+    raw = ('{"status": "failed", "command": "world_bounds", "result": "Executing handler", '
+           '"error": "Object not found: \'Tower 9\'"}')
+    assert reader.step_error(raw) == "Object not found: 'Tower 9'"
+    assert len(reader.step_error("x" * 500)) == reader.STEP_ERROR_CHARS

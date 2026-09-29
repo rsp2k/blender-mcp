@@ -216,6 +216,29 @@ def _route_job(bus, bus_id_str: str, chosen_uuid: str, job_id: str,
     )
 
 
+# Params typed ``list[str] | str``: a client (often an LLM) that sends the list
+# as a JSON string gets it accepted by the ``str`` branch as one literal
+# name, and the add-on then looks for an object called '["Tower 4"]'.
+NAME_LIST_PARAMS = ("objects", "operands", "frame", "names")
+
+
+def unwrap_name_lists(params: dict) -> dict:
+    """Decode name-list params that arrived as a JSON-encoded list."""
+    out = None
+    for key in NAME_LIST_PARAMS:
+        value = params.get(key)
+        if not (isinstance(value, str) and value.strip().startswith("[")):
+            continue
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(decoded, list) and all(isinstance(v, str) for v in decoded):
+            out = out if out is not None else dict(params)
+            out[key] = decoded
+    return out if out is not None else params
+
+
 async def _dispatch(
     bus,
     bus_id_str: str,
@@ -232,6 +255,7 @@ async def _dispatch(
     keeps running in Blender and the caller gets a job_id to poll with
     blender_job_status instead of a dead end.
     """
+    params = unwrap_name_lists(params)
     pick = _pick_blender_target(bus, target_uuid)
     if not pick["ok"]:
         return json.dumps(pick | {"ok": False, "command": command})

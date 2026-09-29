@@ -20,6 +20,7 @@ from .icons import icon_id
 
 PREVIEW_LINES = 8
 REPLY_LINES = 6
+APPROVAL_NOTES = ("Allowed.", "Declined.")
 
 
 def _ui_scale(context) -> float:
@@ -143,6 +144,8 @@ def _draw_turn(layout, context, snap, wrap) -> None:
         for line in lines:
             col.label(text=line)
     for note in turn["notes"]:
+        if note.get("role") == "status" and (note.get("text") or "").strip() in APPROVAL_NOTES:
+            continue  # the step list already says what was allowed or declined
         _label_lines(col.column(align=True), wrap(reader.plain(note.get("text") or "")),
                      'ERROR' if note.get("role") == "error" else 'INFO',
                      alert=note.get("role") == "error")

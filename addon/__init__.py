@@ -239,6 +239,8 @@ def register():
     _icons.register()
     from .chat import clip as _clip
     _clip.register_props()
+    from .chat import reader as _reader
+    _reader.register_handlers()
 
     # One-shot migration from legacy Scene properties (pre-Phase-8 installs).
     # Runs against bpy.context.scene if available; safe to no-op otherwise.
@@ -344,6 +346,8 @@ def unregister():
     _chat_transcript.unregister_props()
     from .chat import clip as _clip
     _clip.unregister_props()
+    from .chat import reader as _reader
+    _reader.unregister_handlers()
     from .ui import icons as _icons
     _icons.unregister()
 
