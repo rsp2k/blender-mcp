@@ -5,81 +5,37 @@ sidebar:
   order: 1
 ---
 
-import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
-import { Image } from 'astro:assets';
-import addRepository from '../../../assets/quickstart/add-repository.webp';
-import installEntry from '../../../assets/quickstart/install-entry.webp';
-import notLoggedIn from '../../../assets/quickstart/not-logged-in.webp';
-import connected from '../../../assets/quickstart/connected.webp';
+import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import InstallWalkthrough from '../../../components/InstallWalkthrough.astro';
 
-By the end of this page, Claude will read your Blender scene and change it while you watch. You'll install the add-on from Blender's extension manager, log in once through your browser, and point Claude at the hosted server at `https://mcp.blender.bet/`. Nothing runs on your machine except Blender and the client you already use.
+By the end of this page, Claude will read your Blender scene and change it while you watch. You'll add the Blender MCP extension to Blender, log in once through your browser, and point Claude at the hosted server. Nothing runs on your machine except Blender and the client you already use.
 
-You need Blender 4.2 or newer, a web browser, and an MCP client such as Claude Code, Claude Desktop, or claude.ai. It takes about ten minutes.
+You need Blender 4.2 or newer, a web browser, and an MCP client such as Claude Code, Claude Desktop, or claude.ai.
 
-## 1. Add the repository
+## Install and log in
 
-Blender MCP ships as a Blender extension, so Blender installs it and keeps it updated for you.
+Follow the twelve steps below in Blender. Use **Next** or the arrow keys to move through them, or pick a step from the list. When you reach step 11, the BlenderMCP panel reads **Connected · Personal** and your Blender is ready.
 
-<Steps>
-
-1. In Blender, open **Edit › Preferences** and pick **Get Extensions**.
-
-2. Open the **Repositories** menu at the top right, click **+**, and choose **Add Remote Repository**.
-
-3. Paste this address into the URL field:
-
-   ```text
-   https://mcp.blender.bet/install
-   ```
-
-   Leave **Check for Updates on Startup** ticked and click **Create**.
-
-   <Image src={addRepository} alt="The Add New Extension Repository dialog with https://mcp.blender.bet/install in the URL field." />
-
-</Steps>
-
-The repository shows up in the list, and **Blender MCP** appears under **Available**.
-
-## 2. Install the add-on
-
-Expand the **Blender MCP** entry. It lists what the add-on asks for (network access to reach the server, file access for asset downloads). Click **Install**.
-
-<Image src={installEntry} alt="The Blender MCP entry expanded, showing version, size, permissions and an Install button." />
-
-The download is about 24 MB because its Python dependencies come bundled. Blender enables the add-on as soon as it finishes, and you can close Preferences.
+<div class="not-content">
+  <InstallWalkthrough heading="" />
+</div>
 
 <Aside type="note">
-On Blender older than 4.2, or if you need a single-file install, follow [Install and upgrade the addon](/how-to/install-addon/) instead, then come back for step 3.
+On Blender older than 4.2, or if you need a single-file install, use [Install and upgrade the addon](/how-to/install-addon/) instead, then come back here.
 </Aside>
 
-## 3. Log in from Blender
+## Connect your MCP client
 
-Move the mouse over the 3D viewport and press **N** to open the sidebar. You'll see two new tabs, **BlenderMCP** and **Chat**. Open **BlenderMCP**. The panel reads **Not logged in**.
-
-<Image src={notLoggedIn} alt="The BlenderMCP sidebar panel reading Not logged in, with a Login with OAuth (browser) button." />
-
-Click **Login with OAuth (browser)**. Your browser opens on the sign-in page. Sign in, then approve access for BlenderMCP. Blender shows **Authenticating...** while it waits.
-
-When the browser lands on **You're signed in**, look back at Blender. The panel now reads **Connected · Personal**, with **Logged in as** and your name underneath.
-
-<Image src={connected} alt="Blender on the left with the panel reading Connected, Personal; the browser on the right showing You're signed in." />
-
-You can close the browser tab. Your Blender is now connected to your personal bus on the server, and it will reconnect on its own the next time you start Blender.
-
-## 4. Connect your MCP client
-
-The client connects to the same server. Use the root address `https://mcp.blender.bet/` exactly as written, with no `/mcp` on the end.
+Your client connects to the same server as Blender. Use the root address `https://mcp.blender.bet/` exactly as written, with no `/mcp` on the end, and sign in with the same account you used in Blender. The server only shows a client the Blenders logged in as the same person, so a different account finds nothing to talk to.
 
 <Tabs syncKey="mcp-client">
 <TabItem label="Claude Code">
-
-In a terminal:
 
 ```bash
 claude mcp add --transport http blender https://mcp.blender.bet/
 ```
 
-Start Claude Code, type `/mcp`, pick **blender**, and choose to authenticate. Your browser opens the same sign-in page. Sign in with the account you used in Blender.
+Start Claude Code, type `/mcp`, pick **blender**, and authenticate. Your browser opens the same sign-in page you saw from Blender.
 
 </TabItem>
 <TabItem label="Claude Desktop / claude.ai">
@@ -90,16 +46,14 @@ Start Claude Code, type `/mcp`, pick **blender**, and choose to authenticate. Yo
 
 2. Name it `Blender` and enter `https://mcp.blender.bet/` as the URL.
 
-3. Click **Connect** and sign in through the browser with the account you used in Blender.
+3. Click **Connect** and sign in through the browser.
 
 </Steps>
 
 </TabItem>
 </Tabs>
 
-Use the same account in both places. The server only lets a client see the Blenders logged in as the same person, so a different account would find nothing to talk to.
-
-## 5. Ask about your scene
+## Your first request
 
 Start a new conversation and ask:
 
@@ -107,7 +61,7 @@ Start a new conversation and ask:
 What's in my Blender scene?
 ```
 
-Claude calls the server, the server asks your Blender, and the answer comes back with what's actually there. On a fresh file that's the default cube, a camera, and a light.
+Claude calls the server, the server asks your Blender, and the answer describes what's actually there. On a fresh file that's the default cube, a camera, and a light.
 
 Now ask for a change:
 
@@ -115,15 +69,15 @@ Now ask for a change:
 Add a sphere next to the cube and make it orange.
 ```
 
-Watch the viewport. The sphere appears and takes on its new material, and if you expand **Activity** under the BlenderMCP panel, it lists each command Claude ran, newest first. You've just driven Blender from Claude.
+Watch the viewport. The sphere appears and takes on its new color. If you expand **Activity** under the BlenderMCP panel, it lists each command Claude ran, newest first.
 
 <Aside type="tip" title="Prefer to stay in Blender?">
-Open the **Chat** tab in the same sidebar, type the same request into the field, and press the play button. A model does the work inside the Blender you typed in, with no other client needed. If it wants to run Python, the tab shows the code with **Allow** and **Deny** first. See [Chat inside Blender](/how-to/chat-in-blender/).
+Open the **Chat** tab next to **BlenderMCP** in the sidebar, type the same request, and press the play button. A model does the work in the Blender you typed in, with no other client needed. Before it runs any Python, the tab shows the code with **Allow** and **Deny**. See [Chat inside Blender](/how-to/chat-in-blender/).
 </Aside>
 
 ## What just happened
 
-Your Blender and your Claude session both signed in to the same server as you. The server keeps a private bus per account: Blender joined it as a long-lived client, and Claude joined it as a session. Every Blender tool Claude called went over that bus to your add-on, ran inside Blender, and returned the result to Claude as an ordinary tool reply. [How OAuth isolates buses](/explanation/oauth-buses/) covers the details.
+Blender and Claude both signed in to the same server as you. The server keeps a private bus for each account: your Blender joined it as a long-lived client and your Claude session joined as a short-lived one. Each Blender tool Claude called traveled over that bus to the add-on, ran inside Blender, and came back to Claude as an ordinary tool result. [How OAuth isolates buses](/explanation/oauth-buses/) has the details.
 
 ## Next steps
 
