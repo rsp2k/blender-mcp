@@ -236,7 +236,7 @@ class ChatState:
     # --- transcript -------------------------------------------------------
 
     def add_message(self, role: str, text: str, log: bool = True, **extra: Any) -> dict:
-        entry = {"role": role, "text": text, "turn": self.turn, **extra}
+        entry = {"role": role, "text": text, "turn": self.turn, "at": time.time(), **extra}
         with self.lock:
             self.revision += 1
             self.messages.append(entry)
@@ -289,8 +289,9 @@ class ChatState:
 
     # --- turns ------------------------------------------------------------
 
-    def begin_turn(self, text: str) -> list[dict]:
-        """Record the user's message and open a turn; returns the history to send."""
+    def begin_turn(self, text: str, clipped: list[str] | None = None) -> list[dict]:
+        """Record the user's message and open a turn; returns the history to send.
+        ``clipped`` labels what the user attached ("3 selected", "viewport")."""
         with self.lock:
             history = build_history(self.messages)
             self.turn += 1
@@ -299,7 +300,8 @@ class ChatState:
             self.status = "Sending…"
             self.last_error = None
             self.turn_started_at = time.monotonic()
-            self.add_message("user", text)
+            extra = {"clipped": list(clipped)} if clipped else {}
+            self.add_message("user", text, **extra)
             return history
 
     def turn_open(self, turn: int) -> bool:

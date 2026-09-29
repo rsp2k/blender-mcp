@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- two wire handles, splayed out in a V (what makes it a binder clip) -->
+  <g fill="none" stroke="#e8e8e8" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M22 33 L9 6 L19 6 L29 33"/>
+    <path d="M42 33 L55 6 L45 6 L35 33"/>
+  </g>
+  <!-- clip body: wide at the jaws, narrow at the spine -->
+  <path d="M16 31 L48 31 Q50 31 50.6 33 L57 56 Q57.6 59 54.5 59 L9.5 59 Q6.4 59 7 56 L13.4 33 Q14 31 16 31 Z"
+        fill="#e8e8e8"/>
+</svg>

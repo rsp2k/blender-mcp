@@ -55,7 +55,7 @@ from .panel import (
     BLENDERMCP_PT_PointItOut,
 )
 from .chat_operators import CHAT_OPERATORS
-from .chat_panel import BLENDERMCP_PT_Chat
+from .chat_panel import BLENDERMCP_PT_Chat, BLENDERMCP_PT_ChatClip
 from .chat_transcript import BLENDERMCP_PG_ChatRow, BLENDERMCP_UL_ChatTranscript
 from .tool_servers_ui import TOOL_SERVER_CLASSES
 
@@ -99,6 +99,7 @@ CLASSES = (
     BLENDERMCP_PG_ChatRow,
     BLENDERMCP_UL_ChatTranscript,
     BLENDERMCP_PT_Chat,
+    BLENDERMCP_PT_ChatClip,
     *CHAT_OPERATORS,
     *TOOL_SERVER_CLASSES,
 )

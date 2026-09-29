@@ -4,19 +4,29 @@ from __future__ import annotations
 
 import bpy
 
+from ..chat import clip, reader
 from ..chat import client as chat_client
 from ..chat.elicitation import resolve_approval
 from ..chat.state import chat_state
 
 
-def on_chat_input_update(wm, _context):
+def _send(context, text: str) -> tuple[bool, str | None]:
+    """Send with whatever the binder clip holds; reset the one-message clips."""
+    attachments, clipped = clip.gather(context)
+    started, problem = chat_client.send(text, attachments or None, clipped)
+    if started:
+        clip.after_send(context)
+    return started, problem
+
+
+def on_chat_input_update(wm, context):
     """Enter in the message field sends it. Clearing the field re-fires this
     with an empty value, which is a no-op. A message that couldn't be sent
     stays in the field for the Send button."""
     text = (wm.blendermcp_chat_input or "").strip()
     if not text:
         return
-    started, _problem = chat_client.send(text)
+    started, _problem = _send(context or bpy.context, text)
     if started:
         wm.blendermcp_chat_input = ""
 
@@ -33,7 +43,7 @@ class BLENDERMCP_OT_ChatSend(bpy.types.Operator):
         text = (wm.blendermcp_chat_input or "").strip()
         if not text:
             return {'CANCELLED'}
-        started, problem = chat_client.send(text)
+        started, problem = _send(context, text)
         if not started:
             if problem:
                 self.report({'WARNING'}, problem)
@@ -55,22 +65,61 @@ class BLENDERMCP_OT_ChatStop(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class BLENDERMCP_OT_ChatOpenLog(bpy.types.Operator):
-    """Show the full chat transcript"""
+class BLENDERMCP_OT_ChatReader(bpy.types.Operator):
+    """Open or close the Chat Reader"""
 
-    bl_idname = "blendermcp.chat_open_log"
-    bl_label = "Open log"
-    bl_description = "Show the 'BlenderMCP Chat' text block in a Text Editor"
+    bl_idname = "blendermcp.chat_reader"
+    bl_label = "Reader"
+    bl_description = (
+        "Read the whole conversation in a Text Editor beside the viewport "
+        "(Ctrl+wheel to zoom, Ctrl+F to search). Click again to close it"
+    )
 
     def execute(self, context):
-        from ..chat import log as chat_log
-        chat_log.flush_pending()
         try:
-            where = chat_log.open_log(context)
+            where = reader.toggle(context)
         except Exception as e:  # noqa: BLE001
-            self.report({'WARNING'}, f"Couldn't open the log: {e}")
+            self.report({'WARNING'}, f"Couldn't open the Reader: {e}")
             return {'CANCELLED'}
         self.report({'INFO'}, where)
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatUndoTurn(bpy.types.Operator):
+    """Undo what the assistant changed in its last reply"""
+
+    bl_idname = "blendermcp.chat_undo_turn"
+    bl_label = "Undo last chat change"
+    bl_description = (
+        "Undo every scene change from the assistant's last reply, as if you "
+        "pressed Ctrl+Z once per step"
+    )
+
+    def execute(self, context):
+        from .. import undo_steps
+        started = chat_state.turn_started_at
+        if not started:
+            return {'CANCELLED'}
+        undone, message = undo_steps.undo_since(started)
+        self.report({'INFO'} if undone else {'WARNING'}, message)
+        chat_client.request_redraw()
+        return {'FINISHED'} if undone else {'CANCELLED'}
+
+
+class BLENDERMCP_OT_ChatBackendSettings(bpy.types.Operator):
+    """Choose which model answers in the Chat tab"""
+
+    bl_idname = "blendermcp.chat_backend_settings"
+    bl_label = "Chat model"
+    bl_description = "The model answering in this tab. Click to change it in Preferences"
+
+    def execute(self, context):
+        from ..preferences import ADDON_PACKAGE_NAME
+        try:
+            bpy.ops.preferences.addon_show(module=ADDON_PACKAGE_NAME)
+        except Exception as e:  # noqa: BLE001
+            self.report({'WARNING'}, f"Open Preferences > Add-ons > Blender MCP ({e})")
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -207,7 +256,9 @@ CHAT_OPERATORS = (
     BLENDERMCP_OT_ChatNew,
     BLENDERMCP_OT_ChatSend,
     BLENDERMCP_OT_ChatStop,
-    BLENDERMCP_OT_ChatOpenLog,
+    BLENDERMCP_OT_ChatReader,
+    BLENDERMCP_OT_ChatUndoTurn,
+    BLENDERMCP_OT_ChatBackendSettings,
     BLENDERMCP_OT_ChatClear,
     BLENDERMCP_OT_ChatAllow,
     BLENDERMCP_OT_ChatDeny,

@@ -235,6 +235,10 @@ def register():
     _statusbar.register()
     from .ui import chat_transcript as _chat_transcript
     _chat_transcript.register_props()
+    from .ui import icons as _icons
+    _icons.register()
+    from .chat import clip as _clip
+    _clip.register_props()
 
     # One-shot migration from legacy Scene properties (pre-Phase-8 installs).
     # Runs against bpy.context.scene if available; safe to no-op otherwise.
@@ -338,6 +342,10 @@ def unregister():
     _statusbar.unregister()
     from .ui import chat_transcript as _chat_transcript
     _chat_transcript.unregister_props()
+    from .chat import clip as _clip
+    _clip.unregister_props()
+    from .ui import icons as _icons
+    _icons.unregister()
 
     # A chat turn or approval still in flight belonged to the client that
     # was just stopped; drop it so a re-registered add-on starts clean.

@@ -36,11 +36,16 @@ def append_lines(lines: list[str]) -> None:
 
 
 def flush_pending():
-    """Timer callback: write queued transcript lines. Returns None (one-shot)."""
+    """Timer callback: rebuild the Reader document. Returns None (one-shot).
+
+    The text block used to be an append-only log; it is now the Reader's
+    document (reader.py), regenerated from the transcript."""
+    chat_state.drain_log()
     try:
-        append_lines(chat_state.drain_log())
+        from .reader import sync
+        sync()
     except Exception as e:  # noqa: BLE001
-        print(f"[BlenderMCP] Chat log write failed: {e}")
+        print(f"[BlenderMCP] Chat reader update failed: {e}")
 
 
 def open_log(context) -> str:

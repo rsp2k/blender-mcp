@@ -156,10 +156,14 @@ def _make_progress_handler(turn: int):
     return _on_progress
 
 
-async def _call_chat(mcp_client: Any, text: str, history: list, handler: Any) -> Any:
+async def _call_chat(mcp_client: Any, text: str, history: list, handler: Any,
+                     attachments: dict | None = None) -> Any:
+    args: dict = {"message": text, "history": history or None}
+    if attachments:
+        args["attachments"] = attachments
     return await mcp_client.call_tool(
         CHAT_TOOL,
-        {"message": text, "history": history or None},
+        args,
         progress_handler=handler,
         timeout=CALL_TIMEOUT_S,
         raise_on_error=False,
@@ -187,8 +191,12 @@ def _finish_from_future(fut: Any, turn: int) -> None:
     request_redraw()
 
 
-def send(text: str) -> tuple[bool, str | None]:
-    """Start a chat turn. Returns (started, problem). Main thread."""
+def send(text: str, attachments: dict | None = None,
+         clipped: list[str] | None = None) -> tuple[bool, str | None]:
+    """Start a chat turn. Returns (started, problem). Main thread.
+
+    ``attachments`` is what the binder clip gathered (see clip.py) and
+    ``clipped`` its short labels for the transcript."""
     text = (text or "").strip()
     if not text:
         return False, None
@@ -201,13 +209,13 @@ def send(text: str) -> tuple[bool, str | None]:
     if chat_state.conversation_id is None:
         from .history import new_id
         chat_state.conversation_id = new_id()
-    history = chat_state.begin_turn(text)
+    history = chat_state.begin_turn(text, clipped)
     schedule_persist()
     turn = chat_state.turn
     handler = _make_progress_handler(turn)
     try:
         fut = asyncio.run_coroutine_threadsafe(
-            _call_chat(client.client, text, history, handler), client.loop,
+            _call_chat(client.client, text, history, handler, attachments), client.loop,
         )
     except Exception as e:  # noqa: BLE001
         chat_state.finish_turn(turn, "error", f"Couldn't start the chat call: {e}")
