@@ -10,7 +10,7 @@ from ..registry import command
 class ConsoleHandlersMixin:
     """`console_operations` and `get_console_output` commands."""
 
-    @command("console_operations")
+    @command("console_operations", undo=lambda p: p.get("operation") == "execute")
     def console_operations(self, operation="get_info", params=None):
         """Execute various console operations using bpy.ops.console
 
@@ -183,7 +183,7 @@ class ConsoleHandlersMixin:
         except Exception as e:
             return {"error": f"Console operation failed: {str(e)}"}
 
-    @command("get_console_output")
+    @command("get_console_output", undo=False)
     def get_console_output(self, level="all", page=1, page_size=50):
         """Get recent console output from Blender's internal console with filtering and pagination
 

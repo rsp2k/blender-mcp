@@ -254,7 +254,7 @@ class ModellingHandlersMixin:
                            "this material too")
         return out
 
-    @command("list_scene_objects")
+    @command("list_scene_objects", undo=False)
     def list_scene_objects(self, type=None, name_contains=None, collection=None,
                            limit=100, offset=0, scene=None):
         """Every object in the active scene (or the one named ``scene``, without

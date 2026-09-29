@@ -218,7 +218,7 @@ def _apply_modifier(target, mod_name: str):
 
 class BooleanHandlersMixin:
 
-    @command("mesh_health")
+    @command("mesh_health", undo=False)
     def mesh_health_cmd(self, objects, evaluated: bool = False):
         """Manifoldness, openness, shells and volume for mesh objects."""
         if isinstance(objects, str):

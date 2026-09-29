@@ -366,7 +366,7 @@ class AnnotationHandlersMixin:
                 area.tag_redraw()
         return {"layer": layer, "removed": removed, "found": True}
 
-    @command("list_annotations")
+    @command("list_annotations", undo=False)
     def list_annotations(
         self,
         include_bbox: bool = True,
@@ -459,7 +459,7 @@ class AnnotationHandlersMixin:
             "truncated": truncated,
         }
 
-    @command("get_annotation")
+    @command("get_annotation", undo=False)
     def get_annotation(self, annotation_id: str):
         """Return full geometry for one stroke by id.
 

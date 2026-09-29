@@ -268,7 +268,7 @@ def viewport_bbox(obj_names, margin: float = 0.05):
 class RenderHandlersMixin:
     """set_view, render, render_view, compare_images."""
 
-    @command("set_view")
+    @command("set_view", undo=False)
     def set_view(self, frame=None, angle=None, perspective=None, shading=None,
                  all_viewports: bool = False, margin: float = 0.05):
         """Frame the 3D viewport on objects at an angle.
@@ -348,7 +348,7 @@ class RenderHandlersMixin:
             "shading": shading_result,
         }
 
-    @command("render")
+    @command("render", undo=False)
     def render(self, camera=None, camera_pos=None, look_at=None, lens=None,
                engine: str = "EEVEE", resolution=None, samples=None, filepath=None,
                transparent: bool = False):
@@ -407,7 +407,7 @@ class RenderHandlersMixin:
         return {**out, "engine": eng, "camera": used_camera or "temporary",
                 "transparent": bool(transparent)}
 
-    @command("render_view")
+    @command("render_view", undo=False)
     def render_view(self, axis: str = "front", objects=None, size: int = 1024,
                     resolution=None, margin: float = 0.05, engine: str = "WORKBENCH",
                     background=None, isolate: bool = False, filepath=None):
@@ -473,7 +473,7 @@ class RenderHandlersMixin:
                 "ortho_scale": fit["ortho_scale"],
                 "subject_size": [w, h, d], "margin": margin}
 
-    @command("compare_images")
+    @command("compare_images", undo=False)
     def compare_images(self, render_path: str, reference_path: str, mode: str = "overlay",
                        opacity: float = 0.5, fit: str = "width", scale: float = 1.0,
                        offset=None, filepath=None):

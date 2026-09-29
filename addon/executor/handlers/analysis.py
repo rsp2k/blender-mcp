@@ -176,7 +176,7 @@ def _set_path_value(id_block, data_path: str, value, index: int):
 class AnalysisHandlersMixin:
     """world_bounds, check_interference, get_keyframes, insert_keyframe, set_interpolation."""
 
-    @command("world_bounds")
+    @command("world_bounds", undo=False)
     def world_bounds(self, objects=None, frame=None, include_hidden: bool = False, exact: bool = False):
         """World-space axis-aligned bounds per object and their union.
 
@@ -210,7 +210,7 @@ class AnalysisHandlersMixin:
             union = {"min": _r(lo), "max": _r(hi), "size": _r(hi - lo)}
         return {"frame": at, "objects": rows, "union": union, "skipped": skipped}
 
-    @command("check_interference")
+    @command("check_interference", undo=False)
     def check_interference(
         self,
         objects=None,
@@ -297,7 +297,7 @@ class AnalysisHandlersMixin:
             "contained": contained,
         }
 
-    @command("get_keyframes")
+    @command("get_keyframes", undo=False)
     def get_keyframes(self, object: str, data_path: str | None = None, owner: str = "object"):
         """Keyframes of the action assigned to an object (or its data / shape keys).
 

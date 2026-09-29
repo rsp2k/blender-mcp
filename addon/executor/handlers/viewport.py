@@ -27,7 +27,7 @@ def _blender_file_format(fmt: str) -> str:
 class ViewportHandlersMixin:
     """`get_viewport_screenshot` command."""
 
-    @command("get_viewport_screenshot")
+    @command("get_viewport_screenshot", undo=False)
     def get_viewport_screenshot(self, max_size=0, filepath=None, format="png",
                                 frame=None, crop=False, crop_margin=0.05,
                                 annotations=True, deselect=False, angle=None,

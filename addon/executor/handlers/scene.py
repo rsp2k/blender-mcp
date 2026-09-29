@@ -28,7 +28,7 @@ class SceneHandlersMixin:
     arrive via MRO once mixed into BlenderCommandExecutor.
     """
 
-    @command("get_scene_info")
+    @command("get_scene_info", undo=False)
     def get_scene_info(self, scene=None):
         """Summary of the active scene, or of the scene named ``scene`` without
         switching to it."""
@@ -96,7 +96,7 @@ class SceneHandlersMixin:
             traceback.print_exc()
             return {"error": str(e)}
 
-    @command("get_object_info")
+    @command("get_object_info", undo=False)
     def get_object_info(self, name):
         """Get detailed information about a specific object"""
         obj = bpy.data.objects.get(name)
@@ -134,7 +134,7 @@ class SceneHandlersMixin:
 
         return obj_info
 
-    @command("browse_data")
+    @command("browse_data", undo=False)
     def browse_data(self, collection=None, item_name=None, page=1, page_size=50, detail_level="summary"):
         """Browse bpy.data collections with pagination and detail levels
 

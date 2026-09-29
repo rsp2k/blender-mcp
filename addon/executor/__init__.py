@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import traceback
 
-from .. import object_store
+from .. import object_store, undo_steps
 from ..preferences import get_prefs
 from ._shared import SharedHelpersMixin
 from .handlers.annotations import AnnotationHandlersMixin
@@ -110,7 +110,11 @@ class BlenderCommandExecutor(
         try:
             print(f"Executing handler for {cmd_type}")
             accepted = filter_kwargs(spec.func, params)
-            result = spec.func(self, **accepted)
+            # One named undo step per scene-changing command; none for reads.
+            result = undo_steps.run_command(
+                cmd_type, params, lambda: spec.func(self, **accepted),
+                undo=spec.wants_undo(params),
+            )
             print("Handler execution complete")
             if store and isinstance(result, dict):
                 result = object_store.attach_stored(result, store)

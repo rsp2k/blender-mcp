@@ -35,12 +35,12 @@ def upload_dir(bus_dir) -> Path:
 
 class UploadHandlersMixin:
 
-    @command("upload_begin")
+    @command("upload_begin", undo=False)
     def upload_begin(self, upload_id, resume=False, bus_dir=None):
         """Start or resume a chunked upload; returns bytes already written."""
         return upload_store.begin(upload_dir(bus_dir), upload_id, resume=bool(resume))
 
-    @command("upload_chunk")
+    @command("upload_chunk", undo=False)
     def upload_chunk(self, upload_id, offset, data_b64, bus_dir=None):
         """Write one base64 chunk at a byte offset (idempotent)."""
         try:
@@ -49,28 +49,28 @@ class UploadHandlersMixin:
             raise ValueError("data_b64 is not valid base64") from None
         return upload_store.write_chunk(upload_dir(bus_dir), upload_id, int(offset), data)
 
-    @command("upload_finish")
+    @command("upload_finish", undo=False)
     def upload_finish(self, upload_id, name, size=None, sha256=None, overwrite=True, bus_dir=None):
         """Verify size/sha256 and move the upload to its final name."""
         return upload_store.finish(upload_dir(bus_dir), upload_id, name,
                                    size=size, sha256=sha256, overwrite=bool(overwrite))
 
-    @command("upload_abort")
+    @command("upload_abort", undo=False)
     def upload_abort(self, upload_id, bus_dir=None):
         """Discard a partial upload."""
         return {"aborted": upload_store.abort(upload_dir(bus_dir), upload_id)}
 
-    @command("list_uploads")
+    @command("list_uploads", undo=False)
     def list_uploads(self, bus_dir=None):
         """Files uploaded to this Blender host for this bus."""
         return upload_store.list_files(upload_dir(bus_dir))
 
-    @command("delete_uploads")
+    @command("delete_uploads", undo=False)
     def delete_uploads(self, name=None, bus_dir=None):
         """Delete one uploaded file, or all of them when no name is given."""
         return upload_store.delete(upload_dir(bus_dir), name)
 
-    @command("fetch_object")
+    @command("fetch_object", undo=False)
     def fetch_object(self, url, name, size=None, overwrite=True, bus_dir=None):
         """Download an object-storage file (presigned GET URL) into the upload folder.
 
@@ -86,7 +86,7 @@ class UploadHandlersMixin:
                                                      overwrite=bool(overwrite),
                                                      progress=progress))
 
-    @command("transfer_status")
+    @command("transfer_status", undo=False)
     def transfer_status(self, transfer_id):
         """Progress of a background upload or download."""
         item = object_store.TRANSFERS.get(transfer_id)

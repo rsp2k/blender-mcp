@@ -23,7 +23,7 @@ import bmesh
 import bpy
 import mathutils
 
-from .. import state
+from .. import state, undo_steps
 from .job_reporter import make_progress_reporter, submit_job_update
 
 if TYPE_CHECKING:
@@ -162,7 +162,11 @@ def execute_script(client: "BlenderMCPClient", job_id: str, script: str) -> None
     started, ok, err = time.time(), False, ""
     try:
         with redirect_stdout(output):
-            exec(compile(script, f"<job_{job_id}>", "exec"), exec_globals)
+            # The whole script is one undo step, "BlenderMCP: execute_code".
+            undo_steps.run_command(
+                "execute_code", {},
+                lambda: exec(compile(script, f"<job_{job_id}>", "exec"), exec_globals),
+            )
         submit_job_update(
             client, job_id, "completed",
             result=output.getvalue(), error="",

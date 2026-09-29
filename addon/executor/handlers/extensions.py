@@ -21,7 +21,7 @@ from ..registry import command
 class ExtensionsHandlersMixin:
     """``list_installed_extensions`` command."""
 
-    @command("list_installed_extensions")
+    @command("list_installed_extensions", undo=False)
     def list_installed_extensions(self, include_disabled: bool = True):
         """Enumerate installed addons + extensions.
 
