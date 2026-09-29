@@ -189,3 +189,20 @@ def install(server: Any) -> Any:
     )
     logger.info("Tool-call instrumentation on (QA_LOG=%s, table %stool_calls)", mode, FFB_TABLE_PREFIX)
     return mw
+
+
+def middleware(ctx: Any = None) -> Any:
+    """The middleware ``install()`` returned, or None when QA_LOG is off.
+
+    ``server_proper`` keeps it on the server as ``qa_middleware``; this reads it
+    from ``ctx`` or, without one, the current request's context. Code outside
+    a request (no context) gets None. Never raises.
+    """
+    try:
+        if ctx is None:
+            from fastmcp.server.dependencies import get_context
+
+            ctx = get_context()
+        return getattr(getattr(ctx, "fastmcp", None), "qa_middleware", None)
+    except Exception:  # noqa: BLE001 - no request context, or a half-built one
+        return None

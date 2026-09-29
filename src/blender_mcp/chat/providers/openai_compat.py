@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 from mcp.types import ImageContent, TextContent, ToolResultContent, ToolUseContent
 
-from . import Backend, Completion, ProviderError, ToolCall
+from . import Backend, Completion, ProviderError, ToolCall, Usage
 from .textcalls import normalize_name, parse_arguments, recover
 
 ATTEMPTS = 2
@@ -87,11 +87,29 @@ def _content_text(content: Any) -> str:
     return ""
 
 
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def usage_of(data: Any) -> Usage | None:
+    """The response's ``usage``: prompt/completion tokens, plus cached prompt
+    tokens when the server reports ``prompt_tokens_details.cached_tokens``."""
+    u = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(u, dict):
+        return None
+    details = u.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    return Usage(input_tokens=_int(u.get("prompt_tokens")),
+                 output_tokens=_int(u.get("completion_tokens")),
+                 cache_read_input_tokens=_int(cached))
+
+
 def parse_response(data: Any, allowed: set[str]) -> Completion:
+    usage = usage_of(data)
     try:
         msg = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
-        return Completion()
+        return Completion(usage=usage)
     text = _THINK_RE.sub("", _content_text(msg.get("content"))).strip()
     calls: list[ToolCall] = []
     for raw in msg.get("tool_calls") or []:
@@ -106,7 +124,7 @@ def parse_response(data: Any, allowed: set[str]) -> Completion:
                               name=name, arguments=args))
     if not calls and text:
         calls, text = recover(text, allowed)
-    return Completion(text=text, tool_calls=calls)
+    return Completion(text=text, tool_calls=calls, usage=usage)
 
 
 def _error_detail(r: httpx.Response) -> str:
@@ -151,6 +169,7 @@ async def complete(
     url = backend.base_url.rstrip("/") + "/chat/completions"
 
     last = f"{label} returned an empty response"
+    spent: Usage | None = None  # an empty answer that gets retried is still billed
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
         for _ in range(ATTEMPTS):
             try:
@@ -171,6 +190,8 @@ async def complete(
                 last = f"{label} returned a response that is not JSON"
                 continue
             result = parse_response(data, allowed)
+            spent = result.usage if spent is None else spent + result.usage
+            result.usage = spent
             if result.text or result.tool_calls:
                 return result
             last = f"{label} returned an empty response"

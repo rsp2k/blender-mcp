@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -20,9 +21,10 @@ import httpx
 import httpx2
 from mcp.types import CreateMessageResultWithTools, TextContent, ToolUseContent
 
+from .. import instrumentation as qa
 from . import settings as chat_settings
 from .config import ChatConfig, load_config
-from .providers import Backend, Completion, ProviderError, complete
+from .providers import Backend, Completion, ProviderError, Usage, complete
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,38 @@ def to_result(c: Completion, model: str) -> CreateMessageResultWithTools:
     )
 
 
+_USAGE_ATTRS = ("cache_read_input_tokens", "cache_creation_input_tokens",
+                "advisor_calls", "advisor_input_tokens", "advisor_output_tokens")
+
+
+def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
+                    error: BaseException | None = None) -> None:
+    """One ``llm.call`` event per completion when QA_LOG is on, keyed by the
+    chat turn so a turn's model calls read back together. The event links to
+    the enclosing tool call (blender_chat, a vision tool) by itself.
+
+    Never passes the backend's key or base URL. Never raises.
+    """
+    try:
+        mw = qa.middleware()
+        if mw is None:
+            return
+        attrs = {"advisor": backend.advisor or None}
+        attrs.update({k: getattr(usage, k, None) for k in _USAGE_ATTRS})
+        mw.record_llm_call(
+            model=backend.model,
+            provider=backend.provider,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            input_tokens=getattr(usage, "input_tokens", None),
+            output_tokens=getattr(usage, "output_tokens", None),
+            error=error,
+            key=current_turn.get(),
+            attrs={k: v for k, v in attrs.items() if v is not None},
+        )
+    except Exception:  # recording must never break a chat turn
+        logger.debug("llm.call record failed", exc_info=True)
+
+
 class RoutingSamplingHandler:
     def __init__(
         self,
@@ -146,15 +180,21 @@ class RoutingSamplingHandler:
                 "advisor_max_tokens": cfg.anthropic_advisor_max_tokens,
                 "advisor_cache": cfg.anthropic_advisor_cache,
             }
-        c = await complete(
-            backend, system, messages, tools,
-            max_tokens=max_tokens or cfg.max_tokens,
-            temperature=temperature,
-            tool_choice=tool_choice,
-            timeout_s=cfg.llm_timeout_s,
-            transport=self.transport,
-            **extra,
-        )
+        t0 = time.perf_counter()
+        try:
+            c = await complete(
+                backend, system, messages, tools,
+                max_tokens=max_tokens or cfg.max_tokens,
+                temperature=temperature,
+                tool_choice=tool_choice,
+                timeout_s=cfg.llm_timeout_s,
+                transport=self.transport,
+                **extra,
+            )
+        except Exception as e:
+            record_llm_call(backend, t0, error=e)
+            raise
+        record_llm_call(backend, t0, usage=c.usage)
         if scope is not None and c.raw and c.tool_calls:
             self.thinking.put(scope, frozenset(t.id for t in c.tool_calls), c.raw)
         return c

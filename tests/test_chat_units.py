@@ -378,3 +378,38 @@ def test_identify_reports_chat_caller(monkeypatch):
         current_downstream_client_id.reset(token)
     assert out["caller_kind"] == "chat" and out["client_id"] == "chat:blender-1"
     assert {"blender_set_chat_backend", "blender_chat"} <= instrumentation.META_ONLY_TOOLS
+
+
+# ---- OpenAI-compatible usage ----------------------------------------------------
+
+def test_openai_usage_with_cached_prompt_tokens():
+    data = {"choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 42, "total_tokens": 942,
+                      "prompt_tokens_details": {"cached_tokens": 768}}}
+    u = oa.parse_response(data, ALLOWED).usage
+    assert (u.input_tokens, u.output_tokens, u.cache_read_input_tokens) == (900, 42, 768)
+    assert u.cache_creation_input_tokens is None and u.advisor_calls is None
+
+
+def test_openai_usage_absent_or_partial():
+    assert oa.parse_response({"choices": [{"message": {"content": "ok"}}]}, ALLOWED).usage is None
+    u = oa.parse_response({"choices": [{"message": {"content": "ok"}}],
+                           "usage": {"prompt_tokens": 7, "prompt_tokens_details": None}}, ALLOWED).usage
+    assert (u.input_tokens, u.output_tokens, u.cache_read_input_tokens) == (7, None, None)
+
+
+async def test_openai_usage_is_summed_over_an_empty_retry():
+    replies = [
+        {"choices": [{"message": {"content": ""}}],
+         "usage": {"prompt_tokens": 100, "completion_tokens": 3}},
+        {"choices": [{"message": {"content": "fine"}}],
+         "usage": {"prompt_tokens": 100, "completion_tokens": 20,
+                   "prompt_tokens_details": {"cached_tokens": 64}}},
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json=replies.pop(0))
+
+    c = await oa.complete(_backend(), None, _history()[:1], None, transport=httpx.MockTransport(handler))
+    assert c.text == "fine"
+    assert (c.usage.input_tokens, c.usage.output_tokens, c.usage.cache_read_input_tokens) == (200, 23, 64)
