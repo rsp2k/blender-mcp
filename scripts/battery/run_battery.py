@@ -189,7 +189,11 @@ class Battery:
                 raise RuntimeError(f"set_backend failed: {s['error']}")
             if s.get("backend"):
                 b = s["backend"]
-                if b.get("provider") != provider or (model and b.get("model") != model):
+                # A saved "gateway" follows the server default, which the server
+                # reports as whatever it actually is (e.g. anthropic, source=server).
+                follows_default = provider == "gateway" and b.get("source") == "server"
+                if not follows_default and (b.get("provider") != provider
+                                            or (model and b.get("model") != model)):
                     raise RuntimeError(f"backend is {b}, wanted {provider}:{model}")
                 return b
         raise RuntimeError("set_backend: no answer from the server")
