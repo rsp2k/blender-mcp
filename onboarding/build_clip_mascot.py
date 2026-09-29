@@ -1,8 +1,18 @@
 """Build "Clip", the binder-clip mascot for the Blender MCP chat assistant.
 
-A binder clip turned character: the dark steel wedge body wears the face,
-the two chrome wire handles are its arms, raised in a V (the hero pose waves
-one of them). Everything is procedural, so tweak the constants and rebuild.
+Clip is a real binder clip: the sheet-steel body and wire handles come from a
+supplied STL, stood on its spine with the jaws up. The handles are rotated
+about their hinges into raised arms, and a face (eyes, pupils, glints, a small
+chrome smile) is laid onto the front plate by ray casting. Nothing in the clip
+itself is sculpted; only the handles' hinge angles change.
+
+Input (keep it out of git):
+
+    CLIP_STL = /home/blender/projects/clip.stl
+      (host: onboarding/blender/projects/clip.stl, also ~/Downloads/clip.stl)
+      Binder clip model by CGTrader designer "teen-wolf",
+      https://www.cgtrader.com/designers/teen-wolf . The STL carries no licence
+      text (its header only says "IngeTrazo STL export").
 
 Run headless (from the repo root, with the onboarding instance up):
 
@@ -13,7 +23,7 @@ Run headless (from the repo root, with the onboarding instance up):
 It writes, under /home/blender/projects/clip-mascot/:
 
     clip-512.png         3/4 hero render, 512x512, transparent
-    clip-mascot-128.png  front icon render, 128x128, tuned for 16-32 px
+    clip-mascot-128.png  icon render, 128x128, tuned for 16-32 px
     clip-mascot.blend    the hero scene (the icon camera is in it too)
 
 Copy them to web/public/img/mascot/clip-512.png,
@@ -23,41 +33,35 @@ addon/icons/clip-mascot.png and onboarding/clip-mascot.blend.
 import math
 import os
 
-import bmesh
 import bpy
-from mathutils import Vector
+from bpy_extras.object_utils import world_to_camera_view
+from mathutils import Matrix, Vector
 
+CLIP_STL = "/home/blender/projects/clip.stl"
 OUT_DIR = "/home/blender/projects/clip-mascot"
 
-# Body: the wedge seen end-on, a trapezoid wide at the jaws, narrow at the spine.
-BODY_H = 1.6
-BODY_D = 1.0  # depth, front to back
-BODY_BEVEL = 0.1
+CLIP_LENGTH = 2.2  # the clip's length along its jaws, in scene metres
 
 STEEL = "#18223a"  # deep blue-black steel
-ACCENT = "#2563eb"  # Supported Systems blue: hinge rolls and rim light
 CHROME = "#e9edf2"
 PUPIL = "#0b1020"
+RIM_BLUE = "#3b82f6"  # Supported Systems blue family, for the rim lights
 
-# Face, on the front plane. Heights are measured from the base of the body.
-EYE_Z = 0.8
-EYE_GAP = 0.64  # centre to centre
-EYE_R = 0.27
-SMILE_Z = 0.4
-SMILE_W = 0.42
-
-# Pose and proportions per render. Angles are degrees from vertical.
+# Poses. Handle leans are degrees from vertical, in the clip's profile plane:
+# "front" is the handle hooked into the face-side jaw, leaning toward the
+# viewer; "back" leans away. Face sizes are in scene metres on the plate,
+# eye_up is how far up the plate (0 = spine, 1 = jaws) the eyes sit.
 HERO = dict(
-    name="hero", left_arm=18.0, right_arm=64.0, arm_len=1.3, wire=0.05,
-    loop_face=80.0, pupil_look=(-0.06, 0.03), eye_scale=1.0, smile=True,
-    tilt=-6.0, eye_z=EYE_Z, eye_gap=EYE_GAP, body_w=2.2, spine_r=0.4,
-    rim=700, steel=STEEL, eye_glow=0.35, pupil=0.52,
+    name="hero", front=46.0, back=64.0, wire_boost=0.0,
+    eye_r=0.33, eye_gap=0.88, eye_up=0.48, pupil=0.52, look=(-0.05, 0.03),
+    smile=True, smile_w=0.46, eye_glow=0.35, rim=700,
+    cam_azimuth=-38.0, cam_elev=16.0, lens=70, fill=0.85,
 )
 ICON = dict(
-    name="icon", left_arm=34.0, right_arm=34.0, arm_len=1.05, wire=0.095,
-    loop_face=85.0, pupil_look=(0.0, -0.01), eye_scale=1.15, smile=False,
-    tilt=0.0, eye_z=0.66, eye_gap=0.94, body_w=2.6, spine_r=0.5,
-    rim=2400, steel="#1c2b4f", eye_glow=1.2, pupil=0.6,
+    name="icon", front=44.0, back=54.0, wire_boost=0.05,
+    eye_r=0.44, eye_gap=1.22, eye_up=0.44, pupil=0.6, look=(0.0, -0.01),
+    smile=False, smile_w=0.0, eye_glow=1.2, rim=2400,
+    cam_azimuth=-25.0, cam_elev=14.0, lens=0, fill=0.94,
 )
 
 
@@ -81,9 +85,8 @@ def material(name: str, hex_colour: str, metallic=0.0, roughness=0.35,
     bsdf.inputs["Metallic"].default_value = metallic
     bsdf.inputs["Roughness"].default_value = roughness
     bsdf.inputs["Coat Weight"].default_value = coat
-    if emission:
-        bsdf.inputs["Emission Color"].default_value = col
-        bsdf.inputs["Emission Strength"].default_value = emission
+    bsdf.inputs["Emission Color"].default_value = col
+    bsdf.inputs["Emission Strength"].default_value = emission
     mat.diffuse_color = col
     return mat
 
@@ -95,172 +98,204 @@ def link(obj, coll):
     return obj
 
 
-def spine_shoulder(pose: dict, side: int) -> Vector:
-    """Where a slanted side meets the rounded spine (the tangent point)."""
-    r = pose["spine_r"]
-    c = Vector((0.0, BODY_H - r))
-    foot = Vector((side * pose["body_w"] / 2, 0.0))
-    v = foot - c
-    alpha = math.acos(r / v.length)
-    ang = math.atan2(v.y, v.x) + (alpha if side > 0 else -alpha)
-    return c + Vector((math.cos(ang), math.sin(ang))) * r
+def world_verts(obj) -> list:
+    return [obj.matrix_world @ v.co for v in obj.data.vertices]
 
 
-def profile(pose: dict) -> list:
-    """The end-on outline (x, z): flat jaws, slanted sides, round spine."""
-    r = pose["spine_r"]
-    c = Vector((0.0, BODY_H - r))
-    tr, tl = spine_shoulder(pose, 1), spine_shoulder(pose, -1)
-    a0 = math.atan2(tr.y - c.y, tr.x - c.x)
-    a1 = math.atan2(tl.y - c.y, tl.x - c.x)
-    w = pose["body_w"]
-    pts = [(-w / 2, 0.0), (w / 2, 0.0)]
-    n = 18
-    for k in range(n + 1):
-        a = a0 + (a1 - a0) * k / n
-        pts.append((c.x + r * math.cos(a), c.y + r * math.sin(a)))
-    return pts
+def centroid(pts) -> Vector:
+    return sum(pts, Vector()) / len(pts)
 
 
-def make_body(coll, mats, pose):
-    bm = bmesh.new()
-    y0, y1 = -BODY_D / 2, BODY_D / 2
-    outline = profile(pose)
-    front = [bm.verts.new((x, y0, z)) for x, z in outline]
-    back = [bm.verts.new((x, y1, z)) for x, z in outline]
-    n = len(outline)
-    bm.faces.new(front[::-1])
-    bm.faces.new(back)
-    for i in range(n):
-        j = (i + 1) % n
-        bm.faces.new((front[i], front[j], back[j], back[i]))
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    mesh = bpy.data.meshes.new("Clip body")
-    bm.to_mesh(mesh)
-    bm.free()
-    obj = link(bpy.data.objects.new("Clip body", mesh), coll)
-    mesh.materials.append(mats["steel"])
-    bev = obj.modifiers.new("Soft edges", "BEVEL")
-    bev.width = BODY_BEVEL
-    bev.segments = 6
-    bev.limit_method = "ANGLE"
-    bev.angle_limit = math.radians(30)
-    bev.harden_normals = True
-    mesh.shade_smooth()
+# ---------------------------------------------------------------- the clip
+
+def import_clip(coll):
+    """Import the STL and split it into (body, [handle, handle])."""
+    bpy.ops.wm.stl_import(filepath=CLIP_STL)
+    src = bpy.context.selected_objects[0]
+    bpy.context.view_layer.objects.active = src
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=1e-4)  # weld, in case it's unwelded
+    bpy.ops.mesh.separate(type="LOOSE")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    parts = list(bpy.context.selected_objects)
+
+    # The ground plane is a lone quad; the body is the biggest part left; the
+    # two handles are the equal-sized pair.
+    for p in [p for p in parts if len(p.data.vertices) <= 8]:
+        parts.remove(p)
+        bpy.data.objects.remove(p)
+    parts.sort(key=lambda p: len(p.data.vertices), reverse=True)
+    body, handles = parts[0], parts[1:3]
+    if len(parts) != 3 or len(handles[0].data.vertices) != len(
+            handles[1].data.vertices):
+        raise RuntimeError(f"unexpected STL parts: {[p.name for p in parts]}")
+    body.name = "Clip body"
+    for p in parts:
+        link(p, coll)
+    return body, handles
+
+
+def hinge_of(handle, body_centre: Vector):
+    """The handle's pivot: the centre of the hook sitting in a jaw roll.
+
+    The handle is long and thin, so take its far ends along its longest axis
+    and keep the one nearer the body; the hook is the geometry near that end.
+    """
+    pts = world_verts(handle)
+    ext = [max(p[i] for p in pts) - min(p[i] for p in pts) for i in range(3)]
+    axis = max((1, 2), key=lambda i: ext[i])  # y or z: never x, the jaw axis
+    lo = min(p[axis] for p in pts)
+    hi = max(p[axis] for p in pts)
+    end = lo if abs(lo - body_centre[axis]) < abs(hi - body_centre[axis]) else hi
+    hook = [p for p in pts if abs(p[axis] - end) < 0.06 * (hi - lo)]
+    pivot = centroid(hook)
+    tip = max(pts, key=lambda p: (p - pivot).length)
+    return pivot, tip
+
+
+def stand_up(body, handles):
+    """Stand the clip on its spine, jaws up, centred, scaled to CLIP_LENGTH."""
+    bc = centroid(world_verts(body))
+    jaws = centroid([hinge_of(h, bc)[0] for h in handles])
+    up = jaws - bc
+    up.x = 0.0  # rotate only about X, the jaw axis
+    ang = math.atan2(up.y, up.z)
+    rot = Matrix.Rotation(ang, 4, "X")
+    xs = [p.x for p in world_verts(body)]
+    scale = CLIP_LENGTH / (max(xs) - min(xs))
+    m = Matrix.Scale(scale, 4) @ rot @ Matrix.Translation(-bc)
+    for obj in (body, *handles):
+        obj.data.transform(m)
+        obj.matrix_world = Matrix.Identity(4)
+    pts = world_verts(body)
+    lo = Vector([min(p[i] for p in pts) for i in range(3)])
+    hi = Vector([max(p[i] for p in pts) for i in range(3)])
+    shift = Matrix.Translation((-(lo.x + hi.x) / 2, -(lo.y + hi.y) / 2, -lo.z))
+    for obj in (body, *handles):
+        obj.data.transform(shift)
+        obj.data.update()
+
+
+def pose_handles(body, handles, pose):
+    """Rotate each handle about its hinge (an X-parallel axis) to its lean."""
+    bc = centroid(world_verts(body))
+    info = [(h, *hinge_of(h, bc)) for h in handles]
+    info.sort(key=lambda t: t[1].y)  # smaller y: hooked into the front jaw
+    targets = (-pose["front"], pose["back"])  # + leans toward +y (away)
+    for (h, pivot, tip), target in zip(info, targets):
+        v = tip - pivot
+        current = math.degrees(math.atan2(v.y, v.z))
+        h.data.transform(Matrix.Translation(-pivot))
+        h.location = pivot
+        h.rotation_euler = (math.radians(current - target), 0, 0)
+    info[0][0].name, info[1][0].name = "Handle front", "Handle back"
+
+
+def finish_surfaces(body, handles, mats, pose):
+    for obj, mat, angle in ((body, mats["steel"], 40),
+                            *((h, mats["chrome"], 60) for h in handles)):
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        if obj is not body and pose["wire_boost"]:
+            # Icon only: fatten the wire along its normals so it survives 16 px.
+            # The handle's shape is untouched; only the tube gets thicker.
+            fat = obj.modifiers.new("Thicker wire", "DISPLACE")
+            fat.strength = pose["wire_boost"]
+            fat.mid_level = 0.0
+        with bpy.context.temp_override(selected_editable_objects=[obj],
+                                       active_object=obj, object=obj):
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(angle))
+
+
+# ---------------------------------------------------------------- the face
+
+def front_plate_frame(body, up_frac: float):
+    """Point and axes on the front plate at a fraction of its height.
+
+    Returns (point, normal, right, up) in world space; the normal points out
+    of the plate toward the viewer's side (-y), up runs along the slant.
+    """
+    pts = world_verts(body)
+    top = max(p.z for p in pts)
+    z = top * up_frac
+    bvh_hit = body.ray_cast(Vector((0, -50, z)), Vector((0, 1, 0)))
+    ok, loc, normal, _ = bvh_hit
+    if not ok:
+        raise RuntimeError("face ray missed the front plate")
+    if normal.y > 0:
+        normal = -normal
+    right = Vector((1, 0, 0))
+    up = normal.cross(right).normalized()
+    if up.z < 0:
+        up = -up
+    return loc, normal.normalized(), right, up
+
+
+def on_plate(body, p: Vector, n: Vector):
+    """Project p onto the plate along -n; returns (hit, normal)."""
+    ok, loc, normal, _ = body.ray_cast(p + n * 2.0, -n)
+    if not ok:
+        return p, n
+    if normal.dot(n) < 0:
+        normal = -normal
+    return loc, normal.normalized()
+
+
+def oriented_sphere(coll, name, mat, centre, right, normal, up, radii,
+                    segments=48):
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1, segments=segments,
+                                         ring_count=segments // 2)
+    obj = link(bpy.context.active_object, coll)
+    obj.name = name
+    basis = Matrix((right, normal, up)).transposed().to_4x4()
+    obj.matrix_world = (Matrix.Translation(centre) @ basis
+                        @ Matrix.Diagonal((*radii, 1.0)))
+    obj.data.materials.append(mat)
+    obj.data.shade_smooth()
     return obj
 
 
-def _xz(p2: Vector, inset: float) -> tuple:
-    """A profile point, pulled slightly inside the body, as (x, 0, z)."""
-    return (p2.x - math.copysign(inset, p2.x), 0.0, p2.y - inset)
-
-
-def make_hinges(coll, mats, pose):
-    """The rolled edges at the spine where the handle wires hook in."""
+def make_face(coll, mats, body, pose):
+    centre, n, right, up = front_plate_frame(body, pose["eye_up"])
+    er = pose["eye_r"]
     for side in (-1, 1):
-        bpy.ops.mesh.primitive_cylinder_add(
-            radius=0.085, depth=BODY_D * 0.92, vertices=32,
-            location=_xz(spine_shoulder(pose, side), 0.02),
-            rotation=(math.pi / 2, 0, 0))
-        obj = link(bpy.context.active_object, coll)
-        obj.name = f"Hinge {'L' if side < 0 else 'R'}"
-        obj.data.materials.append(mats["accent"])
-        bev = obj.modifiers.new("Round", "BEVEL")
-        bev.width = 0.03
-        bev.segments = 4
-        bev.harden_normals = True
-        obj.data.shade_smooth()
-
-
-def make_arm(coll, mats, pose: dict, side: int, angle_deg: float):
-    """One wire handle: a narrow hairpin loop rising from the hinge."""
-    length, wire, face_deg = pose["arm_len"], pose["wire"], pose["loop_face"]
-    a = math.radians(angle_deg)
-    pivot = Vector(_xz(spine_shoulder(pose, side), 0.02))
-    d = Vector((side * math.sin(a), 0, math.cos(a)))
-    across_xz = Vector((d.z, 0, -d.x)).normalized()
-    f = math.radians(face_deg)
-    # face 0: the loop's plane runs along the hinge (a real clip); 90: it faces us
-    e = (Vector((0, 1, 0)) * math.cos(f) + across_xz * math.sin(f)).normalized()
-
-    foot, top = 0.16, 0.40
-    r = top / 2
-    pts = [pivot - e * foot / 2 - d * 0.02]
-    shoulder = pivot + d * (length - r)
-    pts.append(shoulder - e * r)
-    for k in range(1, 16):
-        t = math.pi * k / 16
-        pts.append(shoulder - e * r * math.cos(t) + d * r * math.sin(t))
-    pts.append(shoulder + e * r)
-    pts.append(pivot + e * foot / 2 - d * 0.02)
-
-    curve = bpy.data.curves.new(f"Arm {'L' if side < 0 else 'R'}", "CURVE")
-    curve.dimensions = "3D"
-    curve.bevel_depth = wire
-    curve.bevel_resolution = 6
-    curve.use_fill_caps = True
-    spline = curve.splines.new("POLY")
-    spline.points.add(len(pts) - 1)
-    for p, co in zip(spline.points, pts):
-        p.co = (*co, 1.0)
-    obj = link(bpy.data.objects.new(curve.name, curve), coll)
-    curve.materials.append(mats["chrome"])
-    return obj
-
-
-def make_face(coll, mats, pose: dict):
-    look, eye_scale, eye_z = pose["pupil_look"], pose["eye_scale"], pose["eye_z"]
-    y_front = -BODY_D / 2
-    er = EYE_R * eye_scale
-    for side in (-1, 1):
-        x = side * pose["eye_gap"] / 2
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            radius=1, segments=48, ring_count=24,
-            location=(x, y_front - 0.01, eye_z))
-        eye = link(bpy.context.active_object, coll)
-        eye.name = f"Eye {'L' if side < 0 else 'R'}"
-        eye.scale = (er * 0.9, er * 0.35, er * 1.12)  # tall ovals
-        eye.data.materials.append(mats["eye"])
-        eye.data.shade_smooth()
-
+        tag = "L" if side < 0 else "R"
+        spot, sn = on_plate(body, centre + right * side * pose["eye_gap"] / 2, n)
+        sup = sn.cross(right).normalized()
+        oriented_sphere(coll, f"Eye {tag}", mats["eye"], spot + sn * 0.01,
+                        right, sn, sup, (er * 0.9, er * 0.35, er * 1.12))
         pr = er * pose["pupil"]
-        px, pz = x + look[0], eye_z + look[1] - er * 0.1
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            radius=1, segments=32, ring_count=16,
-            location=(px, y_front - er * 0.33, pz))
-        pupil = link(bpy.context.active_object, coll)
-        pupil.name = f"Pupil {'L' if side < 0 else 'R'}"
-        pupil.scale = (pr, pr * 0.35, pr * 1.1)
-        pupil.data.materials.append(mats["pupil"])
-        pupil.data.shade_smooth()
-
+        pc = (spot + right * pose["look"][0]
+              + sup * (pose["look"][1] - er * 0.1) + sn * er * 0.33)
+        oriented_sphere(coll, f"Pupil {tag}", mats["pupil"], pc, right, sn,
+                        sup, (pr, pr * 0.35, pr * 1.1), 32)
         hr = pr * 0.34
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            radius=hr, segments=24, ring_count=12,
-            location=(px - pr * 0.35, y_front - er * 0.33 - pr * 0.36,
-                      pz + pr * 0.42))
-        glint = link(bpy.context.active_object, coll)
-        glint.name = f"Glint {'L' if side < 0 else 'R'}"
-        glint.data.materials.append(mats["glint"])
-        glint.data.shade_smooth()
+        gc = pc - right * pr * 0.35 + sup * pr * 0.42 + sn * pr * 0.36
+        oriented_sphere(coll, f"Glint {tag}", mats["glint"], gc, right, sn,
+                        sup, (hr, hr, hr), 24)
 
     if pose["smile"]:
+        base, _, _, _ = front_plate_frame(body, pose["eye_up"] - 0.24)
         curve = bpy.data.curves.new("Smile", "CURVE")
         curve.dimensions = "3D"
         curve.bevel_depth = 0.028
         curve.bevel_resolution = 4
         curve.use_fill_caps = True
         spline = curve.splines.new("POLY")
-        n = 20
-        spline.points.add(n)
-        for k in range(n + 1):
-            t = -1 + 2 * k / n
-            x = t * SMILE_W / 2
-            z = SMILE_Z + (t * t - 1) * 0.1
-            spline.points[k].co = (x, y_front - 0.015, z, 1.0)
+        steps = 20
+        spline.points.add(steps)
+        w = pose["smile_w"]
+        for k in range(steps + 1):
+            t = -1 + 2 * k / steps
+            p = base + right * t * w / 2 + up * (t * t - 1) * 0.1
+            hit, hn = on_plate(body, p, n)
+            spline.points[k].co = (*(hit + hn * 0.02), 1.0)
         link(bpy.data.objects.new("Smile", curve), coll)
         curve.materials.append(mats["chrome"])
 
+
+# ---------------------------------------------------------------- staging
 
 def area_light(name, loc, target, energy, size, colour=(1, 1, 1)):
     data = bpy.data.lights.new(name, "AREA")
@@ -275,18 +310,46 @@ def area_light(name, loc, target, energy, size, colour=(1, 1, 1)):
     return obj
 
 
-def camera(name, loc, target, ortho_scale=None, lens=50):
+def framed_camera(name, pose, subjects):
+    """A camera at the pose's azimuth/elevation, framing subjects to `fill`.
+
+    Azimuth 0 looks straight at the face (along +y); negative swings round
+    toward -x. lens 0 means orthographic.
+    """
+    scene = bpy.context.scene
     data = bpy.data.cameras.new(name)
-    if ortho_scale:
-        data.type = "ORTHO"
-        data.ortho_scale = ortho_scale
-    else:
-        data.lens = lens
     obj = bpy.data.objects.new(name, data)
-    bpy.context.scene.collection.objects.link(obj)
-    obj.location = loc
-    look = Vector(target) - Vector(loc)
-    obj.rotation_euler = look.to_track_quat("-Z", "Y").to_euler()
+    scene.collection.objects.link(obj)
+    scene.render.resolution_x = scene.render.resolution_y = 512
+    pts = []
+    for s in subjects:
+        pts += world_verts(s)
+    mid = (Vector([min(p[i] for p in pts) for i in range(3)])
+           + Vector([max(p[i] for p in pts) for i in range(3)])) / 2
+    az, el = math.radians(pose["cam_azimuth"]), math.radians(pose["cam_elev"])
+    d = Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el),
+                math.sin(el)))
+    dist = 20.0
+    if pose["lens"]:
+        data.lens = pose["lens"]
+    else:
+        data.type = "ORTHO"
+        data.ortho_scale = 6.0
+    for _ in range(6):
+        obj.location = mid + d * dist
+        obj.rotation_euler = (-d).to_track_quat("-Z", "Y").to_euler()
+        bpy.context.view_layer.update()
+        ndc = [world_to_camera_view(scene, obj, p) for p in pts]
+        xs, ys = [c.x for c in ndc], [c.y for c in ndc]
+        span = max(max(xs) - min(xs), max(ys) - min(ys))
+        cx, cy = (max(xs) + min(xs)) / 2 - 0.5, (max(ys) + min(ys)) / 2 - 0.5
+        data.shift_x += cx
+        data.shift_y += cy
+        k = span / pose["fill"]
+        if data.type == "ORTHO":
+            data.ortho_scale *= k
+        else:
+            dist *= k
     return obj
 
 
@@ -301,39 +364,31 @@ def clear_scene():
             block.remove(item)
 
 
-def build(pose: dict) -> None:
+def build(pose: dict):
     clear_scene()
     scene = bpy.context.scene
     coll = bpy.data.collections.new("Clip mascot")
     scene.collection.children.link(coll)
     mats = {
-        "steel": material("Clip steel", pose["steel"], metallic=0.75, roughness=0.35,
+        "steel": material("Clip steel", STEEL, metallic=0.75, roughness=0.35,
                           coat=0.5),
-        "accent": material("Clip accent", ACCENT, metallic=0.8, roughness=0.3),
         "chrome": material("Clip chrome", CHROME, metallic=1.0, roughness=0.12),
         "eye": material("Clip eye", "#ffffff", roughness=0.25,
                         emission=pose["eye_glow"]),
         "pupil": material("Clip pupil", PUPIL, roughness=0.15, coat=1.0),
         "glint": material("Clip glint", "#ffffff", emission=4.0),
     }
-    make_body(coll, mats, pose)
-    make_hinges(coll, mats, pose)
-    make_arm(coll, mats, pose, -1, pose["left_arm"])
-    make_arm(coll, mats, pose, 1, pose["right_arm"])
-    make_face(coll, mats, pose)
-    # A slight lean for life: everything hangs off one root, pivoting at the jaws.
-    root = bpy.data.objects.new("Clip", None)
-    coll.objects.link(root)
-    for obj in coll.objects:
-        if obj is not root:
-            obj.parent = root
-    root.rotation_euler = (0, math.radians(pose["tilt"]), 0)
+    body, handles = import_clip(coll)
+    stand_up(body, handles)
+    pose_handles(body, handles, pose)
+    finish_surfaces(body, handles, mats, pose)
+    bpy.context.view_layer.update()
+    make_face(coll, mats, body, pose)
 
-    centre = (0, 0, 1.15)
+    centre = (0, 0, 1.0)
     area_light("Key", (-3.5, -4.5, 5.0), centre, 900, 4.0)
     area_light("Fill", (4.5, -3.5, 1.8), centre, 280, 5.0)
-    # Blue rims from behind: they graze the silhouette, not the side faces.
-    blue = rgb("#3b82f6")[:3]
+    blue = rgb(RIM_BLUE)[:3]
     area_light("Rim L", (-1.3, 5.0, 3.0), centre, pose["rim"], 1.6, blue)
     area_light("Rim R", (1.3, 5.0, 3.0), centre, pose["rim"], 1.6, blue)
 
@@ -350,6 +405,7 @@ def build(pose: dict) -> None:
     scene.render.image_settings.color_mode = "RGBA"
     scene.view_settings.view_transform = "AgX"
     scene.view_settings.look = "AgX - Punchy"
+    return [o for o in coll.objects if o.type == "MESH"]
 
 
 def render(cam, path: str, size: int, samples: int) -> None:
@@ -371,19 +427,14 @@ def render(cam, path: str, size: int, samples: int) -> None:
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    build(ICON)
-    icon_cam = camera("Icon camera", (0, -12, 1.3), (0, 0, 1.28),
-                      ortho_scale=3.3)
+    subjects = build(ICON)
+    icon_cam = framed_camera("Icon camera", ICON, subjects)
     render(icon_cam, f"{OUT_DIR}/clip-mascot-128.png", 128, 64)
 
-    build(HERO)
-    hero_cam = camera("Hero camera", (-4.6, -8.6, 3.0), (0.15, 0, 1.3),
-                      lens=78)
-    icon_cam = camera("Icon camera", (0, -12, 1.3), (0, 0, 1.25),
-                      ortho_scale=3.3)
+    subjects = build(HERO)
+    hero_cam = framed_camera("Hero camera", HERO, subjects)
     render(hero_cam, f"{OUT_DIR}/clip-512.png", 512, 128)
 
-    bpy.context.scene.camera = hero_cam
     for obj in bpy.data.objects:
         obj.select_set(False)
     bpy.context.view_layer.objects.active = None

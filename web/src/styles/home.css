@@ -66,6 +66,15 @@ body {
   text-wrap: balance;
 }
 
+.mascot figcaption small {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: #6e7681;
+}
+
+.mascot figcaption a { color: inherit; }
+
 @keyframes mascot-bob {
   50% { transform: translateY(-6px) rotate(-1.5deg); }
 }
