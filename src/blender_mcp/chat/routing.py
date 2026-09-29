@@ -144,6 +144,7 @@ class RoutingSamplingHandler:
                 "effort": cfg.anthropic_effort,
                 "advisor": backend.advisor,
                 "advisor_max_tokens": cfg.anthropic_advisor_max_tokens,
+                "advisor_cache": cfg.anthropic_advisor_cache,
             }
         c = await complete(
             backend, system, messages, tools,

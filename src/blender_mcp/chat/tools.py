@@ -51,7 +51,10 @@ class BlenderChatComponent(MCPMixin):
         self.handler = handler or RoutingSamplingHandler(config_loader=config_loader)
         self.config_loader = config_loader
         # One turn in flight per user; the add-on is the only caller.
-        self._busy: set[str] = set()
+        # (user, Blender) -> (MCP session, task) of the turn in flight. One
+        # turn per Blender; the same Blender on a new session (it reconnected,
+        # so nobody waits on the old turn) replaces it.
+        self._busy: dict[tuple[str, str], tuple[Any, asyncio.Task | None]] = {}
 
     @mcp_tool()
     @require_role("addon")
@@ -92,9 +95,16 @@ class BlenderChatComponent(MCPMixin):
                           "hint": "The add-on must be connected to the bus to chat."})
         bus_id, blender_uuid = str(where[0]), where[1]
 
-        if user_sub in self._busy:
-            return _dump({"status": "busy"})
-        self._busy.add(user_sub)
+        key = (user_sub, blender_uuid)
+        session = _session_from_ctx(ctx)
+        held = self._busy.get(key)
+        if held is not None and held[1] is not None and not held[1].done():
+            if held[0] is session:
+                return _dump({"status": "busy"})
+            logger.info("chat: %s reconnected mid-turn; replacing the orphaned turn", blender_uuid)
+            held[1].cancel()
+        me = asyncio.current_task()
+        self._busy[key] = (session, me)
         t0 = time.monotonic()
         try:
             try:
@@ -106,7 +116,8 @@ class BlenderChatComponent(MCPMixin):
             return await self._run(ctx, cfg, backend, user_sub, bus_id, blender_uuid,
                                    message, history, t0, attachments)
         finally:
-            self._busy.discard(user_sub)
+            if self._busy.get(key, (None, None))[1] is me:
+                self._busy.pop(key, None)
 
     async def _run(self, ctx, cfg, backend, user_sub, bus_id, blender_uuid,
                    message, history, t0, attachments=None) -> str:

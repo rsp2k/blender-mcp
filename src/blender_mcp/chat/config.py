@@ -78,6 +78,8 @@ class ChatConfig:
     # Models accounts may escalate to (CHAT_ANTHROPIC_ADVISORS); empty = any
     # the API allows for their model.
     anthropic_advisors: frozenset[str] = frozenset()
+    # Cache the advisor's own transcript across calls (pays off at ~3+ per chat).
+    anthropic_advisor_cache: bool = False
 
     def user_allowed(self, user_sub: str | None) -> bool:
         """May this user use the server's own backends (gateway or default)?"""
@@ -113,5 +115,6 @@ def load_config(env=None) -> ChatConfig:
         anthropic_effort=_choice(env, "CHAT_ANTHROPIC_EFFORT", EFFORTS, ""),
         anthropic_advisor=_get(env, "CHAT_ANTHROPIC_ADVISOR"),
         anthropic_advisors=parse_allowlist(_get(env, "CHAT_ANTHROPIC_ADVISORS")),
+        anthropic_advisor_cache=_get(env, "CHAT_ANTHROPIC_ADVISOR_CACHE").lower() in ("1", "true", "yes", "on"),
         anthropic_advisor_max_tokens=max(1024, _int(env, "CHAT_ANTHROPIC_ADVISOR_MAX_TOKENS", 2048)),
     )

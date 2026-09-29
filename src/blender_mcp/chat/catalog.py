@@ -65,6 +65,7 @@ DEFAULT_TOOLS: dict[str, Policy] = {
     "add_primitive": _PLAIN,
     "create_mesh": _PLAIN,
     "place_object": _PLAIN,
+    "duplicate_object": _PLAIN,
     "set_color": _PLAIN,
     "assign_material": _PLAIN,
     "make_pbr_material": _PLAIN,

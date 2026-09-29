@@ -176,7 +176,7 @@ def system_blocks(system: str) -> list[dict]:
 def build_request(backend: Backend, system: str | None, messages: list[dict], tools, *,
                   max_tokens: int, temperature: float | None, tool_choice: str | None,
                   fallbacks: bool, effort: str, advisor: str = "",
-                  advisor_max_tokens: int = 2048) -> dict[str, Any]:
+                  advisor_max_tokens: int = 2048, advisor_cache: bool = False) -> dict[str, Any]:
     req: dict[str, Any] = {
         "model": backend.model,
         "max_tokens": max(MIN_MAX_TOKENS, max_tokens or 0),
@@ -192,8 +192,11 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
         req["tools"] = [{"name": t.name, "description": t.description or "",
                          "input_schema": t.inputSchema} for t in tools]
         if use_advisor:
-            req["tools"].append({"type": ADVISOR_TOOL, "name": "advisor", "model": advisor,
-                                 "max_tokens": max(1024, int(advisor_max_tokens))})
+            spec = {"type": ADVISOR_TOOL, "name": "advisor", "model": advisor,
+                    "max_tokens": max(1024, int(advisor_max_tokens))}
+            if advisor_cache:
+                spec["caching"] = {"type": "ephemeral", "ttl": "5m"}
+            req["tools"].append(spec)
         choice = tool_choice_for(tool_choice, backend.model)
         if choice:
             req["tool_choice"] = choice
@@ -349,6 +352,7 @@ async def complete(
     effort: str = "",
     advisor: str = "",
     advisor_max_tokens: int = 2048,
+    advisor_cache: bool = False,
     **_ignored: Any,
 ) -> Completion:
     """``transport`` is an httpx2 transport for tests (httpx2.MockTransport)."""
@@ -361,7 +365,7 @@ async def complete(
         return build_request(backend, system, msgs, tools, max_tokens=max_tokens,
                              temperature=temperature, tool_choice=tool_choice,
                              fallbacks=fallbacks, effort=effort, advisor=advisor,
-                             advisor_max_tokens=advisor_max_tokens)
+                             advisor_max_tokens=advisor_max_tokens, advisor_cache=advisor_cache)
 
     async with make_client(backend, timeout_s, transport) as client:
         stripped = False

@@ -487,6 +487,29 @@ async def test_second_turn_while_one_runs_is_busy(cfg, sessions):
         assert (await h.chat(client, "three"))["status"] == "ok"
 
 
+async def test_reconnected_blender_replaces_its_orphaned_turn(cfg, sessions):
+    # The add-on reconnected mid-turn: its old session is gone and nobody
+    # waits on that turn, so a message from the new session takes over
+    # instead of being told "busy" until the old turn times out.
+    models = FakeModels(oa_text("done"))
+    models.gate = asyncio.Event()
+    h = Harness(cfg, models, sessions)
+    async with h.client() as old:
+        first = asyncio.create_task(h.chat(old, "one"))
+        await asyncio.wait_for(models.entered.wait(), 5)
+        async with h.client() as new:
+            second = asyncio.create_task(h.chat(new, "two"))
+            await asyncio.sleep(0.3)  # the second turn has arrived and replaced the first
+            models.gate.set()
+            out2 = await asyncio.wait_for(second, 5)
+        try:
+            out1 = await asyncio.wait_for(first, 5)
+        except Exception as e:  # noqa: BLE001 - a cancelled call may surface as an error
+            out1 = {"error": type(e).__name__}
+    assert out2["status"] == "ok"
+    assert out1.get("status") != "ok"
+
+
 async def test_turn_timeout(cfg, sessions):
     models = FakeModels(oa_text("too late"))
     models.gate = asyncio.Event()

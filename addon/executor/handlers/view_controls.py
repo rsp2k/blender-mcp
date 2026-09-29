@@ -162,8 +162,13 @@ class ViewControlHandlersMixin:
         lens: float = None,
         offset=None,
         rotate_by=None,
+        rotation=None,
     ):
         """Place ``object`` at ``location`` given in a reference frame.
+
+        ``rotation`` [rx, ry, rz] degrees (XYZ Euler, world axes) sets the
+        world rotation outright, so [0, 0, 0] stands a tilted object upright;
+        ``rotate_by`` is then applied on top of it.
 
         ``offset`` [dx, dy, dz] moves the object relative to where it is (or
         to ``location`` when both are given), in world space and metres.
@@ -189,9 +194,13 @@ class ViewControlHandlersMixin:
         loc = _vec3(location, "location") if location is not None else None
         off = _vec3(offset, "offset") if offset is not None else None
         turn = _vec3(rotate_by, "rotate_by") if rotate_by is not None else None
+        absrot = _vec3(rotation, "rotation") if rotation is not None else None
         tgt = _vec3(target, "target") if target is not None else None
-        if loc is None and off is None and turn is None and tgt is None and parent is None and lens is None:
-            raise ValueError("pass location, offset, rotate_by, target, parent or lens")
+        if tgt is not None and absrot is not None:
+            raise ValueError("pass either target or rotation, not both")
+        if (loc is None and off is None and turn is None and tgt is None and parent is None
+                and lens is None and absrot is None):
+            raise ValueError("pass location, offset, rotation, rotate_by, target, parent or lens")
         if frame not in ("parent", "world"):
             raise ValueError("frame must be 'parent' or 'world'")
         if lens is not None:
@@ -219,6 +228,8 @@ class ViewControlHandlersMixin:
             if direction.length < 1e-9:
                 raise ValueError("target coincides with location")
             rot = direction.to_track_quat(track_axis, up_axis)
+        if absrot is not None:
+            rot = mathutils.Euler([math.radians(a) for a in absrot], "XYZ").to_quaternion()
         if turn is not None:
             rot = mathutils.Euler([math.radians(a) for a in turn], "XYZ").to_quaternion() @ rot
 
@@ -244,9 +255,63 @@ class ViewControlHandlersMixin:
             result["moved_by"] = list(off)
         if turn is not None:
             result["rotated_by_degrees"] = list(turn)
+        if absrot is not None or turn is not None:
+            result["world_rotation_degrees"] = [
+                round(math.degrees(a), 4) for a in obj.matrix_world.to_euler("XYZ")]
         if obj.type == 'CAMERA':
             result["lens"] = obj.data.lens
         return result
+
+    @command("duplicate_object")
+    def duplicate_object(self, object: str, name: str = None, location=None, offset=None,
+                         mirror: str = None, linked: bool = False):
+        """Copy ``object`` (with its modifiers and materials) into the same collections.
+
+        ``location`` [x, y, z] (world) or ``offset`` (from the original) places
+        the copy; ``mirror`` "X", "Y" or "Z" reflects it across that world plane
+        through the origin, geometry included, as a true mirror image with
+        positive scale. ``linked`` shares the mesh data (not with mirror).
+        ``name`` names the copy; default is Blender's "<name>.001".
+        """
+        src = _get_object(object)
+        loc = _vec3(location, "location") if location is not None else None
+        off = _vec3(offset, "offset") if offset is not None else None
+        axis = None
+        if mirror:
+            axis = "XYZ".find(str(mirror).upper().strip())
+            if axis < 0 or len(str(mirror).strip()) != 1:
+                raise ValueError("mirror must be X, Y or Z")
+            if linked:
+                raise ValueError("a mirrored copy needs its own mesh data; drop linked")
+        dup = src.copy()
+        if src.data is not None and not linked:
+            dup.data = src.data.copy()
+        if name:
+            dup.name = str(name)
+        for coll in src.users_collection:
+            coll.objects.link(dup)
+
+        if axis is not None:
+            flip = mathutils.Matrix.Identity(4)
+            flip[axis][axis] = -1.0
+            if dup.data is not None and hasattr(dup.data, "transform"):
+                dup.data.transform(flip)
+                if hasattr(dup.data, "flip_normals"):
+                    dup.data.flip_normals()
+            dup.matrix_world = flip @ src.matrix_world @ flip
+        if loc is not None:
+            dup.matrix_world.translation = loc
+        if off is not None:
+            dup.matrix_world.translation = dup.matrix_world.translation + off
+        bpy.context.view_layer.update()
+        return {
+            "object": dup.name,
+            "source": src.name,
+            "world_location": [round(v, 6) for v in dup.matrix_world.translation],
+            "dimensions": [round(v, 6) for v in dup.dimensions],
+            "mirrored": "XYZ"[axis] if axis is not None else None,
+            "linked": bool(linked),
+        }
 
     @command("world_from_local", undo=False)
     def world_from_local(self, object: str, point, inverse: bool = False):

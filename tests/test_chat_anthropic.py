@@ -363,3 +363,9 @@ async def test_advice_blocks_are_kept_for_replay():
                                      "input": {}}], stop_reason="tool_use", model="claude-sonnet-5"))
     c = await run(api, model="claude-sonnet-5", advisor="claude-opus-5")
     assert [b["type"] for b in c.raw] == ["server_tool_use", "advisor_tool_result", "tool_use"]
+
+
+async def test_advisor_caching_switch():
+    api = FakeAPI(message([{"type": "text", "text": "ok"}], model="claude-haiku-4-5"))
+    await run(api, model="claude-haiku-4-5", advisor="claude-opus-5", advisor_cache=True)
+    assert api.body()["tools"][-1]["caching"] == {"type": "ephemeral", "ttl": "5m"}

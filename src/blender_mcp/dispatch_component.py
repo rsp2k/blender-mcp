@@ -86,15 +86,19 @@ def _xyz(value, what: str) -> Optional[list[float]]:
 
 def placement_params(object, location=None, target=None, parent=None, frame="parent",
                      track_axis="-Z", up_axis="Y", lens=None, offset=None,
-                     rotate_by=None) -> dict:
+                     rotate_by=None, rotation=None) -> dict:
     """Validated place_object dispatch params (raises ValueError).
 
     ``offset`` / ``rotate_by`` are only sent when given, so the existing
     call shape is unchanged for add-ons that predate them.
     """
     loc, off, turn = _xyz(location, "location"), _xyz(offset, "offset"), _xyz(rotate_by, "rotate_by")
-    if loc is None and off is None and turn is None and target is None and not parent and lens is None:
-        raise ValueError("pass location (absolute), offset (relative move), rotate_by, "
+    rot = _xyz(rotation, "rotation")
+    if target is not None and rot is not None:
+        raise ValueError("pass either target or rotation, not both")
+    if (loc is None and off is None and turn is None and target is None and not parent
+            and lens is None and rot is None):
+        raise ValueError("pass location (absolute), offset (relative move), rotation, rotate_by, "
                          "target, parent or lens")
     if frame not in ("parent", "world"):
         raise ValueError("frame must be 'parent' or 'world'")
@@ -106,6 +110,8 @@ def placement_params(object, location=None, target=None, parent=None, frame="par
         params["offset"] = off
     if turn is not None:
         params["rotate_by"] = turn
+    if rot is not None:
+        params["rotation"] = rot
     return params
 
 
@@ -1231,6 +1237,7 @@ class BlenderDispatchComponent(MCPMixin):
         lens: Optional[float] = None,
         offset: Optional[list[float]] = None,
         rotate_by: Optional[list[float]] = None,
+        rotation: Optional[list[float]] = None,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
@@ -1256,10 +1263,14 @@ class BlenderDispatchComponent(MCPMixin):
         current rotation. Without ``location`` the object keeps its
         position; with both, offset is added after moving to location.
         Relative moves never change the parent.
+
+        ``rotation`` [rx, ry, rz] (degrees, XYZ, world axes) sets the rotation
+        outright: [0, 0, 0] stands a tipped-over object upright. rotate_by
+        then applies on top.
         """
         try:
             params = placement_params(object, location, target, parent, frame, track_axis,
-                                      up_axis, lens, offset, rotate_by)
+                                      up_axis, lens, offset, rotate_by, rotation)
         except ValueError as e:
             return json.dumps({"status": "error", "error": "invalid_argument", "detail": str(e)})
         return await self._call(
@@ -1270,6 +1281,45 @@ class BlenderDispatchComponent(MCPMixin):
             _timeout,
             bus_id=bus_id,
         )
+
+    @mcp_tool()
+    async def duplicate_object(
+        self,
+        object: str,
+        name: Optional[str] = None,
+        location: Optional[list[float]] = None,
+        offset: Optional[list[float]] = None,
+        mirror: Optional[str] = None,
+        linked: bool = False,
+        target_uuid: Optional[str] = None,
+        _timeout: float = DEFAULT_TIMEOUT_S,
+        bus_id: Optional[str] = None,
+        ctx: Context = None,
+    ) -> str:
+        """Copy an object, with its modifiers and materials, into the same collections.
+
+        ``name`` names the copy. ``location`` [x, y, z] (world) or ``offset``
+        (metres from the original) places it. ``mirror`` "X", "Y" or "Z"
+        reflects the copy across that world plane through the origin,
+        geometry included: a true mirror image, so the left arm of a chair
+        becomes a right arm. ``linked`` shares mesh data with the original.
+        """
+        params: dict[str, Any] = {"object": object}
+        try:
+            if name:
+                params["name"] = name
+            if location is not None:
+                params["location"] = _xyz(location, "location")
+            if offset is not None:
+                params["offset"] = _xyz(offset, "offset")
+        except ValueError as e:
+            return json.dumps({"status": "error", "error": "invalid_argument", "detail": str(e)})
+        if mirror:
+            params["mirror"] = str(mirror).upper()
+        if linked:
+            params["linked"] = True
+        return await self._call(ctx, "duplicate_object", params, target_uuid, _timeout,
+                                bus_id=bus_id)
 
     @mcp_tool()
     async def world_from_local(
