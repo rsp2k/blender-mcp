@@ -1,152 +1,135 @@
 ---
 title: "Quickstart"
-description: "Authenticate against a BlenderMCP server, list connected Blender peers, dispatch your first tool call. Five minutes."
+description: "Install the Blender MCP extension, log in, connect Claude to https://mcp.blender.bet/, and watch it change your scene. About ten minutes."
+sidebar:
+  order: 1
 ---
 
-import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import addRepository from '../../../assets/quickstart/add-repository.webp';
+import installEntry from '../../../assets/quickstart/install-entry.webp';
+import notLoggedIn from '../../../assets/quickstart/not-logged-in.webp';
+import connected from '../../../assets/quickstart/connected.webp';
 
-End-to-end: auth → connect → call a dispatch tool. You don't need to run a server yourself for this walkthrough — point at the public reference deployment.
+By the end of this page, Claude will read your Blender scene and change it while you watch. You'll install the add-on from Blender's extension manager, log in once through your browser, and point Claude at the hosted server at `https://mcp.blender.bet/`. Nothing runs on your machine except Blender and the client you already use.
 
-## Prerequisites
+You need Blender 4.2 or newer, a web browser, and an MCP client such as Claude Code, Claude Desktop, or claude.ai. It takes about ten minutes.
 
-- Python 3.10+
-- `uv` installed
-- A browser (for the OAuth login step)
-- A target MCP server URL — `https://mcp.blender.bet/` for the reference deployment
+## 1. Add the repository
 
-## Steps
+Blender MCP ships as a Blender extension, so Blender installs it and keeps it updated for you.
 
 <Steps>
 
-1. **Install the `fastmcp` client library.**
+1. In Blender, open **Edit › Preferences** and pick **Get Extensions**.
 
-   ```bash
-   uv pip install --system fastmcp
+2. Open the **Repositories** menu at the top right, click **+**, and choose **Add Remote Repository**.
+
+3. Paste this address into the URL field:
+
+   ```text
+   https://mcp.blender.bet/install
    ```
 
-   `fastmcp.Client` speaks the MCP-spec OAuth flow (discovery, DCR, PKCE) for you. If you'd rather drive the wire yourself, see the [Authentication reference](/reference/auth/).
+   Leave **Check for Updates on Startup** ticked and click **Create**.
 
-2. **Open a session.** Save this as `quickstart.py`:
-
-   ```python
-   import asyncio, json
-   from fastmcp import Client
-
-   SERVER = "https://mcp.blender.bet/"
-
-   async def main():
-       async with Client(SERVER) as client:
-           # First run pops your browser to log in. Tokens persist
-           # to ~/.config/fastmcp so you only do this once.
-           result = await client.call_tool("blender_list_available_clients", {})
-           print(json.loads(result.content[0].text))
-
-   asyncio.run(main())
-   ```
-
-   ```bash
-   uv run python quickstart.py
-   ```
-
-   First run: a browser tab opens, you authenticate, the tab closes itself. Subsequent runs reuse the cached token.
-
-   Expected output (no Blender connected yet):
-
-   ```json
-   {
-     "user_id": "<your-id>",
-     "persistent": [],
-     "ephemeral": [{"uuid": "fastmcp-...", "client_type": "llm", ...}]
-   }
-   ```
-
-   You've successfully authenticated. The `ephemeral` list shows your own session.
-
-3. **Connect a Blender peer** so there's something to dispatch to. In Blender:
-
-   <Tabs>
-   <TabItem label="From the addon UI">
-   - Install `addon.py` from this repo: Edit → Preferences → Add-ons → Install
-   - In the BlenderMCP panel (sidebar `N`): set Server URL to `https://mcp.blender.bet/`
-   - Click **Login** — same browser-based PKCE flow. The addon connects on its own once you're logged in.
-
-   Status should read Connected with the client UUID displayed. The **Stay connected** switch under Connection is on by default: the addon connects at every Blender start and after File > Open, and reconnects with backoff when the connection drops. Switch it off to disconnect; it stays off across restarts until you switch it back on.
-   </TabItem>
-   <TabItem label="From a stub (no Blender)">
-   For testing the flow without installing the addon, use the bundled stub:
-
-   ```bash
-   # Get a token first (one-time browser flow)
-   uv run python -c "
-   import asyncio
-   from fastmcp import Client
-   asyncio.run(Client('https://mcp.blender.bet/').__aenter__())
-   "
-   # Then run the stub (reads cached token, registers as a fake blender)
-   uv run python examples/fake_blender_peer.py \
-     --server https://mcp.blender.bet/ \
-     --uuid blender-demo01
-   ```
-
-   Output:
-
-   ```
-   [peer] Connected as blender-demo01
-   [peer] register_client ok
-   [peer] waiting for jobs...
-   ```
-   </TabItem>
-   </Tabs>
-
-4. **Dispatch a tool.** Edit `quickstart.py`:
-
-   ```python
-   async with Client(SERVER) as client:
-       result = await client.call_tool("blender_get_scene_info", {})
-       envelope = json.loads(result.content[0].text)
-       print(json.dumps(envelope, indent=2))
-   ```
-
-   ```bash
-   uv run python quickstart.py
-   ```
-
-   Expected output:
-
-   ```json
-   {
-     "status": "completed",
-     "command": "get_scene_info",
-     "target_uuid": "blender-demo01",
-     "job_id": "j-7a3f2c1e9b04",
-     "result": "{\"name\":\"Scene\",\"object_count\":3,...}",
-     "error": ""
-   }
-   ```
-
-   The server auto-picked `blender-demo01` as the target because it's the only Blender on your bus. With multiple peers, pass `target_uuid` in the arguments dict.
-
-5. **Try a different tool.** Run arbitrary Python in Blender:
-
-   ```python
-   result = await client.call_tool("blender_execute_code", {
-       "code": "import bpy; print(len(bpy.data.objects))"
-   })
-   print(json.loads(result.content[0].text)["result"])  # "3\n"
-   ```
-
-   The full [dispatch tool catalog](/reference/dispatch-tools/) has 24 entries across scene inspection, code execution, viewport capture, console operations, msgbus, PolyHaven, Hyper3D Rodin, and Sketchfab.
+   <Image src={addRepository} alt="The Add New Extension Repository dialog with https://mcp.blender.bet/install in the URL field." />
 
 </Steps>
 
+The repository shows up in the list, and **Blender MCP** appears under **Available**.
+
+## 2. Install the add-on
+
+Expand the **Blender MCP** entry. It lists what the add-on asks for (network access to reach the server, file access for asset downloads). Click **Install**.
+
+<Image src={installEntry} alt="The Blender MCP entry expanded, showing version, size, permissions and an Install button." />
+
+The download is about 24 MB because its Python dependencies come bundled. Blender enables the add-on as soon as it finishes, and you can close Preferences.
+
+<Aside type="note">
+On Blender older than 4.2, or if you need a single-file install, follow [Install and upgrade the addon](/how-to/install-addon/) instead, then come back for step 3.
+</Aside>
+
+## 3. Log in from Blender
+
+Move the mouse over the 3D viewport and press **N** to open the sidebar. You'll see two new tabs, **BlenderMCP** and **Chat**. Open **BlenderMCP**. The panel reads **Not logged in**.
+
+<Image src={notLoggedIn} alt="The BlenderMCP sidebar panel reading Not logged in, with a Login with OAuth (browser) button." />
+
+Click **Login with OAuth (browser)**. Your browser opens on the sign-in page. Sign in, then approve access for BlenderMCP. Blender shows **Authenticating...** while it waits.
+
+When the browser lands on **You're signed in**, look back at Blender. The panel now reads **Connected · Personal**, with **Logged in as** and your name underneath.
+
+<Image src={connected} alt="Blender on the left with the panel reading Connected, Personal; the browser on the right showing You're signed in." />
+
+You can close the browser tab. Your Blender is now connected to your personal bus on the server, and it will reconnect on its own the next time you start Blender.
+
+## 4. Connect your MCP client
+
+The client connects to the same server. Use the root address `https://mcp.blender.bet/` exactly as written, with no `/mcp` on the end.
+
+<Tabs syncKey="mcp-client">
+<TabItem label="Claude Code">
+
+In a terminal:
+
+```bash
+claude mcp add --transport http blender https://mcp.blender.bet/
+```
+
+Start Claude Code, type `/mcp`, pick **blender**, and choose to authenticate. Your browser opens the same sign-in page. Sign in with the account you used in Blender.
+
+</TabItem>
+<TabItem label="Claude Desktop / claude.ai">
+
+<Steps>
+
+1. Open **Settings › Connectors** and click **Add custom connector**.
+
+2. Name it `Blender` and enter `https://mcp.blender.bet/` as the URL.
+
+3. Click **Connect** and sign in through the browser with the account you used in Blender.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+Use the same account in both places. The server only lets a client see the Blenders logged in as the same person, so a different account would find nothing to talk to.
+
+## 5. Ask about your scene
+
+Start a new conversation and ask:
+
+```text
+What's in my Blender scene?
+```
+
+Claude calls the server, the server asks your Blender, and the answer comes back with what's actually there. On a fresh file that's the default cube, a camera, and a light.
+
+Now ask for a change:
+
+```text
+Add a sphere next to the cube and make it orange.
+```
+
+Watch the viewport. The sphere appears and takes on its new material, and if you expand **Activity** under the BlenderMCP panel, it lists each command Claude ran, newest first. You've just driven Blender from Claude.
+
+<Aside type="tip" title="Prefer to stay in Blender?">
+Open the **Chat** tab in the same sidebar, type the same request into the field, and press the play button. A model does the work inside the Blender you typed in, with no other client needed. If it wants to run Python, the tab shows the code with **Allow** and **Deny** first. See [Chat inside Blender](/how-to/chat-in-blender/).
+</Aside>
+
 ## What just happened
 
-You authenticated against the MCP server using OAuth 2.1 with PKCE (the library handled discovery → DCR → PKCE → token exchange). Your access token resolves to a `user_id` server-side, which scopes every subsequent call to your personal bus — your Blender peers can't be seen by anyone else, and other users' peers don't show up in your `list_available_clients`. Each `blender_*` tool call traversed the bus to your Blender peer, executed there, and returned the result inline via [JobWaiter](/explanation/dispatch-vs-script/) — the bus round-trip is invisible from the caller's perspective.
+Your Blender and your Claude session both signed in to the same server as you. The server keeps a private bus per account: Blender joined it as a long-lived client, and Claude joined it as a session. Every Blender tool Claude called went over that bus to your add-on, ran inside Blender, and returned the result to Claude as an ordinary tool reply. [How OAuth isolates buses](/explanation/oauth-buses/) covers the details.
 
-## Next
+## Next steps
 
-- [Authentication reference](/reference/auth/) — the OAuth flow in wire detail
-- [Dispatch tools](/reference/dispatch-tools/) — all 24 tools, signatures, return shapes
-- [Write your own LLM client](/how-to/write-llm-client/) — building beyond `fastmcp.Client`
-- [Use cases](/explanation/use-cases/) — multi-LLM collaboration patterns
-- [Architecture](/explanation/architecture/) — what's under the hood
+<CardGrid>
+  <LinkCard title="Chat inside Blender" description="Ask for changes in the Chat tab and choose which model does the work." href="/how-to/chat-in-blender/" />
+  <LinkCard title="Use it from CI or scripts" description="Personal access tokens for jobs that can't open a browser." href="/how-to/ci-and-scripts/" />
+  <LinkCard title="Dispatch tools" description="Every tool a client can call on your Blender." href="/reference/dispatch-tools/" />
+  <LinkCard title="Architecture" description="How the server, the add-on, and clients fit together." href="/explanation/architecture/" />
+</CardGrid>
