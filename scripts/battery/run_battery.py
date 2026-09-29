@@ -218,6 +218,11 @@ class Battery:
                 raise RuntimeError(f"setup scene: {r.get('error')}")
         if s.get("python"):
             await self.code(snippets.run_setup_python(s["python"]), timeout=60)
+        try:
+            # For whoever is watching; the run doesn't depend on it.
+            await self.code(snippets.show_chat())
+        except Exception as e:  # noqa: BLE001
+            log(f"   (couldn't open the Chat tab for watchers: {e})")
 
     # ---- one turn -----------------------------------------------------------
 

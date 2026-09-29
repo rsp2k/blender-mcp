@@ -240,3 +240,30 @@ _problem = _client.set_backend({_lit(provider)}, {_lit(model)}, {_lit(base_url)}
 del _key
 _out({{"problem": _problem}})
 """
+
+
+def show_chat() -> str:
+    """Open the sidebar on the Chat tab and the Reader beside the viewport, so
+    someone watching the Blender (view-only link) can follow each case. The
+    runner doesn't need either: it drives the chat's send() directly."""
+    return PRELUDE + """
+_reader = _mod(".chat.reader")
+_win = bpy.context.window_manager.windows[0]
+_area = next((a for a in _win.screen.areas if a.type == 'VIEW_3D'), None)
+_done = {"sidebar": False, "reader": False}
+if _area is not None:
+    _area.spaces.active.show_region_ui = True
+    for _r in _area.regions:
+        if _r.type == 'UI':
+            try:
+                _r.active_panel_category = "Chat"
+                _done["sidebar"] = True
+            except (TypeError, AttributeError):
+                pass
+    _area.tag_redraw()
+    with bpy.context.temp_override(window=_win, screen=_win.screen, area=_area):
+        if not _reader.is_open(bpy.context):
+            _reader.toggle(bpy.context)
+        _done["reader"] = _reader.is_open(bpy.context)
+_out(_done)
+"""
