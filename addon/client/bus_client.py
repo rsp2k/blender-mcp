@@ -78,8 +78,20 @@ def ensure_fastmcp(force: bool = False) -> bool:
     return True
 
 
+def fastmcp_needs_restart() -> bool:
+    """The expected state right after installing the extension: Blender's own
+    older typing_extensions is already loaded, and a restart fixes it."""
+    from ..first_run import needs_restart
+    return needs_restart(__package__, FASTMCP_IMPORT_ERROR)
+
+
 def fastmcp_problem_lines() -> list[str]:
     """User-facing explanation when fastmcp isn't importable."""
+    if fastmcp_needs_restart():
+        # Normal after a first install, so no error text in the panel; the
+        # console still gets it (printed where the import fails).
+        from ..first_run import RESTART_LINES
+        return list(RESTART_LINES)
     if (__package__ or "").startswith("bl_ext."):
         lines = [
             "Blender MCP's bundled libraries aren't loaded.",

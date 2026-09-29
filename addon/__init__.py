@@ -276,6 +276,10 @@ def register():
     if not ensure_fastmcp(force=True):
         for line in fastmcp_problem_lines():
             print(f"[BlenderMCP] {line}")
+        from .client import bus_client as _bc
+        if _bc.fastmcp_needs_restart() and _bc.FASTMCP_IMPORT_ERROR:
+            # The panel leaves this out as expected noise; keep it in the log.
+            print(f"[BlenderMCP] ({_bc.FASTMCP_IMPORT_ERROR})")
 
 
 def unregister():

@@ -223,7 +223,7 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         if not _bus_client.ensure_fastmcp():
             box = layout.box()
             lines = _bus_client.fastmcp_problem_lines()
-            box.label(text=lines[0], icon='ERROR')
+            box.label(text=lines[0], icon='FILE_REFRESH' if _bus_client.fastmcp_needs_restart() else 'ERROR')
             for line in lines[1:]:
                 box.label(text=line)
             return  # Everything below depends on fastmcp.

@@ -277,3 +277,14 @@ def test_claimed_missing_from_reply_and_created_head():
 
 def test_idle_snippet_compiles():
     compile(snippets.IDLE, "snippet", "exec")
+
+
+def test_first_install_message_is_a_restart_step_not_an_error():
+    from addon.first_run import RESTART_LINES, needs_restart
+    pkg = "bl_ext.mcp_blender_bet.blender_mcp.client"
+    assert needs_restart(pkg, "ImportError: cannot import name 'sentinel' from 'typing_extensions'")
+    assert "restart Blender" in " ".join(RESTART_LINES)
+    assert not any("ImportError" in x for x in RESTART_LINES)
+    # Anything else (or a legacy single-file install) still shows the real error.
+    assert not needs_restart(pkg, "ImportError: No module named 'httpx'")
+    assert not needs_restart("addon.client", "cannot import name 'sentinel' from 'typing_extensions'")
