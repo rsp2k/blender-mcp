@@ -56,6 +56,38 @@ def selection_block(items: Any) -> str | None:
     return "Selected objects (\"this\", \"these\" and \"it\" mean these):\n" + "\n".join(lines)
 
 
+def context_block(ctx: Any) -> str | None:
+    """One line of where the user is working (mode, active object, frame...)."""
+    if not isinstance(ctx, dict) or not ctx:
+        return None
+    parts = []
+    mode = str(ctx.get("mode") or "")
+    if mode and mode != "OBJECT":
+        parts.append(f"in {mode.replace('_', ' ').title()} mode")
+    if ctx.get("active"):
+        parts.append(f'active object "{str(ctx["active"])[:80]}"')
+    sel = ctx.get("edit_selection")
+    if isinstance(sel, dict):
+        parts.append(f"{sel.get('verts', 0)} verts / {sel.get('edges', 0)} edges / "
+                     f"{sel.get('faces', 0)} faces selected")
+    if ctx.get("frame") is not None:
+        parts.append(f"frame {ctx['frame']}")
+    cur = _fmt_vec(ctx.get("cursor"))
+    if cur:
+        parts.append(f"3D cursor at {cur}")
+    units = ctx.get("units")
+    if isinstance(units, dict) and (units.get("scale") not in (None, 1, 1.0)
+                                    or units.get("system") not in (None, "METRIC")):
+        parts.append(f"units {units.get('system')}/{units.get('length')} scale {units.get('scale')}")
+    view = ctx.get("view")
+    if isinstance(view, dict):
+        parts.append(f"viewport {view.get('perspective')}, looking {view.get('looking')}, "
+                     f"{view.get('shading')} shading")
+    if ctx.get("file"):
+        parts.append(f'file "{str(ctx["file"])[:80]}"')
+    return ("Where the user is working: " + "; ".join(parts) + ".") if parts else None
+
+
 def text_block(text: Any) -> str | None:
     if not isinstance(text, dict):
         return None
@@ -91,7 +123,8 @@ async def user_content(message: str, attachments: Any, *, executor=None, handler
     blocks: list = []
     notes: list[str] = []
     if isinstance(attachments, dict):
-        for block in (selection_block(attachments.get("selection")),
+        for block in (context_block(attachments.get("context")),
+                      selection_block(attachments.get("selection")),
                       text_block(attachments.get("text"))):
             if block:
                 notes.append(block)

@@ -61,3 +61,20 @@ async def test_other_backends_get_a_description(monkeypatch):
     out = await attach.user_content("fix this", {"viewport": True}, executor=object(),
                                     handler=object(), backend=gw, vision_backend=gw)
     assert len(out) == 1 and "two boxes" in out[0].text
+
+
+def test_context_block_mentions_what_matters():
+    block = attach.context_block({
+        "mode": "EDIT_MESH", "active": "Tower 4", "frame": 12, "cursor": [0, 0, 1],
+        "edit_selection": {"verts": 4, "edges": 4, "faces": 1},
+        "units": {"system": "METRIC", "length": "METERS", "scale": 1.0},
+        "view": {"perspective": "ortho", "looking": "down, from the top", "shading": "solid"}})
+    assert "Edit Mesh mode" in block and '"Tower 4"' in block and "1 faces selected" in block
+    assert "looking down, from the top" in block and "units" not in block  # default units omitted
+    assert attach.context_block({"mode": "OBJECT"}) is None
+
+
+def test_view_facing():
+    from addon.chat.clip import view_facing
+    assert view_facing((0, 0, -1)) == "down, from the top"
+    assert view_facing((0.5, 0.5, -0.7)) == "at an angle"
