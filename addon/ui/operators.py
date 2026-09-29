@@ -49,7 +49,7 @@ class BLENDERMCP_OT_TestConnection(bpy.types.Operator):
 
     bl_idname = "blendermcp.test_connection"
     bl_label = "Test Connection"
-    bl_description = "GET <server>/health with a 3s timeout; report status to the operator log"
+    bl_description = "Check that the BlenderMCP server is reachable"
 
     def execute(self, context):
         prefs = get_prefs(context)
@@ -103,8 +103,8 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
     bl_idname = "blendermcp.oauth_login"
     bl_label = "Login with OAuth"
     bl_description = (
-        "Open browser → authenticate via the upstream IDP → store tokens "
-        "in prefs. Works against any MCP-spec OAuth server."
+        "Log in to BlenderMCP in your web browser. Blender connects on its "
+        "own once you've logged in"
     )
 
     def execute(self, context):
@@ -242,7 +242,7 @@ class BLENDERMCP_OT_Logout(bpy.types.Operator):
 
     bl_idname = "blendermcp.logout"
     bl_label = "Logout"
-    bl_description = "Disconnect, invalidate server-side refresh tokens, clear local JWT"
+    bl_description = "Disconnect and log out. Log in again to reconnect"
 
     def execute(self, context):
         from .. import connection
@@ -305,7 +305,7 @@ class BLENDERMCP_OT_ReLogin(bpy.types.Operator):
 
     bl_idname = "blendermcp.re_login"
     bl_label = "Re-login"
-    bl_description = "Clear current credentials and start a fresh OAuth flow"
+    bl_description = "Log out, then log in again in your web browser"
 
     def execute(self, context):
         # 1. Full Logout — disconnect, revoke server-side, clear prefs.
@@ -341,7 +341,7 @@ class BLENDERMCP_OT_DismissFatalError(bpy.types.Operator):
 
     bl_idname = "blendermcp.dismiss_fatal_error"
     bl_label = "Dismiss"
-    bl_description = "Hide the fatal-error banner (auth state unchanged)"
+    bl_description = "Hide this message. Your login is unchanged"
 
     def execute(self, context):
         if state._client is not None:
@@ -432,8 +432,8 @@ class BLENDERMCP_OT_ReconnectNow(bpy.types.Operator):
     bl_idname = "blendermcp.reconnect_now"
     bl_label = "Reconnect now"
     bl_description = (
-        "Skip the current backoff sleep and reconnect immediately. "
-        "Equivalent to clicking Disconnect then Connect."
+        "Try to reconnect right away instead of waiting for the next "
+        "automatic attempt"
     )
 
     def execute(self, context):
