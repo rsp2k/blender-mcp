@@ -59,12 +59,15 @@ class BlenderChatComponent(MCPMixin):
         self,
         message: str,
         history: list[dict[str, Any]] | None = None,
+        attachments: dict[str, Any] | None = None,
         ctx: Context = None,
     ) -> str:
         """Run one chat turn in the Blender that sent it (the add-on's Chat tab).
 
         ``history`` is the recent conversation, text only, at most 20
-        ``{role, content}`` entries. Progress arrives as progress
+        ``{role, content}`` entries. ``attachments`` is what the user clipped
+        to this message: ``selection`` (objects), ``text`` ({name, body}) and
+        ``viewport`` (true to include what they see). Progress arrives as progress
         notifications whose message is a JSON event; approvals for risky
         tools arrive as elicitation requests starting "BlenderMCP approval:".
         Returns JSON with ``status`` ok / disabled / no_backend / busy /
@@ -101,12 +104,12 @@ class BlenderChatComponent(MCPMixin):
             if backend is None:
                 return _dump({"status": "no_backend", "hint": NO_BACKEND_HINT})
             return await self._run(ctx, cfg, backend, user_sub, bus_id, blender_uuid,
-                                   message, history, t0)
+                                   message, history, t0, attachments)
         finally:
             self._busy.discard(user_sub)
 
     async def _run(self, ctx, cfg, backend, user_sub, bus_id, blender_uuid,
-                   message, history, t0) -> str:
+                   message, history, t0, attachments=None) -> str:
         catalog = await build_catalog(
             ctx.fastmcp, cfg.tools or None,
             vision=vision.available(cfg, user_sub, backend),
@@ -124,7 +127,7 @@ class BlenderChatComponent(MCPMixin):
             async with ChatExecutor(ctx.fastmcp, user_sub, blender_uuid, bus_id) as executor:
                 turn = Turn(ctx, cfg, self.handler, backend, executor, catalog, user_sub)
                 try:
-                    reply = await asyncio.wait_for(turn.run(message, history),
+                    reply = await asyncio.wait_for(turn.run(message, history, attachments),
                                                    timeout=cfg.turn_timeout_s)
                     base = {"status": "ok", "reply": reply}
                 except TimeoutError:

@@ -122,9 +122,8 @@ async def capture(executor, view: dict | None = None) -> tuple[bool, str]:
     return ok, reply
 
 
-async def look(executor, handler, backend: Backend, question: str,
-               view: dict | None = None) -> tuple[bool, str]:
-    """(ok, description) for the calling Blender's viewport."""
+async def screenshot(executor, view: dict | None = None) -> tuple[bool, ImageContent | str]:
+    """(True, image) of the calling Blender's viewport, or (False, why)."""
     store = get_store()
     if store is None:
         return False, "Viewport screenshots are not available on this server."
@@ -145,9 +144,14 @@ async def look(executor, handler, backend: Backend, question: str,
     except StorageError as e:
         return False, f"Could not read the screenshot: {e.detail}"
     mime = _MIME.get(key.rsplit(".", 1)[-1].lower(), "image/png")
+    return True, ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=mime)
+
+
+async def describe(handler, backend: Backend, image: ImageContent,
+                   question: str) -> tuple[bool, str]:
     msg = SamplingMessage(role="user", content=[
         TextContent(type="text", text=question or "Describe the viewport."),
-        ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=mime),
+        image,
     ])
     try:
         c = await handler.complete(backend, VISION_SYSTEM, [msg], None,
@@ -155,3 +159,12 @@ async def look(executor, handler, backend: Backend, question: str,
     except ProviderError as e:
         return False, f"The vision model failed: {e}"
     return True, c.text or "(the vision model gave no description)"
+
+
+async def look(executor, handler, backend: Backend, question: str,
+               view: dict | None = None) -> tuple[bool, str]:
+    """(ok, description) for the calling Blender's viewport."""
+    ok, image = await screenshot(executor, view)
+    if not ok:
+        return False, image
+    return await describe(handler, backend, image, question)

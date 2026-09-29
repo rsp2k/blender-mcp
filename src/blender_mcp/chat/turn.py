@@ -22,6 +22,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.sampling import SamplingTool
 from mcp.types import SamplingMessage, TextContent
 
+from . import attachments as attach
 from . import vision
 from .catalog import LOOK, Entry
 from .config import ChatConfig
@@ -231,10 +232,19 @@ class Turn:
             return SYSTEM_PROMPT
         return f"{SYSTEM_PROMPT}{SCENE_MARKER}{scene[:MAX_SCENE_CHARS]}"
 
-    async def run(self, message: str, history: list[dict] | None) -> str:
+    async def run(self, message: str, history: list[dict] | None,
+                  attachments: dict | None = None) -> str:
         system = await self.system_prompt()
         messages: list[SamplingMessage] = history_messages(history)
-        messages.append(SamplingMessage(role="user", content=TextContent(type="text", text=message)))
+        clipped = attach.summary(attachments)
+        if clipped:
+            await self.emit({"t": "status", "text": "Reading what you clipped: " + ", ".join(clipped)})
+        content = await attach.user_content(
+            message, attachments, executor=self.executor, handler=self.handler,
+            backend=self.backend,
+            vision_backend=vision.vision_backend(self.cfg, self.user_sub, self.backend))
+        messages.append(SamplingMessage(role="user",
+                                        content=content[0] if len(content) == 1 else content))
         tools = self.sampling_tools()
 
         for _ in range(self.cfg.max_steps):
