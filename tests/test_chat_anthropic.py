@@ -369,3 +369,70 @@ async def test_advisor_caching_switch():
     api = FakeAPI(message([{"type": "text", "text": "ok"}], model="claude-haiku-4-5"))
     await run(api, model="claude-haiku-4-5", advisor="claude-opus-5", advisor_cache=True)
     assert api.body()["tools"][-1]["caching"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+# ---- usage --------------------------------------------------------------------
+
+def _iteration(kind, inp, out, **extra):
+    return {"type": kind, "input_tokens": inp, "output_tokens": out,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, **extra}
+
+
+ADVISOR_USAGE = {
+    "input_tokens": 120, "output_tokens": 40,
+    "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 500,
+    "iterations": [
+        _iteration("message", 60, 10),
+        _iteration("advisor_message", 3400, 90, model="claude-opus-5"),
+        _iteration("message", 60, 30),
+        _iteration("advisor_message", 3500, 70, model="claude-opus-5"),
+    ],
+}
+
+
+async def test_usage_carries_cache_and_advisor_totals():
+    api = FakeAPI(message([{"type": "text", "text": "ok"}], model="claude-sonnet-5",
+                          usage=ADVISOR_USAGE))
+    c = await run(api, model="claude-sonnet-5", advisor="claude-opus-5")
+    u = c.usage
+    assert (u.input_tokens, u.output_tokens) == (120, 40)
+    assert (u.cache_read_input_tokens, u.cache_creation_input_tokens) == (3000, 500)
+    assert (u.advisor_calls, u.advisor_input_tokens, u.advisor_output_tokens) == (2, 6900, 160)
+
+
+async def test_usage_without_advisor_leaves_advisor_fields_unset():
+    api = FakeAPI(message([{"type": "text", "text": "ok"}]))
+    u = (await run(api)).usage
+    assert (u.input_tokens, u.output_tokens) == (10, 5)
+    assert u.cache_read_input_tokens is None
+    assert u.advisor_calls is None and u.advisor_input_tokens is None
+
+
+async def test_usage_is_summed_across_a_paused_turn():
+    first = {**ADVISOR_USAGE, "iterations": ADVISOR_USAGE["iterations"][:2]}
+    api = FakeAPI(message([{"type": "text", "text": "Let me plan."}, ADVICE[0]],
+                          stop_reason="pause_turn", model="claude-sonnet-5", usage=first),
+                  message([ADVICE[1], {"type": "tool_use", "id": "t1", "name": "create_mesh",
+                                       "input": {"name": "B"}}],
+                          stop_reason="tool_use", model="claude-sonnet-5",
+                          usage={"input_tokens": 200, "output_tokens": 25,
+                                 "cache_read_input_tokens": 3100}))
+    u = (await run(api, model="claude-sonnet-5", advisor="claude-opus-5")).usage
+    assert (u.input_tokens, u.output_tokens) == (320, 65)
+    assert u.cache_read_input_tokens == 6100
+    assert u.cache_creation_input_tokens == 500  # only the first call reported one
+    assert (u.advisor_calls, u.advisor_input_tokens, u.advisor_output_tokens) == (1, 3400, 90)
+
+
+async def test_usage_counts_the_empty_attempt_that_was_retried():
+    api = FakeAPI(message([]), message([{"type": "text", "text": "fine"}]))
+    u = (await run(api)).usage
+    assert (u.input_tokens, u.output_tokens) == (20, 10)
+
+
+def test_parse_message_reads_usage_from_sdk_objects():
+    from anthropic.types.beta import BetaMessage
+
+    msg = BetaMessage.model_validate(message([{"type": "text", "text": "ok"}], usage=ADVISOR_USAGE))
+    u = an.parse_message(msg, set()).usage
+    assert u.input_tokens == 120 and u.advisor_calls == 2 and u.advisor_output_tokens == 160

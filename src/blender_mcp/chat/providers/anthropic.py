@@ -22,7 +22,7 @@ import anthropic
 import httpx2
 from mcp.types import ImageContent, TextContent, ToolResultContent, ToolUseContent
 
-from . import SCENE_MARKER, Backend, Completion, ProviderError, ToolCall
+from . import SCENE_MARKER, Backend, Completion, ProviderError, ToolCall, Usage
 from .textcalls import normalize_name
 
 logger = logging.getLogger(__name__)
@@ -219,22 +219,37 @@ def build_request(backend: Backend, system: str | None, messages: list[dict], to
     return req
 
 
-def _log_usage(backend: Backend, message: Any, offered: str = "") -> None:
-    """One line per call, so cache hits can be checked in the server log."""
+def usage_of(message: Any) -> Usage | None:
+    """``message.usage`` as a Usage; advisor totals from its ``advisor_message``
+    iterations (None when the advisor did not run). None without usage."""
     u = getattr(message, "usage", None)
     if u is None:
-        return
-    advice = [it for it in (getattr(u, "iterations", None) or [])
+        return None
+    advice = [it for it in (_field(u, "iterations") or [])
               if _field(it, "type") == "advisor_message"]
+    return Usage(
+        input_tokens=_field(u, "input_tokens"),
+        output_tokens=_field(u, "output_tokens"),
+        cache_read_input_tokens=_field(u, "cache_read_input_tokens"),
+        cache_creation_input_tokens=_field(u, "cache_creation_input_tokens"),
+        advisor_calls=len(advice) if advice else None,
+        advisor_input_tokens=sum(_field(it, "input_tokens") or 0 for it in advice) if advice else None,
+        advisor_output_tokens=sum(_field(it, "output_tokens") or 0 for it in advice) if advice else None,
+    )
+
+
+def _log_usage(backend: Backend, usage: Usage | None, offered: str = "") -> None:
+    """One line per call, so cache hits can be checked in the server log."""
+    if usage is None:
+        return
     logger.info("anthropic usage model=%s advisor_offered=%s in=%s cache_read=%s cache_write=%s out=%s%s",
-                backend.model, offered or "-", getattr(u, "input_tokens", None),
-                getattr(u, "cache_read_input_tokens", None),
-                getattr(u, "cache_creation_input_tokens", None),
-                getattr(u, "output_tokens", None),
-                "" if not advice else (
-                    f" advisor_calls={len(advice)}"
-                    f" advisor_in={sum(_field(it, 'input_tokens') or 0 for it in advice)}"
-                    f" advisor_out={sum(_field(it, 'output_tokens') or 0 for it in advice)}"))
+                backend.model, offered or "-", usage.input_tokens,
+                usage.cache_read_input_tokens, usage.cache_creation_input_tokens,
+                usage.output_tokens,
+                "" if not usage.advisor_calls else (
+                    f" advisor_calls={usage.advisor_calls}"
+                    f" advisor_in={usage.advisor_input_tokens}"
+                    f" advisor_out={usage.advisor_output_tokens}"))
 
 
 def _field(obj: Any, name: str) -> Any:
@@ -287,7 +302,8 @@ def parse_message(message, allowed: set[str]) -> Completion:
         calls, raw = [], []
         if not text:
             raise ProviderError("Claude ran out of output tokens before finishing its tool call")
-    return Completion(text=text, tool_calls=calls, raw=raw if calls else None)
+    return Completion(text=text, tool_calls=calls, raw=raw if calls else None,
+                      usage=usage_of(message))
 
 
 # ---- errors ------------------------------------------------------------------
@@ -371,6 +387,8 @@ async def complete(
         stripped = False
         attempts = 0
         pauses = 0
+        # Every request below is billed, including paused and empty ones.
+        spent: Usage | None = None
         while True:
             attempts += 1
             try:
@@ -386,8 +404,10 @@ async def complete(
             except anthropic.AnthropicError as e:
                 raise _translate(e, backend, timeout_s) from e
             sent = request(wire)
-            _log_usage(backend, message, next((t.get("model", "") for t in sent.get("tools", [])
-                                               if t.get("type") == ADVISOR_TOOL), ""))
+            usage = usage_of(message)
+            spent = usage if spent is None else spent + usage
+            _log_usage(backend, usage, next((t.get("model", "") for t in sent.get("tools", [])
+                                             if t.get("type") == ADVISOR_TOOL), ""))
             if getattr(message, "stop_reason", None) == "pause_turn" and pauses < PAUSE_LIMIT:
                 # A server tool (the advisor) was still running: send the
                 # partial turn back as-is and the API carries on from it.
@@ -395,6 +415,7 @@ async def complete(
                 wire = [*wire, {"role": "assistant", "content": raw_content(message)}]
                 continue
             result = parse_message(message, allowed)
+            result.usage = spent
             if result.text or result.tool_calls:
                 return result
             if attempts >= EMPTY_ATTEMPTS:

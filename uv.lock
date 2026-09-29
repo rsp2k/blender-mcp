@@ -447,7 +447,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'oauth'", specifier = ">=44.0.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "fastmcp", specifier = ">=3.3.1" },
-    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.27.3" },
+    { name = "fastmcp-feedback", extras = ["instrumentation"], specifier = "==2026.9.29" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.13.1" },
@@ -1050,16 +1050,16 @@ wheels = [
 
 [[package]]
 name = "fastmcp-feedback"
-version = "2026.9.27.3"
+version = "2026.9.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/16/8f3ea14c0492578e17901547f28872e6cc5f49cbdfda705ac98ddb748e1d/fastmcp_feedback-2026.9.27.3.tar.gz", hash = "sha256:3f8373e51748c454be826479d5bd224942cd30f42120851b36bf666d87ea2747", size = 121861, upload-time = "2026-09-27T18:26:11.424Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/e5/bae24108eda087be5feb73ea549a2f7ce619a21858f751bd93dcda42a3e1/fastmcp_feedback-2026.9.29.tar.gz", hash = "sha256:735687fd98525d540e9690ed0d240191216fabfd0854150b3f3dafbf8131fcce", size = 156215, upload-time = "2026-09-29T16:24:15.06Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/ef/25594b63c8ca55c3189f2f1d7c424fb7d25b5cc4f5b7a33ce09601662a1c/fastmcp_feedback-2026.9.27.3-py3-none-any.whl", hash = "sha256:3db58bd68f2385ffa3d8327a2c58c92e5f5712f7fc6fed8bf644f63761953feb", size = 48239, upload-time = "2026-09-27T18:26:12.502Z" },
+    { url = "https://files.pythonhosted.org/packages/36/fe/d8c78a91c3f7deba35d7198418bd66bd718554b4d89a9c7003ee83a958ef/fastmcp_feedback-2026.9.29-py3-none-any.whl", hash = "sha256:1c3293301c4b76dd476547d4ecf408eabcffa97389b3a198f95989f1598c4f65", size = 61649, upload-time = "2026-09-29T16:24:16.376Z" },
 ]
 
 [package.optional-dependencies]
