@@ -8,6 +8,8 @@ when one is waiting. Clicking it opens the sidebar on the BlenderMCP tab.
 
 from __future__ import annotations
 
+import time
+
 import bpy
 
 from .. import state
@@ -41,6 +43,25 @@ def draw_statusbar(self, context):
         _chat_approval_pending(),
     )
     row = self.layout.row(align=True)
+    pf = getattr(state, "_update_prefetch", None)
+    if pf is not None and pf.active:
+        # Blender's own install job only shows a bare counter here; this is
+        # the part we control: the download, with a real bar.
+        target = f" {pf.version}" if pf.version else ""
+        sub = row.row(align=True)
+        sub.ui_units_x = 13
+        if hasattr(sub, "progress"):
+            sub.progress(factor=pf.fraction, type='BAR',
+                         text=f"Updating Blender MCP{target}  {pf.fraction * 100:.0f}%")
+        else:
+            sub.label(text=f"Updating Blender MCP{target} {pf.fraction * 100:.0f}%", icon='IMPORT')
+        row.operator("blendermcp.cancel_update", text="", icon='X', emboss=False)
+        return
+    done = getattr(state, "_just_updated", None)
+    if done and time.monotonic() < done.get("until", 0):
+        row.operator("blendermcp.show_panel", text=f"Updated to {done['version']}",
+                     icon='CHECKMARK', emboss=False)
+        return
     if prompt:
         row.alert = True
         row.operator("blendermcp.show_panel", text=f"MCP: {prompt}", icon='ERROR')

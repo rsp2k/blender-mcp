@@ -290,6 +290,11 @@ def register():
         except Exception as e:
             print(f"[BlenderMCP] Could not start connection supervisor: {e}")
         print(f"[BlenderMCP] Addon v{__version__} registered")
+        try:
+            from . import update_marker
+            state._just_updated = update_marker.consume(update_marker.folder(), __version__)
+        except Exception as e:  # noqa: BLE001 - a nicety, never block register
+            print(f"[BlenderMCP] Update marker check failed: {e}")
     if not ensure_fastmcp(force=True):
         for line in fastmcp_problem_lines():
             print(f"[BlenderMCP] {line}")

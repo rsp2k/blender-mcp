@@ -32,6 +32,8 @@ _supervisor = None
 _identity = None
 # addon.update_prefetch.Prefetch while Update now downloads the archive itself.
 _update_prefetch = None
+# {"version", "previous", "until"} for a few seconds after an update installed.
+_just_updated = None
 
 # Background workers this GUI Blender spawned: worker uuid -> dict with
 # popen, pid, dir, snapshot, log, deadline, label (see executor handler

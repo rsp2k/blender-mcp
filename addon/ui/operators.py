@@ -526,6 +526,10 @@ def _plan_prefetch(repo_index: int, repo, pkg_id: str):
 
 def _schedule_install(repo_index: int, pkg_id: str) -> None:
     import functools
+
+    from .. import _version, update_marker
+    target = getattr(state, "_latest_addon_version", None) or ""
+    update_marker.write(update_marker.folder(), target, _version.__version__)
     bpy.app.timers.register(
         functools.partial(_install_update_deferred, repo_index, pkg_id),
         first_interval=0.1,
