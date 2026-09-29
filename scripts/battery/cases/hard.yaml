@@ -1,0 +1,183 @@
+# Requests that need a plan before the first edit: several constrained parts,
+# a fix-up across objects, spacing around a circle, symmetry. These are where
+# a cheaper chat model should escalate to its advisor, if escalating helps.
+
+- id: hard-staircase
+  title: Straight staircase with exact rise and run
+  tags: [hard, multistep]
+  setup: empty
+  prompt: >-
+    Build a straight staircase going up along +Y: 8 steps, each a separate box
+    1 m wide (X), 0.28 m deep (Y) and 0.18 m tall, named Stair_1 (bottom) to
+    Stair_8 (top). Each step sits on the floor as a solid block from z=0 up to
+    its own tread height, so step k's top is at k x 0.18 m, and each step starts
+    where the previous one ends in Y. The first step starts at y=0.
+  approval: never
+  timeout: 360
+  checks:
+    - python: >-
+        len([o for o in scene.objects if o.name.startswith("Stair_") and o.type == "MESH"]) == 8
+    - python: >-
+        all(obj(f"Stair_{k}") is not None
+            and abs(max((obj(f"Stair_{k}").matrix_world @ Vector(c)).z
+                        for c in obj(f"Stair_{k}").bound_box) - 0.18 * k) < 0.02
+            and abs(min((obj(f"Stair_{k}").matrix_world @ Vector(c)).z
+                        for c in obj(f"Stair_{k}").bound_box)) < 0.02
+            for k in range(1, 9))
+    - python: >-
+        all(obj(f"Stair_{k}") is not None
+            and abs(min((obj(f"Stair_{k}").matrix_world @ Vector(c)).y
+                        for c in obj(f"Stair_{k}").bound_box) - 0.28 * (k - 1)) < 0.02
+            for k in range(1, 9))
+    - tool_not_used: execute_code
+
+- id: hard-bookshelf
+  title: Bookshelf whose panels touch but never overlap
+  tags: [hard, multistep]
+  setup: empty
+  prompt: >-
+    Make a bookshelf from boxes, standing on the floor: 1.8 m tall, 0.8 m wide
+    (X) and 0.3 m deep (Y) overall. Two side panels, a top, a bottom and three
+    evenly spaced shelves between them, every panel 0.02 m thick. Parts may
+    touch but must not overlap each other. Name every part starting with Shelf_.
+  approval: never
+  timeout: 360
+  checks:
+    - python: >-
+        len([o for o in scene.objects if o.name.startswith("Shelf_") and o.type == "MESH"]) == 7
+    - python: >-
+        (lambda ps: ps and
+          abs(min((o.matrix_world @ Vector(c)).z for o in ps for c in o.bound_box)) < 0.02 and
+          abs(max((o.matrix_world @ Vector(c)).z for o in ps for c in o.bound_box) - 1.8) < 0.03 and
+          abs(max((o.matrix_world @ Vector(c)).x for o in ps for c in o.bound_box)
+              - min((o.matrix_world @ Vector(c)).x for o in ps for c in o.bound_box) - 0.8) < 0.03 and
+          abs(max((o.matrix_world @ Vector(c)).y for o in ps for c in o.bound_box)
+              - min((o.matrix_world @ Vector(c)).y for o in ps for c in o.bound_box) - 0.3) < 0.03)
+        ([o for o in scene.objects if o.name.startswith("Shelf_") and o.type == "MESH"])
+    - python: >-
+        (lambda bb: all(
+          any(min(bb[i][1][a], bb[j][1][a]) - max(bb[i][0][a], bb[j][0][a]) < 0.004 for a in range(3))
+          for i in range(len(bb)) for j in range(i + 1, len(bb))))
+        ([(tuple(min((o.matrix_world @ Vector(c))[a] for c in o.bound_box) for a in range(3)),
+           tuple(max((o.matrix_world @ Vector(c))[a] for c in o.bound_box) for a in range(3)))
+          for o in scene.objects if o.name.startswith("Shelf_") and o.type == "MESH"])
+    - tool_not_used: execute_code
+
+- id: hard-chairs-around-table
+  title: Twelve chairs spaced evenly around a round table
+  tags: [hard, placement]
+  setup: empty
+  prompt: >-
+    Put a round table at the origin: a cylinder named RoundTable, radius 0.8 m,
+    0.75 m tall, standing on the floor. Then place 12 chairs around it, each a
+    box 0.45 x 0.45 x 0.9 m named Seat_1 to Seat_12, standing on the floor,
+    evenly spaced around the table with a 0.3 m gap between the table's edge
+    and the nearest side of each chair, each turned to face the table.
+  approval: never
+  timeout: 420
+  checks:
+    - dims_approx: {name: RoundTable, dims: [1.6, 1.6, 0.75], tol: 0.03}
+    - python: >-
+        len([o for o in scene.objects if o.name.startswith("Seat_") and o.type == "MESH"]) == 12
+    - python: >-
+        (lambda ss: len(ss) == 12 and all(
+          abs(Vector((s.matrix_world.translation.x, s.matrix_world.translation.y)).length - 1.325) < 0.06
+          for s in ss))
+        ([o for o in scene.objects if o.name.startswith("Seat_") and o.type == "MESH"])
+    - python: >-
+        (lambda angs: len(angs) == 12 and max(
+          ((angs[(i + 1) % 12] - angs[i]) % 6.283185) for i in range(12)) < 0.62)
+        (sorted(__import__("math").atan2(o.matrix_world.translation.y, o.matrix_world.translation.x)
+                for o in scene.objects if o.name.startswith("Seat_") and o.type == "MESH"))
+    - python: >-
+        all(abs(min((o.matrix_world @ Vector(c)).z for c in o.bound_box)) < 0.02
+            for o in scene.objects if o.name.startswith("Seat_"))
+
+- id: hard-tidy-row
+  title: Fix a messy scene into an ordered row
+  tags: [hard, fixup]
+  setup:
+    python: |
+      import math
+      spec = [("Crate_A", 0.6, (2.0, 1.5, 1.7), (0, 0, 0.4)),
+              ("Crate_B", 1.1, (-1.0, -2.0, -0.2), (0.3, 0, 0)),
+              ("Crate_C", 0.3, (0.5, 3.0, 2.5), (0, 0, 0)),
+              ("Crate_D", 0.8, (-3.0, 0.5, 0.9), (0, 0.5, 0.2))]
+      for name, size, loc, rot in spec:
+          bpy.ops.mesh.primitive_cube_add(size=size, location=loc, rotation=rot)
+          bpy.context.active_object.name = name
+  prompt: >-
+    These crates are a mess. Make every one of them sit upright (no rotation)
+    on the floor, in a single row along the X axis at y=0, ordered from the
+    smallest to the largest going toward +X, with a 0.5 m gap between
+    neighbouring crates. Keep their sizes.
+  approval: never
+  timeout: 360
+  checks:
+    - python: >-
+        all(max(abs(v) for v in obj(n).rotation_euler) < 0.01 for n in
+            ("Crate_A", "Crate_B", "Crate_C", "Crate_D"))
+    - python: >-
+        all(abs(min((obj(n).matrix_world @ Vector(c)).z for c in obj(n).bound_box)) < 0.02
+            and abs(obj(n).matrix_world.translation.y) < 0.03
+            for n in ("Crate_A", "Crate_B", "Crate_C", "Crate_D"))
+    - python: >-
+        (lambda xs: all(xs[i][0] < xs[i + 1][0] and abs((xs[i + 1][0] - xs[i][1]) - 0.5) < 0.03
+                        for i in range(3)))
+        ([(min((obj(n).matrix_world @ Vector(c)).x for c in obj(n).bound_box),
+           max((obj(n).matrix_world @ Vector(c)).x for c in obj(n).bound_box))
+          for n in ("Crate_C", "Crate_A", "Crate_D", "Crate_B")])
+    - dims_approx: {name: Crate_B, dims: [1.1, 1.1, 1.1], tol: 0.02}
+
+- id: hard-snowman
+  title: Snowman with parts resting on each other
+  tags: [hard, relative]
+  setup: empty
+  prompt: >-
+    Build a snowman: three spheres named Snow_Base (radius 0.5 m), Snow_Body
+    (radius 0.35 m) and Snow_Head (radius 0.22 m), stacked so each rests on the
+    one below and the base rests on the floor. Add a cone named Snow_Nose
+    sticking out of the front (+Y side) of the head, and two small spheres
+    named Snow_EyeL and Snow_EyeR on the front of the head above the nose.
+  approval: never
+  timeout: 360
+  checks:
+    - rests_on: {name: Snow_Body, base: Snow_Base, tol: 0.03}
+    - rests_on: {name: Snow_Head, base: Snow_Body, tol: 0.03}
+    - location_approx: {name: Snow_Base, point: bottom, location: [null, null, 0.0], tol: 0.02}
+    - python: >-
+        obj("Snow_Nose") is not None and obj("Snow_Head") is not None and
+        obj("Snow_Nose").matrix_world.translation.y > obj("Snow_Head").matrix_world.translation.y + 0.1
+    - python: >-
+        all(obj(n) is not None
+            and obj(n).matrix_world.translation.z > obj("Snow_Nose").matrix_world.translation.z
+            and obj(n).matrix_world.translation.y > obj("Snow_Head").matrix_world.translation.y
+            for n in ("Snow_EyeL", "Snow_EyeR"))
+
+- id: hard-mirror
+  title: Mirror the left-hand objects to the right
+  tags: [hard, fixup]
+  setup:
+    python: |
+      bpy.ops.mesh.primitive_cube_add(size=0.4, location=(-1.5, 0.5, 0.2))
+      bpy.context.active_object.name = "Post"
+      bpy.ops.mesh.primitive_cylinder_add(radius=0.2, depth=1.2, location=(-2.2, -0.8, 0.6))
+      bpy.context.active_object.name = "Lamp"
+      bpy.ops.mesh.primitive_uv_sphere_add(radius=0.3, location=(-0.9, 1.4, 0.3))
+      bpy.context.active_object.name = "Ball"
+  prompt: >-
+    Make this layout symmetric across the YZ plane: for every object on the
+    negative X side, add a copy on the positive X side at the mirrored
+    position, named like the original with _R on the end. Leave the originals
+    where they are.
+  approval: never
+  timeout: 300
+  checks:
+    - python: >-
+        all(obj(n + "_R") is not None
+            and abs(obj(n + "_R").matrix_world.translation.x + obj(n).matrix_world.translation.x) < 0.02
+            and abs(obj(n + "_R").matrix_world.translation.y - obj(n).matrix_world.translation.y) < 0.02
+            and abs(obj(n + "_R").matrix_world.translation.z - obj(n).matrix_world.translation.z) < 0.02
+            and abs(obj(n + "_R").dimensions.length - obj(n).dimensions.length) < 0.02
+            for n in ("Post", "Lamp", "Ball"))
+    - location_approx: {name: Post, location: [-1.5, 0.5, 0.2], tol: 0.01}
