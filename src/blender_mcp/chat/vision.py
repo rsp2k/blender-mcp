@@ -94,24 +94,41 @@ def rejected_deselect(reply: str) -> bool:
     return "deselect" in text or "unexpected keyword" in text
 
 
-async def capture(executor) -> tuple[bool, str]:
+VIEW_KEYS = ("angle", "frame", "shading")
+
+
+def view_args(args: dict | None) -> dict:
+    """The temporary viewpoint the model asked for, cleaned up."""
+    out = {}
+    for key in VIEW_KEYS:
+        value = (args or {}).get(key)
+        if key == "frame" and isinstance(value, str):
+            value = [value]
+        if value:
+            out[key] = value
+    return out
+
+
+async def capture(executor, view: dict | None = None) -> tuple[bool, str]:
     """Screenshot with the selection cleared, so a selected object's outline
-    isn't read as its colour. Add-ons without ``deselect`` normally drop the
-    unknown key (registry.filter_kwargs); one that refuses it gets a plain
-    capture instead."""
-    base = {"store": True, "max_size": MAX_SIZE}
+    isn't read as its colour. ``view`` (angle, frame, shading) applies only to
+    the capture; the add-on puts the user's view back. Add-ons without these
+    keys normally drop them (registry.filter_kwargs); one that refuses
+    ``deselect`` gets a plain capture instead."""
+    base = {"store": True, "max_size": MAX_SIZE, **(view or {})}
     ok, reply = await executor.call(SCREENSHOT_TOOL, {}, extra={**base, "deselect": True})
     if not ok and rejected_deselect(reply):
         ok, reply = await executor.call(SCREENSHOT_TOOL, {}, extra=base)
     return ok, reply
 
 
-async def look(executor, handler, backend: Backend, question: str) -> tuple[bool, str]:
+async def look(executor, handler, backend: Backend, question: str,
+               view: dict | None = None) -> tuple[bool, str]:
     """(ok, description) for the calling Blender's viewport."""
     store = get_store()
     if store is None:
         return False, "Viewport screenshots are not available on this server."
-    ok, reply = await capture(executor)
+    ok, reply = await capture(executor, view)
     if not ok:
         return False, reply
     key = find_object_key(reply)

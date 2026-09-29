@@ -132,12 +132,22 @@ LOOK_ENTRY = Entry(
     description=(
         "Look at the user's 3D viewport: takes a screenshot (annotations drawn in) "
         "and a vision model answers your question about it. Use it to check "
-        "placement, framing or appearance after changing the scene."
+        "placement, framing or appearance after changing the scene. angle, frame "
+        "and shading apply only to this look: the user's own view and shading are "
+        "put back straight after."
     ),
     parameters={
         "type": "object",
-        "properties": {"question": {"type": "string",
-                                    "description": "What to look for or describe."}},
+        "properties": {
+            "question": {"type": "string", "description": "What to look for or describe."},
+            "angle": {"type": "string",
+                      "enum": ["front", "back", "left", "right", "top", "bottom", "iso"],
+                      "description": "Look from this angle instead of the user's current one."},
+            "frame": {"type": "array", "items": {"type": "string"},
+                      "description": "Object names to fill the picture with."},
+            "shading": {"type": "string", "enum": ["SOLID", "MATERIAL", "RENDERED"],
+                        "description": "MATERIAL to see real materials and colours."},
+        },
         "required": ["question"],
     },
     policy=_PLAIN,

@@ -519,6 +519,10 @@ class BlenderDispatchComponent(MCPMixin):
         store: bool = False,
         annotations: bool = True,
         deselect: bool = False,
+        angle: Optional[str | list[float]] = None,
+        perspective: Optional[str] = None,
+        shading: Optional[str] = None,
+        restore_view: bool = True,
         target_uuid: Optional[str] = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: Optional[str] = None,
@@ -538,8 +542,13 @@ class BlenderDispatchComponent(MCPMixin):
         ``store``: also upload it to object storage; the result's ``stored``
         entry has an ``object_key`` and a short-lived ``download_url``.
 
-        ``frame``: object names to frame the viewport on before capturing
-        (keeps the current angle; blender_set_view changes it). ``crop``
+        ``frame``: object names to frame the viewport on before capturing.
+        ``angle`` (front, back, left, right, top, bottom, iso, or [yaw,
+        elevation] degrees), ``perspective`` (PERSP/ORTHO) and ``shading``
+        (SOLID, MATERIAL, ...) look from another viewpoint for this capture.
+        With ``restore_view`` (default) the user's view and shading are put
+        back afterwards, so looking never moves their viewport; use
+        blender_set_view to change the view on purpose. ``crop``
         trims the image to the objects' on-screen bounds plus ``crop_margin``
         (the framed objects, else the selection, else everything visible;
         png only). Together they make a subject check one call.
@@ -566,6 +575,13 @@ class BlenderDispatchComponent(MCPMixin):
         if deselect:
             # Only sent when on; add-ons before it drop the unknown key.
             params["deselect"] = True
+        # Also sent only when set, for the same reason.
+        for key, value in (("angle", angle), ("perspective", perspective),
+                           ("shading", shading)):
+            if value is not None:
+                params[key] = value
+        if not restore_view:
+            params["restore_view"] = False
         return await self._call(
             ctx,
             "get_viewport_screenshot",

@@ -30,7 +30,8 @@ class ViewportHandlersMixin:
     @command("get_viewport_screenshot")
     def get_viewport_screenshot(self, max_size=0, filepath=None, format="png",
                                 frame=None, crop=False, crop_margin=0.05,
-                                annotations=True, deselect=False):
+                                annotations=True, deselect=False, angle=None,
+                                perspective=None, shading=None, restore_view=True):
         """
         Render the current 3D viewport to an image file.
 
@@ -50,8 +51,13 @@ class ViewportHandlersMixin:
         - filepath: Path to write the image to. Omitted: a unique file under
           Blender's temp dir (blender_mcp_screenshots/); the result says where.
         - format: Image format (png, jpg, etc.)
-        - frame: object names to frame the viewport on first (keeps the
-          current angle; use set_view to change it).
+        - frame: object names to frame the viewport on first.
+        - angle, perspective, shading: look from another angle (a preset
+          such as front/top/iso, or [yaw, elevation] degrees), projection
+          (PERSP/ORTHO) or shading type (SOLID, MATERIAL, ...) for this
+          capture. Same meaning as in set_view.
+        - restore_view: put the user's view and shading back after the
+          capture (default). False leaves the viewport as it was framed.
         - crop: crop the image to the objects' projected bounds plus
           crop_margin (the framed objects, else the selection, else all
           visible objects).
@@ -64,12 +70,31 @@ class ViewportHandlersMixin:
         if bpy.app.background:
             return {"error": "No viewport available in --background mode"}
 
+        from ...view_guard import preserved
+
+        reframe = bool(frame) or angle is not None or perspective is not None \
+            or shading is not None
+        spaces = [a.spaces.active for a in bpy.context.screen.areas if a.type == "VIEW_3D"]
+        restoring = bool(restore_view) and reframe
+        with preserved(spaces, enabled=restoring):
+            result = self._capture_viewport(
+                max_size, filepath, format, frame, crop, crop_margin, annotations,
+                deselect, angle, perspective, shading, reframe)
+        if restoring and isinstance(result, dict):
+            result["view_restored"] = True
+        return result
+
+    def _capture_viewport(self, max_size, filepath, format, frame, crop, crop_margin,
+                          annotations, deselect, angle, perspective, shading, reframe):
         framed = None
-        if frame:
+        if reframe:
             try:
                 # Fit with the crop margin so the padded crop box stays inside
-                # the image instead of being clamped at its edge.
-                framed = self.set_view(frame=frame, margin=crop_margin if crop else 0.05)
+                # the image instead of being clamped at its edge. frame=None
+                # with an angle frames every visible object.
+                framed = self.set_view(frame=frame or None, angle=angle,
+                                       perspective=perspective, shading=shading,
+                                       margin=crop_margin if crop else 0.05)
             except Exception as e:
                 return {"error": f"framing failed: {e}"}
         crop_targets = None
