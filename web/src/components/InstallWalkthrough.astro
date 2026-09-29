@@ -1,0 +1,154 @@
+---
+import { chapters, INSTALL_URL } from '../data/install-steps';
+import './install-walkthrough.css';
+
+const steps = chapters.flatMap((c) => c.steps);
+const total = steps.length;
+let n = 0;
+const rail = chapters.map((c) => ({
+  name: c.name,
+  steps: c.steps.map((s) => ({ ...s, i: n++ })),
+}));
+const pct = (v: number) => `${v}%`;
+---
+
+<section id="install" class="iw" aria-labelledby="iw-heading" data-iw>
+  <header class="iw-head">
+    <h2 id="iw-heading">Install the add-on</h2>
+    <p class="iw-lede">
+      Takes about two minutes in Blender 4.2 or newer. Add this repository
+      once, and Blender keeps the add-on up to date from then on.
+    </p>
+    <div class="iw-url">
+      <code id="iw-url">{INSTALL_URL}</code>
+      <button type="button" class="iw-copy" data-iw-copy aria-describedby="iw-url">
+        <span data-iw-copy-label>Copy</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="iw-body">
+    <div class="iw-stage">
+      {steps.map((s, i) => (
+        <figure
+          class="iw-frame"
+          data-iw-frame={i}
+          data-active={i === 0 ? '' : undefined}
+          aria-hidden={i === 0 ? undefined : 'true'}
+        >
+          <div class="iw-shotbox">
+            <div class="iw-shot" style={`--ar: ${s.w} / ${s.h}`}>
+              <img
+                src={`/img/onboarding/web/${s.img}.webp`}
+                width={s.w}
+                height={s.h}
+                alt={s.alt}
+                loading={i < 2 ? 'eager' : 'lazy'}
+                decoding="async"
+              />
+              {s.spot && (
+                <span
+                  class="iw-spot"
+                  aria-hidden="true"
+                  style={`--x: ${pct(s.spot[0])}; --y: ${pct(s.spot[1])}; --w: ${pct(s.spot[2])}; --h: ${pct(s.spot[3])}`}
+                />
+              )}
+            </div>
+          </div>
+          <figcaption class="iw-caption">
+            <span class="iw-count">Step {i + 1} of {total}</span>
+            <strong class="iw-title">{s.title}</strong>
+            <span class="iw-detail">{s.detail}</span>
+          </figcaption>
+        </figure>
+      ))}
+      <div class="iw-nav">
+        <button type="button" class="iw-btn" data-iw-prev disabled>Back</button>
+        <button type="button" class="iw-btn iw-btn-next" data-iw-next>Next</button>
+      </div>
+    </div>
+
+    <nav class="iw-rail" aria-label="Install steps">
+      {rail.map((c) => (
+        <div class="iw-chapter">
+          <p class="iw-chapter-name">{c.name}</p>
+          <ol class="iw-steps">
+            {c.steps.map((s) => (
+              <li>
+                <button
+                  type="button"
+                  class="iw-step"
+                  data-iw-go={s.i}
+                  aria-current={s.i === 0 ? 'step' : undefined}
+                >
+                  <span class="iw-num">{String(s.i + 1).padStart(2, '0')}</span>
+                  <span>{s.title}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </nav>
+  </div>
+</section>
+
+<script>
+  const root = document.querySelector<HTMLElement>('[data-iw]');
+  if (root) {
+    const frames = [...root.querySelectorAll<HTMLElement>('[data-iw-frame]')];
+    const stepBtns = [...root.querySelectorAll<HTMLButtonElement>('[data-iw-go]')];
+    const prev = root.querySelector<HTMLButtonElement>('[data-iw-prev]')!;
+    const next = root.querySelector<HTMLButtonElement>('[data-iw-next]')!;
+    let current = 0;
+
+    const show = (i: number) => {
+      current = Math.max(0, Math.min(frames.length - 1, i));
+      frames.forEach((f, k) => {
+        const on = k === current;
+        f.toggleAttribute('data-active', on);
+        if (on) f.removeAttribute('aria-hidden');
+        else f.setAttribute('aria-hidden', 'true');
+      });
+      stepBtns.forEach((b, k) => {
+        if (k === current) b.setAttribute('aria-current', 'step');
+        else b.removeAttribute('aria-current');
+      });
+      prev.disabled = current === 0;
+      next.disabled = current === frames.length - 1;
+      // Warm the next frame so Next never shows an empty stage.
+      const img = frames[current + 1]?.querySelector('img');
+      if (img) img.loading = 'eager';
+    };
+
+    stepBtns.forEach((b) => b.addEventListener('click', () => show(Number(b.dataset.iwGo))));
+    prev.addEventListener('click', () => show(current - 1));
+    next.addEventListener('click', () => show(current + 1));
+    root.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('input, textarea')) return;
+      if (e.key === 'ArrowRight') { show(current + 1); e.preventDefault(); }
+      if (e.key === 'ArrowLeft') { show(current - 1); e.preventDefault(); }
+    });
+
+    const copy = root.querySelector<HTMLButtonElement>('[data-iw-copy]');
+    const label = root.querySelector<HTMLElement>('[data-iw-copy-label]');
+    const url = root.querySelector<HTMLElement>('#iw-url');
+    copy?.addEventListener('click', async () => {
+      const text = url?.textContent?.trim() ?? '';
+      try {
+        await navigator.clipboard.writeText(text);
+        if (label) label.textContent = 'Copied';
+      } catch {
+        // Clipboard blocked: select the text so Ctrl+C works.
+        const range = document.createRange();
+        if (url) range.selectNodeContents(url);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        if (label) label.textContent = 'Press Ctrl+C';
+      }
+      setTimeout(() => { if (label) label.textContent = 'Copy'; }, 2000);
+    });
+  }
+</script>
