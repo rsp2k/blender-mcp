@@ -222,6 +222,13 @@ services:
       caddy: ${DOMAIN:?DOMAIN must be set in .env}${DOMAIN_ALIASES:+, ${DOMAIN_ALIASES}}
       caddy.handle_path_0: /extensions/*
       caddy.handle_path_0.reverse_proxy: "{{upstreams 80}}"
+      # Short repository URL for Blender: mcp.blender.bet/install serves the
+      # same index. A browser asking for HTML goes to the install guide.
+      caddy.handle_1: /install
+      caddy.handle_1.@browser.header: "Accept *text/html*"
+      caddy.handle_1.redir: "@browser ${INSTALL_GUIDE_URL:-https://docs.blender.bet/how-to/install-addon/} 302"
+      caddy.handle_1.rewrite: "* /index.json"
+      caddy.handle_1.reverse_proxy: "{{upstreams 80}}"
 
   # Dev variant — `docker compose --profile dev up`.
   # DO NOT run alongside prod: both bind the same DOMAIN on the caddy fabric

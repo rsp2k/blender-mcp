@@ -18,7 +18,7 @@ help: ## Show this help
 		$(MAKEFILE_LIST)
 
 extensions: ## Build the self-hosted Blender extension zip + index.json into dist/extensions/
-	python3 scripts/build_extension.py
+	EXTENSIONS_BASE_URL=https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions python3 scripts/build_extension.py
 
 
 canary: ## GUI canary against the blender-docker container (ZIP=path to install a build first)

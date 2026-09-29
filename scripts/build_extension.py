@@ -35,6 +35,7 @@ import argparse
 import compileall
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -237,7 +238,11 @@ def index_entry_from_archive(zip_path: Path) -> dict:
     entry = {k: v for k, v in manifest.items() if v is not None}
     if wheels:
         entry["python_versions"] = python_versions_from_wheels(wheels)
-    entry["archive_url"] = f"./{zip_path.name}"
+    # Absolute when the public base is known, so the index works from any URL
+    # (mcp.blender.bet/install as well as /extensions/index.json); relative
+    # otherwise, which Blender resolves against wherever the index was read.
+    base = os.environ.get("EXTENSIONS_BASE_URL", "").strip().rstrip("/")
+    entry["archive_url"] = f"{base}/{zip_path.name}" if base else f"./{zip_path.name}"
     entry["archive_size"] = zip_path.stat().st_size
     entry["archive_hash"] = f"sha256:{_sha256(zip_path)}"
     return entry

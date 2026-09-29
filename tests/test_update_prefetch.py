@@ -151,3 +151,10 @@ def test_prefetch_cancel_removes_partial(tmp_path, server):
     _wait(pf)
     assert pf.state == "cancelled"
     assert not os.path.exists(pf.tmp_path) and not os.path.exists(pf.final_path)
+
+
+def test_absolute_archive_urls_resolve_as_is():
+    from addon.update_prefetch import resolve_archive_url
+    url = "https://mcp.blender.bet/extensions/blender_mcp-9.9.9-linux_x64.zip"
+    # The index read from the short /install URL still points at /extensions.
+    assert resolve_archive_url("https://mcp.blender.bet/install", url) == url
