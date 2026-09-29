@@ -1,4 +1,4 @@
-"""BLENDERMCP_PT_Chat: View3D > Sidebar > Chat.
+"""BLENDERMCP_PT_Chat: View3D > Sidebar > BlenderMCP, below the status panel.
 
 The sidebar is the chat's command line: what model answers, what's
 clipped to the next message, the latest turn at a glance, undo, and the
@@ -93,9 +93,14 @@ def _draw_model_chip(layout, snap) -> None:
 
 
 def _draw_clip(layout, context) -> None:
+    """The binder clip: an icon button at the start of the input row. It
+    shows a count when something is clipped; the popover says what."""
+    wm = context.window_manager
+    n = (len(context.selected_objects) if wm.blendermcp_clip_selection else 0) \
+        + int(bool(wm.blendermcp_clip_viewport)) + int(bool(wm.blendermcp_clip_text))
     ico = icon_id("binder_clip")
     kwargs = {"icon_value": ico} if ico else {"icon": 'LINKED'}
-    layout.popover("BLENDERMCP_PT_ChatClip", text=clip.summary(context), **kwargs)
+    layout.popover("BLENDERMCP_PT_ChatClip", text=str(n) if n else "", **kwargs)
 
 
 def _latest_turn(messages: list) -> dict | None:
@@ -217,7 +222,8 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
     bl_idname = "BLENDERMCP_PT_Chat"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'Chat'
+    bl_category = 'BlenderMCP'
+    bl_order = 1  # after the status panel and its subpanels
 
     @classmethod
     def poll(cls, context):
@@ -251,14 +257,14 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
             _label_lines(layout.column(align=True), wrap(snap["last_error"]), 'ERROR', alert=True)
 
         layout.separator(factor=0.5)
-        if not notice:
-            _draw_clip(layout, context)
         can_send = notice is None and not snap["busy"]
         row = layout.row(align=True)
         row.scale_y = 1.25
+        if not notice:
+            _draw_clip(row, context)
         field = row.row(align=True)
         field.enabled = can_send
-        field.prop(context.window_manager, "blendermcp_chat_input", text="", icon='GREASEPENCIL')
+        field.prop(context.window_manager, "blendermcp_chat_input", text="")
         if snap["busy"]:
             row.operator("blendermcp.chat_stop", text="", icon='CANCEL')
         else:

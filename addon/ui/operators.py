@@ -1305,7 +1305,10 @@ class BLENDERMCP_OT_ClearMarks(bpy.types.Operator):
         return {'FINISHED'}
 
 
+# What show_panel can be asked for -> (sidebar tab, panel to pop up when the
+# tab can't be switched). Chat lives in the BlenderMCP tab.
 _PANELS = {"BlenderMCP": "BLENDERMCP_PT_Panel", "Chat": "BLENDERMCP_PT_Chat"}
+_TABS = {"BlenderMCP": "BlenderMCP", "Chat": "BlenderMCP"}
 
 
 class BLENDERMCP_OT_ShowPanel(bpy.types.Operator):
@@ -1327,12 +1330,13 @@ class BLENDERMCP_OT_ShowPanel(bpy.types.Operator):
         switched = False
         for region in area.regions:
             if region.type == 'UI':
+                tab = _TABS.get(self.category, self.category)
                 try:
-                    region.active_panel_category = self.category
+                    region.active_panel_category = tab
                     switched = True
                 except (TypeError, AttributeError):
                     # Read-only in Blender 5.x: no script can pick the tab.
-                    switched = region.active_panel_category == self.category
+                    switched = region.active_panel_category == tab
         area.tag_redraw()
         if not switched and self.category in _PANELS:
             # Show the panel as a popover right where the user clicked.

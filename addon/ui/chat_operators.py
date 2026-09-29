@@ -146,7 +146,7 @@ class BLENDERMCP_MT_ChatAdvisor(bpy.types.Menu):
 
 
 class BLENDERMCP_OT_ChatBackendSettings(bpy.types.Operator):
-    """Choose which model answers in the Chat tab"""
+    """Choose which model answers in the chat"""
 
     bl_idname = "blendermcp.chat_backend_settings"
     bl_label = "Chat model"

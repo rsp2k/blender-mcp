@@ -4,7 +4,7 @@ Modules:
 
   panel.py     — BLENDERMCP_PT_Panel (the View3D sidebar panel — minimal:
                  status, Connect/Disconnect, asset toggles only)
-  chat_panel.py — BLENDERMCP_PT_Chat (its own "Chat" sidebar tab)
+  chat_panel.py — BLENDERMCP_PT_Chat (in the BlenderMCP tab, below status)
   chat_operators.py — Send/Stop/Allow/Deny/log + Chat backend operators
   operators.py — OAuthLogin, Logout, StartServer, StopServer, TestConnection,
                  SetFreeTrialHyper3DAPIKey

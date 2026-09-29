@@ -114,7 +114,7 @@ def draw_tool_servers_section(layout, prefs) -> None:
 
     col = layout.column(align=True)
     col.label(text="Tool servers", icon='TOOL_SETTINGS')
-    col.label(text="MCP servers whose tools the Chat tab's assistant can use. They run on this computer.")
+    col.label(text="MCP servers whose tools the chat assistant can use. They run on this computer.")
 
     row = layout.row()
     row.template_list(
@@ -160,7 +160,7 @@ def draw_tool_servers_section(layout, prefs) -> None:
         op = test.operator(BLENDERMCP_OT_ToolServerTest.bl_idname, text="Test", icon='PLAY')
         op.index = idx
         if not item.trusted:
-            box.label(text="Each call asks Allow/Deny in the Chat tab.", icon='INFO')
+            box.label(text="Each call asks Allow/Deny in the chat.", icon='INFO')
 
     bridge = get_bridge(create=False)
     report = bridge.last_report if bridge is not None else {}
