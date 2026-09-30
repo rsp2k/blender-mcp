@@ -91,7 +91,11 @@ def primitive_params(kind, name=None, size=None, radius=None, depth=None, locati
     }
 
 
-def color_params(objects, color, roughness=None, metallic=None, name=None) -> dict:
+MAX_GLOW = 1000.0  # emission strength; past a few hundred it's a floodlight
+
+
+def color_params(objects, color, roughness=None, metallic=None, name=None,
+                 glow=None) -> dict:
     """Validated set_color dispatch params (raises ValueError). Names are
     resolved by the add-on; only the shape is checked here."""
     if isinstance(objects, str):
@@ -108,8 +112,14 @@ def color_params(objects, color, roughness=None, metallic=None, name=None) -> di
     for value, what in ((roughness, "roughness"), (metallic, "metallic")):
         if value is not None and (not _num(value) or not 0 <= value <= 1):
             raise ValueError(f"{what} must be a number from 0 to 1")
-    return {"objects": objects, "color": list(color) if not isinstance(color, str) else color,
-            "roughness": roughness, "metallic": metallic, "name": name}
+    if glow is not None and (not _num(glow) or not 0 <= glow <= MAX_GLOW):
+        raise ValueError(f"glow must be a number from 0 to {MAX_GLOW:g}")
+    params = {"objects": objects, "color": list(color) if not isinstance(color, str) else color,
+              "roughness": roughness, "metallic": metallic, "name": name}
+    # Sent only when asked for, so add-ons older than glow keep working.
+    if glow is not None:
+        params["glow"] = float(glow)
+    return params
 
 
 MAX_NAME_CHARS = 255  # Blender caps names at 63 bytes; this only rejects nonsense
@@ -208,6 +218,7 @@ class BlenderModellingComponent(MCPMixin):
         roughness: float | None = None,
         metallic: float | None = None,
         name: str | None = None,
+        glow: float | None = None,
         target_uuid: str | None = None,
         _timeout: float = DEFAULT_TIMEOUT_S,
         bus_id: str | None = None,
@@ -227,9 +238,14 @@ class BlenderModellingComponent(MCPMixin):
         one with the same name and values; ``name`` picks the name) and
         makes it the object's only material. Unknown colour names come
         back with suggestions. For image textures use make_pbr_material.
+
+        ``glow`` makes the material emit light in the same colour ("make it
+        glow", "neon", "lit sign"): an emission strength where 2-5 reads as
+        a soft glow, 10-50 as a lamp; 0 turns an existing glow off. Use this
+        rather than Python: Blender 4 renamed the emission inputs.
         """
         try:
-            params = color_params(objects, color, roughness, metallic, name)
+            params = color_params(objects, color, roughness, metallic, name, glow)
         except ValueError as e:
             return _err("invalid_argument", detail=str(e))
         return await self._send(ctx, "set_color", params, target_uuid, _timeout, bus_id)

@@ -231,11 +231,20 @@ def test_set_color_dispatches(comp):
     assert comp.sent[-1][1]["color"] == [1, 0, 0] and comp.sent[-1][1]["objects"] == ["A", "B"]
 
 
+def test_set_color_glow_sent_only_when_asked(comp):
+    run(comp.set_color(objects="Tower 4", color="orange", glow=3))
+    assert comp.sent[-1][1]["glow"] == 3.0
+    run(comp.set_color(objects="Tower 4", color="orange", glow=0))
+    assert comp.sent[-1][1]["glow"] == 0.0  # 0 turns a glow off, so it must be sent
+
+
 @pytest.mark.parametrize("kwargs", [
     {"objects": "", "color": "red"}, {"objects": [], "color": "red"},
     {"objects": ["A", 3], "color": "red"}, {"objects": "A", "color": ""},
     {"objects": "A", "color": [1, 0]}, {"objects": "A", "color": "red", "roughness": 1.5},
     {"objects": "A", "color": "red", "metallic": "1"},
+    {"objects": "A", "color": "red", "glow": -1}, {"objects": "A", "color": "red", "glow": 5000},
+    {"objects": "A", "color": "red", "glow": "bright"},
 ])
 def test_set_color_rejects_before_dispatch(comp, kwargs):
     out = json.loads(run(comp.set_color(**kwargs)))

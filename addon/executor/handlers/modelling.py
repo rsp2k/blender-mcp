@@ -94,7 +94,26 @@ def _matches(mat, spec) -> bool:
     col = list(node.inputs["Base Color"].default_value)[:3]
     return (all(abs(a - b) < 1e-3 for a, b in zip(col, spec["linear"]))
             and abs(node.inputs["Roughness"].default_value - spec["roughness"]) < 1e-3
-            and abs(node.inputs["Metallic"].default_value - spec["metallic"]) < 1e-3)
+            and abs(node.inputs["Metallic"].default_value - spec["metallic"]) < 1e-3
+            and abs(_glow_of(node) - spec.get("glow", 0.0)) < 1e-3)
+
+
+def _emission_inputs(node):
+    """(colour, strength) sockets. Blender 4.0 renamed "Emission" to
+    "Emission Color"; models writing Python still guess the old name."""
+    col = node.inputs.get("Emission Color") or node.inputs.get("Emission")
+    return col, node.inputs.get("Emission Strength")
+
+
+def _glow_of(node) -> float:
+    """Effective emission strength: 0 when the emission colour is black,
+    which is how Blender 3.x ships a Principled BSDF (strength 1, black)."""
+    col, strength = _emission_inputs(node)
+    if col is None or strength is None:
+        return 0.0
+    if max(list(col.default_value)[:3]) <= 1e-6:
+        return 0.0
+    return float(strength.default_value)
 
 
 def _material_for(spec, name):
@@ -104,6 +123,8 @@ def _material_for(spec, name):
         mat = bpy.data.materials.get(name)
         return (mat, False) if mat is not None else (bpy.data.materials.new(name), True)
     base = cn.material_name(spec)
+    if spec.get("glow"):
+        base += " Glow"
     candidates = [base] + [f"{base}.{i:03d}" for i in range(1, 100)]
     for cand in candidates:
         mat = bpy.data.materials.get(cand)
@@ -120,6 +141,11 @@ def _apply(mat, spec):
     node.inputs["Base Color"].default_value = rgba
     node.inputs["Roughness"].default_value = spec["roughness"]
     node.inputs["Metallic"].default_value = spec["metallic"]
+    glow = spec.get("glow", 0.0)
+    col, strength = _emission_inputs(node)
+    if col is not None and strength is not None:
+        col.default_value = rgba if glow > 0 else (0.0, 0.0, 0.0, 1.0)
+        strength.default_value = glow
     # Solid-mode viewport colour, so the change shows without Material Preview.
     mat.diffuse_color = rgba
     mat.roughness = spec["roughness"]
@@ -217,9 +243,10 @@ class ModellingHandlersMixin:
         return out
 
     @command("set_color")
-    def set_color(self, objects, color, roughness=None, metallic=None, name=None):
-        """Give objects a plain coloured Principled BSDF material."""
+    def set_color(self, objects, color, roughness=None, metallic=None, name=None, glow=None):
+        """Give objects a plain coloured Principled BSDF material, optionally glowing."""
         spec = cn.resolve(color, roughness=roughness, metallic=metallic)
+        spec["glow"] = max(0.0, float(glow or 0.0))
         targets = _targets(objects)
         bad = [o.name for o in targets
                if o.type not in _MATERIAL_TYPES or not hasattr(o.data, "materials")]
@@ -246,6 +273,8 @@ class ModellingHandlersMixin:
             "roughness": spec["roughness"],
             "metallic": spec["metallic"],
         }
+        if spec["glow"]:
+            out["glow"] = spec["glow"]
         if replaced:
             out["replaced_materials"] = replaced
         shared = [o.name for o in targets if o.data.users > 1]
