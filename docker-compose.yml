@@ -28,7 +28,9 @@ services:
   # fabric collides with other stacks' DBs. NOT on the caddy network;
   # the DB should never be reverse-proxied.
   blender-mcp-postgres:
-    image: postgres:16-alpine
+    # postgres:16-alpine plus pgvector (docker/postgres/Dockerfile).
+    build: ./docker/postgres
+    image: blender-mcp-postgres:16-pgvector
     container_name: ${COMPOSE_PROJECT_NAME:-blender-mcp}-postgres
     restart: unless-stopped
     environment:
