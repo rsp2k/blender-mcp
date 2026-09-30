@@ -56,6 +56,16 @@ a.card:hover {
 	border-color: var(--sl-color-accent);
 }
 
+/* Splash hero: Starlight's default block padding left a tall empty band
+ * between the hero and the first paragraph. */
+.hero {
+	padding-block: clamp(2rem, 5vw, 3.5rem) 1rem;
+}
+.clip-hero img {
+	width: min(20rem, 100%);
+	height: auto;
+}
+
 /* Mobile-first refinement: a bit more breathing room around the hero on
  * narrow screens, then snap back to Starlight defaults at md. */
 @media (max-width: 50rem) {
