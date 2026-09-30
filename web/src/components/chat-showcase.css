@@ -1,0 +1,137 @@
+/* Homepage Chat showcase. Prefixed cs- because Astro bundles component CSS
+   imports globally. The strip borrows Blender's own region grey and sidebar
+   tab so the captures sit where they'd sit in the app. */
+
+.cs {
+  --cs-text: var(--text, #d4d4d4);
+  --cs-muted: var(--muted, #8b949e);
+  --cs-border: var(--border, #2a313a);
+  --cs-accent: var(--accent, #2bb3a4);
+  --cs-region: #232323; /* Blender's sidebar region */
+  --cs-tab: #2d2d2d;
+  --cs-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  text-align: left;
+}
+
+.cs-head {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 62ch;
+  margin-bottom: 1.75rem;
+}
+
+.cs-head h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2rem);
+  line-height: 1.2;
+  color: var(--cs-text);
+  text-wrap: balance;
+}
+
+.cs-lede {
+  margin: 0;
+  color: var(--cs-muted);
+}
+
+.cs-lede kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.05em 0.45em;
+  font-family: var(--cs-mono);
+  font-size: 0.85em;
+  text-align: center;
+  color: var(--cs-text);
+  background: #2b2f36;
+  border: 1px solid #3a414b;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.cs-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: var(--cs-region);
+  border: 1px solid var(--cs-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cs-moments {
+  list-style: none;
+  margin: 0;
+  padding: clamp(1rem, 2.5vw, 1.75rem);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: clamp(1.25rem, 3vw, 2rem);
+  align-items: start;
+}
+
+/* Each moment spans two rows of the list's grid (text, then panel) through
+   subgrid, so captions of different lengths still start the panels level. */
+.cs-moment {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  row-gap: 1rem;
+  justify-items: start;
+}
+
+.cs-text {
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+}
+
+.cs-when {
+  font-family: var(--cs-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--cs-accent);
+}
+
+.cs-title {
+  font-size: 1.08rem;
+  color: var(--cs-text);
+}
+
+.cs-body {
+  margin: 0;
+  color: var(--cs-muted);
+  font-size: 0.95rem;
+  text-wrap: pretty;
+}
+
+.cs-shot {
+  display: block;
+  width: 100%;
+  max-width: 17.5rem;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Blender's vertical sidebar tabs, with ours the active one. */
+.cs-tab {
+  writing-mode: vertical-rl;
+  padding: 1.1rem 0.45rem;
+  align-self: start;
+  margin-top: clamp(1rem, 2.5vw, 1.75rem);
+  font-size: 0.78rem;
+  color: var(--cs-text);
+  background: var(--cs-tab);
+  border-left: 2px solid var(--cs-accent);
+  border-radius: 6px 0 0 6px;
+  user-select: none;
+}
+
+@media (max-width: 560px) {
+  .cs-tab { display: none; }
+  .cs-strip { grid-template-columns: minmax(0, 1fr); }
+  .cs-shot { max-width: 100%; }
+}

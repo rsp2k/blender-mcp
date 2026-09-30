@@ -2,13 +2,14 @@
 /**
  * blender.bet apex — landing. Prerendered (static, cache-friendly).
  *
- * Job: say what BlenderMCP is, then walk a first-time user through
- * installing the add-on. Reference material lives on docs.blender.bet.
+ * Job: say what BlenderMCP is, show the Chat panel it adds to Blender, then
+ * walk a first-time user through installing the add-on. Reference material lives on docs.blender.bet.
  *
  * Future authenticated user surfaces (dashboard, account, etc.) would
  * live at sibling routes like /account, /dashboard — gated by Caddy's
  * forward_auth + read identity from X-Authentik-* headers.
  */
+import ChatShowcase from '../components/ChatShowcase.astro';
 import ClipHero from '../components/ClipHero.astro';
 import InstallWalkthrough from '../components/InstallWalkthrough.astro';
 import '../styles/home.css';
@@ -49,12 +50,15 @@ export const prerender = true;
         </div>
       </main>
 
+      <ChatShowcase />
+
       <InstallWalkthrough />
 
       <p class="foot">
-        MCP-spec OAuth 2.1 + PKCE &middot; Authentik-backed SSO &middot;
-        <a href="https://github.com/rsp2k/blender-mcp">GitHub</a><br />
-        MCP server: <a href="https://mcp.blender.bet/">mcp.blender.bet</a>
+        Your Blender answers only to you, the clients you sign in, and the
+        people you invite to share a scene.<br />
+        <a href="https://github.com/rsp2k/blender-mcp">Source on GitHub</a> &middot;
+        MCP server at <a href="https://mcp.blender.bet/">mcp.blender.bet</a>
       </p>
     </div>
   </body>

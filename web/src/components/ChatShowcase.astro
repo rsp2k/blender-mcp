@@ -1,0 +1,70 @@
+---
+// The Chat panel, as it looks in Blender's sidebar: three real captures
+// (UI scale 2, so they stay sharp on high-density screens).
+import './chat-showcase.css';
+
+const moments = [
+  {
+    when: 'While it works',
+    title: 'Clip shows each step',
+    body: 'Select objects first and they go along with your message. The clip in the input row shows how many.',
+    img: 'chat-thinking',
+    w: 490,
+    h: 497,
+    alt: 'The Chat panel mid-turn. The request reads "Put a gold sphere on top of the selected tower", Clip the binder clip mascot shows "Thinking, step 1, 4 seconds", and the input row shows one object clipped.',
+  },
+  {
+    when: 'Before any Python',
+    title: 'Code waits for your Allow',
+    body: 'Anything that runs Python shows you the code first. Walk away and it declines itself.',
+    img: 'chat-approval',
+    w: 490,
+    h: 746,
+    alt: 'The Chat panel asking "The assistant wants to run this Python", with the first lines of the code, a note that it declines itself in about 88 seconds, and Allow and Deny buttons.',
+  },
+  {
+    when: 'After every reply',
+    title: 'One click undoes it',
+    body: 'Each change is one Ctrl+Z step, and Undo reverses a whole reply at once.',
+    img: 'chat-reply',
+    w: 490,
+    h: 612,
+    alt: 'The Chat panel after the reply "Done. Tower 4 (the center bar) is now orange with a strong glow effect", headed "Claude, 2 steps, 7.70 seconds", with an "Undo last chat change (1 step)" button.',
+  },
+];
+---
+
+<section class="cs" aria-labelledby="cs-heading">
+  <header class="cs-head">
+    <h2 id="cs-heading">Chat inside Blender</h2>
+    <p class="cs-lede">
+      Press <kbd>N</kbd> in the 3D Viewport and open the BlenderMCP tab.
+      Type what you want, and Claude works on the scene you have open, with
+      the same tools any MCP client gets. No second app, no copy and paste.
+    </p>
+  </header>
+
+  <div class="cs-strip">
+    <ul class="cs-moments">
+      {moments.map((m) => (
+        <li class="cs-moment">
+          <div class="cs-text">
+            <span class="cs-when">{m.when}</span>
+            <strong class="cs-title">{m.title}</strong>
+            <p class="cs-body">{m.body}</p>
+          </div>
+          <img
+            class="cs-shot"
+            src={`/img/chat/${m.img}.webp`}
+            width={m.w / 2}
+            height={m.h / 2}
+            alt={m.alt}
+            loading="lazy"
+            decoding="async"
+          />
+        </li>
+      ))}
+    </ul>
+    <span class="cs-tab" aria-hidden="true">BlenderMCP</span>
+  </div>
+</section>
