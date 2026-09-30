@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import anthropic
@@ -62,6 +62,21 @@ SAMPLING_OK = ("claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "clau
 EMPTY_ATTEMPTS = 2
 
 Replay = Callable[[frozenset[str]], list[dict] | None]
+TextSink = Callable[[str], Awaitable[None]]
+
+
+async def _send(client, req: dict[str, Any], on_text: TextSink | None):
+    """One Messages API call; streamed when someone wants the text as it comes."""
+    if on_text is None:
+        return await client.beta.messages.create(**req)
+    async with client.beta.messages.stream(**req) as stream:
+        async for piece in stream.text_stream:
+            if piece:
+                try:
+                    await on_text(piece)
+                except Exception as e:  # noqa: BLE001 - showing text must never end the call
+                    logger.debug("chat text sink failed: %s", type(e).__name__)
+        return await stream.get_final_message()
 
 
 def _base(model: str) -> str:
@@ -369,9 +384,11 @@ async def complete(
     advisor: str = "",
     advisor_max_tokens: int = 2048,
     advisor_cache: bool = False,
+    on_text: TextSink | None = None,
     **_ignored: Any,
 ) -> Completion:
-    """``transport`` is an httpx2 transport for tests (httpx2.MockTransport)."""
+    """``transport`` is an httpx2 transport for tests (httpx2.MockTransport).
+    ``on_text`` streams the reply: it gets each piece of text as it arrives."""
     if not backend.api_key:
         raise ProviderError("no Anthropic API key is saved for this account")
     wire = to_anthropic_messages(messages, replay)
@@ -392,7 +409,7 @@ async def complete(
         while True:
             attempts += 1
             try:
-                message = await client.beta.messages.create(**request(wire))
+                message = await _send(client, request(wire), on_text)
             except anthropic.BadRequestError as e:
                 # A replayed thinking block the API won't accept (history no
                 # longer matches it): answer this round without the thinking.

@@ -8,6 +8,8 @@ sampling handler with an httpx.MockTransport in place of the network.
 
 import asyncio
 import json
+
+from anthropic_sse import message_to_sse
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -97,6 +99,9 @@ class FakeModels:
             item = item(body)
         if isinstance(item, (httpx.Response, httpx2.Response)):
             return item
+        if body.get("stream") and response is httpx2.Response:
+            return response(200, text=message_to_sse(item),
+                            headers={"content-type": "text/event-stream"})
         return response(200, json=item)
 
 
@@ -589,6 +594,30 @@ async def test_server_default_anthropic_backend(cfg, sessions):
     assert models.requests[0]["headers"]["x-api-key"] == server_key
     assert out2["backend"] == {"provider": "openai", "model": "llama3"}
     assert models.requests[2]["url"] == "http://ollama.internal:11434/v1/chat/completions"
+
+
+async def test_claude_reply_streams_as_delta_events(cfg, sessions):
+    reply = "Made a crate, 1 m on each side, sitting on the floor."
+    models = FakeModels(an_text(reply))
+    h = Harness(replace(cfg, default_provider="anthropic", anthropic_api_key="sk-ant-" + "k" * 24),
+                models, sessions)
+    async with h.client() as client:
+        out = await h.chat(client, "a crate")
+    assert models.requests[0]["body"]["stream"] is True
+    deltas = [e["text"] for e in h.events if e.get("t") == "delta"]
+    assert deltas and "".join(deltas) == reply  # every piece, in order, nothing lost
+    # The whole text still comes once at the end of the round, and as the reply.
+    assert [e["text"] for e in h.events if e.get("t") == "text"] == [reply]
+    assert out["reply"] == reply
+
+
+async def test_gateway_replies_do_not_stream(cfg, sessions):
+    models = FakeModels(oa_text("from the gateway"))
+    h = Harness(cfg, models, sessions)
+    async with h.client() as client:
+        await h.chat(client)
+    assert not models.requests[0]["body"].get("stream")
+    assert not [e for e in h.events if e.get("t") == "delta"]
 
 
 async def test_per_user_openai_backend_and_clear(cfg, sessions):

@@ -32,6 +32,9 @@ current_backend: ContextVar[Backend | None] = ContextVar("chat_current_backend",
 # One chat turn's identity ("<user>:<uuid>"), set by blender_chat next to
 # current_backend. Scopes the thinking cache so turns and users never share it.
 current_turn: ContextVar[str | None] = ContextVar("chat_current_turn", default=None)
+# Set by a chat turn: receives the reply's text as it streams. Only the
+# turn's own model calls use it (see __call__), not vision descriptions.
+current_text_sink: ContextVar[Any] = ContextVar("chat_current_text_sink", default=None)
 
 
 class ThinkingCache:
@@ -165,7 +168,7 @@ class RoutingSamplingHandler:
 
     async def complete(self, backend: Backend, system, messages, tools, *,
                        tool_choice: str | None = None, max_tokens: int | None = None,
-                       temperature: float | None = None) -> Completion:
+                       temperature: float | None = None, on_text=None) -> Completion:
         cfg = self.config_loader()
         extra: dict[str, Any] = {}
         scope = None
@@ -179,6 +182,9 @@ class RoutingSamplingHandler:
                 "advisor": backend.advisor,
                 "advisor_max_tokens": cfg.anthropic_advisor_max_tokens,
                 "advisor_cache": cfg.anthropic_advisor_cache,
+                # Only Claude streams: the gateway's streamed tool calls are
+                # unreliable (see the gpu gateway notes), so it stays whole.
+                "on_text": on_text,
             }
         t0 = time.perf_counter()
         try:
@@ -215,5 +221,6 @@ class RoutingSamplingHandler:
             tool_choice=params.toolChoice.mode if params.toolChoice else None,
             max_tokens=params.maxTokens,
             temperature=params.temperature,
+            on_text=current_text_sink.get(),
         )
         return to_result(c, backend.model)

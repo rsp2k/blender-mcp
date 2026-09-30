@@ -275,6 +275,8 @@ class ChatState:
             for m in restored:
                 if m.get("role") == "tool" and m.get("ok") is None:
                     m["ok"] = False
+                m.pop("streaming", None)
+                m.pop("streamed", None)
             self.messages = restored
             self.conversation_id = conversation_id
             self.turn = max([m.get("turn", 0) for m in restored if isinstance(m.get("turn"), int)] or [0])
@@ -312,15 +314,39 @@ class ChatState:
         with self.lock:
             if kind == "status":
                 self.status = str(event.get("text") or "")
+            elif kind == "delta":
+                # Reply text as it streams: grow the open streamed message,
+                # or start one.
+                piece = str(event.get("text") or "")
+                if not piece:
+                    return
+                live = self._streaming_entry()
+                if live is None:
+                    self.add_message("assistant", piece, log=False, streaming=True)
+                else:
+                    live["text"] += piece
+                    self.revision += 1
             elif kind == "text":
                 text = str(event.get("text") or "")
-                if text.strip():
+                done = self._last_streamed(text)
+                if done is not None:
+                    # The round's whole text: settle the streamed copy in place.
+                    done["text"], done["streaming"] = text, False
+                    self.revision += 1
+                    self._log.append(format_log_line(done))
+                elif text.strip():
                     self.add_message("assistant", text)
             elif kind == "tool":
                 name = event["name"]
                 server = event.get("server") if isinstance(event.get("server"), str) else None
                 extra = {"server": server} if server else {}
                 if event.get("phase") == "start":
+                    # Text streamed before a tool call belongs to that round;
+                    # the next round's text starts a new message.
+                    live = self._streaming_entry()
+                    if live is not None:
+                        live["streaming"] = False
+                        live["streamed"] = True
                     self.status = f"Running {tool_line({'name': name, **extra})}…"
                     self.add_message("tool", "", log=False, name=name, ok=None, ms=None, **extra)
                     return
@@ -338,6 +364,33 @@ class ChatState:
                     self.add_message("tool", "", name=name, ok=ok, ms=ms, wait_ms=wait,
                                      **detail, **extra)
 
+    def _streaming_entry(self) -> dict | None:
+        for entry in reversed(self.messages):
+            if entry.get("turn") != self.turn:
+                return None
+            if entry.get("role") == "assistant" and entry.get("streaming"):
+                return entry
+            if entry.get("role") == "tool":
+                return None
+        return None
+
+    def _last_streamed(self, text: str) -> dict | None:
+        """The streamed message this round's full ``text`` completes: the live
+        one, or one closed by a tool call whose text matches."""
+        target = text.strip()
+        for entry in reversed(self.messages):
+            if entry.get("turn") != self.turn:
+                return None
+            if entry.get("role") != "assistant":
+                continue
+            if entry.get("streaming"):
+                return entry
+            if entry.get("streamed") and target.startswith((entry.get("text") or "").strip()):
+                entry.pop("streamed", None)
+                return entry
+            return None
+        return None
+
     def finish_turn(self, turn: int, role: str, text: str,
                     payload: dict | None = None) -> bool:
         """Close `turn` with its final reply or error. False if it was already closed."""
@@ -349,6 +402,9 @@ class ChatState:
             self.status = ""
             self.inflight = None
             self.revision += 1
+            for entry in self.messages:
+                if entry.get("turn") == turn and entry.get("streaming"):
+                    entry["streaming"] = False
             # Tools that never reported an end are shown as failed.
             for entry in self.messages:
                 if entry.get("role") == "tool" and entry.get("turn") == turn and entry.get("ok") is None:

@@ -145,6 +145,16 @@ def _draw_turn(layout, context, snap, wrap) -> None:
         n = len(turn["steps"])
         steps = f" · step {n}" if n else ""
         col.label(text=f"{snap['status'] or 'Working…'}{steps}{elapsed}", icon='SORTTIME')
+        live = next((r for r in reversed(turn["replies"]) if r.get("streaming")), None)
+        if live and (live.get("text") or "").strip():
+            # The newest lines of the reply as it streams (it grows downward).
+            lines = []
+            for para in reader.plain(live["text"]).split("\n"):
+                if para.strip():
+                    lines.extend(wrap(para, reserve=30.0) or [""])
+            col.separator(factor=0.4)
+            for line in lines[-REPLY_LINES:]:
+                col.label(text=line)
         return
 
     backend = snap["backend_used"] or snap["backend"]

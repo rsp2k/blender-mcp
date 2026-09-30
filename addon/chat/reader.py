@@ -136,7 +136,8 @@ def render_document(messages: list, backend: dict | None = None) -> str:
             if t["steps"]:
                 lines.append("")
             for r in t["replies"]:
-                lines.append(plain(r.get("text") or ""))
+                body = plain(r.get("text") or "")
+                lines.append(body + (" ▍" if r.get("streaming") else ""))
                 lines.append("")
         for n in t["notes"]:
             prefix = "Error: " if n.get("role") == "error" else ""

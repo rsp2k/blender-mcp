@@ -65,3 +65,11 @@ def test_step_error_keeps_the_inner_message():
            '"error": "Object not found: \'Tower 9\'"}')
     assert reader.step_error(raw) == "Object not found: 'Tower 9'"
     assert len(reader.step_error("x" * 500)) == reader.STEP_ERROR_CHARS
+
+
+def test_streaming_reply_shows_a_cursor_until_it_settles():
+    msgs = [{"role": "user", "text": "hi", "turn": 1},
+            {"role": "assistant", "text": "Working on", "turn": 1, "streaming": True}]
+    assert "Working on ▍" in reader.render_document(msgs)
+    msgs[1]["streaming"] = False
+    assert "▍" not in reader.render_document(msgs)

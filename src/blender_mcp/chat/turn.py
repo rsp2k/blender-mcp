@@ -28,6 +28,7 @@ from .catalog import LOOK, Entry
 from .config import ChatConfig
 from .providers import SCENE_MARKER, Backend
 from .providers.openai_compat import INVALID_ARGS
+from .routing import current_text_sink
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ STEP_HEAD_CHARS = 160  # the start of a successful step's result, likewise
 MAX_SCENE_CHARS = 3000
 MAX_HISTORY = 20
 MAX_HISTORY_CHARS = 4000
+DELTA_INTERVAL_S = 0.12  # at most ~8 streamed-text events a second
 DUPLICATE_LIMIT = 2  # the same call (name + args) this many times, then refused
 DECLINED = ("The user declined this action (or did not answer in time). Do not retry "
             "it; carry on without it, or ask the user what they want instead.")
@@ -123,10 +125,26 @@ class Turn:
         self.steps: list[dict] = []
         self.reply = ""
         self._progress = 0
+        self._pending_text = ""
+        self._last_delta = 0.0
         self._seen: Counter[str] = Counter()
         self._refusals = 0
 
     # ---- progress ---------------------------------------------------------
+
+    async def _stream_text(self, piece: str) -> None:
+        """Reply text as it streams, sent as "delta" events at most every
+        DELTA_INTERVAL_S so the progress channel isn't flooded."""
+        self._pending_text += piece
+        now = time.monotonic()
+        if now - self._last_delta >= DELTA_INTERVAL_S:
+            await self._flush_text()
+
+    async def _flush_text(self) -> None:
+        if self._pending_text:
+            text, self._pending_text = self._pending_text, ""
+            self._last_delta = time.monotonic()
+            await self.emit({"t": "delta", "text": text})
 
     async def emit(self, event: dict) -> None:
         self._progress += 1
@@ -246,12 +264,19 @@ class Turn:
         messages.append(SamplingMessage(role="user",
                                         content=content[0] if len(content) == 1 else content))
         tools = self.sampling_tools()
+        sink_token = current_text_sink.set(self._stream_text)
+        try:
+            return await self._rounds(messages, system, tools)
+        finally:
+            current_text_sink.reset(sink_token)
 
+    async def _rounds(self, messages, system, tools) -> str:
         for _ in range(self.cfg.max_steps):
             await self.emit({"t": "status", "text": "Thinking…"})
             step = await self.ctx.sample_step(
                 messages, system_prompt=system, tools=tools, max_tokens=self.cfg.max_tokens,
             )
+            await self._flush_text()
             if step.text:
                 await self.emit({"t": "text", "text": step.text})
             if not step.is_tool_use:
@@ -263,10 +288,12 @@ class Turn:
 
         messages = [*messages, SamplingMessage(role="user", content=TextContent(type="text", text=FINAL_NUDGE))]
         await self.emit({"t": "status", "text": "Wrapping up…"})
+        await self._flush_text()
         step = await self.ctx.sample_step(
             messages, system_prompt=system, tools=tools, tool_choice="none",
             execute_tools=False, max_tokens=self.cfg.max_tokens,
         )
+        await self._flush_text()
         self.reply = step.text or (f"I stopped after {len(self.steps)} tool calls without "
                                    "finishing. Ask me to continue if you want more.")
         await self.emit({"t": "text", "text": self.reply})
