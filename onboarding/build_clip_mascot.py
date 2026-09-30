@@ -619,9 +619,80 @@ def render_loop(cam, folder: str, samples: int, size: int = 512, step: int = 1) 
     print(f"[clip] rendered loop frames {scene.frame_start}..{scene.frame_end}")
 
 
+# ---------------------------------------------------------------- web eyes
+
+EYES_SIZE = 360  # sprite frame size for the homepage's cursor-following Clip
+
+
+def _px(scene, cam, co, size):
+    c = world_to_camera_view(scene, cam, co)
+    return [round(c.x * size, 3), round((1 - c.y) * size, 3)]
+
+
+def eye_track(cam, size):
+    """Per frame, each eye as an ellipse in pixels, plus where the loop's own
+    pupils sit inside it. The page draws the pupils itself, so it needs:
+    c (centre), u (the eye's horizontal semi-axis, a vector from c) and
+    v (its vertical semi-axis; it shrinks to nothing in the blink), and
+    look (the rendered pupil's centre as fractions of u and v)."""
+    scene = bpy.context.scene
+    frames = []
+    for f in range(1, LOOP + 1):
+        scene.frame_set(f)
+        dg = bpy.context.evaluated_depsgraph_get()
+        eyes = {}
+        for s in "LR":
+            m = bpy.data.objects[f"Eye {s}"].evaluated_get(dg).matrix_world
+            c3, u3, v3 = m.translation, m.col[0].xyz, m.col[2].xyz
+            pc = bpy.data.objects[f"Pupil {s}"].evaluated_get(dg).matrix_world.translation
+            d = pc - c3
+            look = [round(d.dot(u3) / u3.length_squared, 4),
+                    round(d.dot(v3) / max(v3.length_squared, 1e-9), 4)]
+            c = _px(scene, cam, c3, size)
+            eu, ev = _px(scene, cam, c3 + u3, size), _px(scene, cam, c3 + v3, size)
+            eyes[s] = {"c": c, "u": [round(eu[0] - c[0], 3), round(eu[1] - c[1], 3)],
+                       "v": [round(ev[0] - c[0], 3), round(ev[1] - c[1], 3)],
+                       "look": look}
+        frames.append(eyes)
+    scene.frame_set(1)
+    return frames
+
+
+def web_eyes(pose, cam, folder):
+    """Render the hero loop without pupils and write eyes.json beside it."""
+    import json
+    track = eye_track(cam, EYES_SIZE)
+    er = pose["eye_r"]
+    pr = er * pose["pupil"]
+    # pupil and glint sizes as fractions of the eye's u and v semi-axes
+    meta = {
+        "size": EYES_SIZE, "frames": LOOP, "fps": FPS,
+        "pupil": [round(pr / (er * 0.9), 4), round(pr * 1.1 / (er * 1.12), 4)],
+        "glint": {"offset": [round(-0.35 * pr / (er * 0.9), 4),
+                             round(0.42 * pr / (er * 1.12), 4)],
+                  "r": round(0.34 * pr / (er * 0.9), 4)},
+        "pupil_colour": PUPIL,
+        "eyes": track,
+    }
+    for name in ("Pupil L", "Pupil R", "Glint L", "Glint R"):
+        bpy.data.objects[name].hide_render = True
+    render_loop(cam, folder, 64, size=EYES_SIZE)
+    with open(os.path.join(folder, "eyes.json"), "w") as fh:
+        json.dump(meta, fh, separators=(",", ":"))
+    print(f"[clip] wrote {folder}eyes.json")
+
+
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     os.makedirs(OUT_DIR, exist_ok=True)
+
+    if "--eyes-web" in args:
+        # The homepage's cursor-following Clip: pupil-less frames + eye data.
+        subjects = build(HERO)
+        hero_cam = framed_camera("Hero camera", HERO, subjects)
+        animate(rig(bpy.data.collections["Clip mascot"]))
+        web_eyes(HERO, hero_cam, f"{OUT_DIR}/eyes/")
+        return
 
     if "--think-only" in args:
         # Only the add-on's thinking frames; leaves the hero scene alone.

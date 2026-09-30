@@ -9,6 +9,7 @@
  * live at sibling routes like /account, /dashboard — gated by Caddy's
  * forward_auth + read identity from X-Authentik-* headers.
  */
+import ClipHero from '../components/ClipHero.astro';
 import InstallWalkthrough from '../components/InstallWalkthrough.astro';
 import '../styles/home.css';
 
@@ -26,24 +27,13 @@ export const prerender = true;
       content="Connect Claude or any MCP client to the Blender you're running. Install the add-on from mcp.blender.bet/install in about two minutes."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preload" as="image" href="/img/mascot/clip-hero.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/img/mascot/clip-512.png" />
+    <link rel="prefetch" href="/img/mascot/clip-sheet.webp" />
   </head>
   <body>
     <div class="page">
       <main class="hero">
-        <figure class="mascot">
-          <picture>
-            <!-- The still for anyone who asked for less motion. -->
-            <source srcset="/img/mascot/clip-512.png" media="(prefers-reduced-motion: reduce)" />
-            <img src="/img/mascot/clip-hero.webp" width="512" height="512"
-                 alt="Clip, a dark blue steel binder clip with big eyes and a small smile, waving one of its wire handles." />
-          </picture>
-          <figcaption>
-            Meet Clip, the assistant inside your Blender.
-            <small>Binder clip model by
-              <a href="https://www.cgtrader.com/designers/teen-wolf">teen-wolf</a> on CGTrader.</small>
-          </figcaption>
-        </figure>
+        <ClipHero />
         <div class="hero-text">
         <h1>BlenderMCP</h1>
         <p class="tag">

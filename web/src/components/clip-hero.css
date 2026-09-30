@@ -1,0 +1,24 @@
+/* The picture and the canvas share one square, so swapping them never moves
+   the layout. */
+.clip-stage {
+  width: 100%;
+  max-width: 15rem;
+  aspect-ratio: 1;
+  display: grid;
+}
+
+.clip-stage > * {
+  grid-area: 1 / 1;
+}
+
+.clip-stage img,
+.clip-stage canvas {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 720px) {
+  .clip-stage {
+    max-width: 11rem;
+  }
+}
