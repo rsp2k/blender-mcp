@@ -11,7 +11,8 @@
   --iw-text: var(--sl-color-gray-2);
   --iw-muted: var(--sl-color-gray-3);
   --iw-accent: var(--sl-color-accent);
-  --iw-on-accent: var(--sl-color-accent-low);
+  /* Starlight text-on-accent: accent-low in dark (4.8:1), white in light (5.2:1). */
+  --iw-on-accent: var(--sl-color-text-invert);
   --iw-accent-hover: var(--sl-color-accent-high);
   /* Blender's own selection orange, so the pointer reads as "this one". */
   --iw-ring: #ffa033;
