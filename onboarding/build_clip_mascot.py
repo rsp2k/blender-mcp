@@ -24,7 +24,11 @@ It writes, under /home/blender/projects/clip-mascot/:
 
     clip-512.png         3/4 hero render, 512x512, transparent
     clip-mascot-128.png  icon render, 128x128, tuned for 16-32 px
-    clip-mascot.blend    the hero scene (the icon camera is in it too)
+    clip-mascot.blend    the rigged, animated hero scene (icon camera too)
+    anim/0001..0072.png  the 3 s hero loop, 512x512, transparent
+
+Options after "--": --no-anim skips the 72 loop frames, --anim-only skips
+the icon and still renders (it still rebuilds, rigs and saves the scene).
 
 Copy them to web/public/img/mascot/clip-512.png,
 addon/icons/clip-mascot.png and onboarding/clip-mascot.blend.
@@ -32,8 +36,10 @@ addon/icons/clip-mascot.png and onboarding/clip-mascot.blend.
 
 import math
 import os
+import sys
 
 import bpy
+from bpy_extras import anim_utils
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Matrix, Vector
 
@@ -51,18 +57,18 @@ RIM_BLUE = "#3b82f6"  # Supported Systems blue family, for the rim lights
 # "front" is the handle hooked into the face-side jaw, leaning toward the
 # viewer; "back" leans away. Face sizes are in scene metres on the plate,
 # eye_up is how far up the plate (0 = spine, 1 = jaws) the eyes sit.
-HERO = dict(
-    name="hero", front=46.0, back=64.0, wire_boost=0.0,
-    eye_r=0.33, eye_gap=0.88, eye_up=0.48, pupil=0.52, look=(-0.05, 0.03),
-    smile=True, smile_w=0.46, eye_glow=0.35, rim=700,
-    cam_azimuth=-38.0, cam_elev=16.0, lens=70, fill=0.85,
-)
-ICON = dict(
-    name="icon", front=44.0, back=54.0, wire_boost=0.05,
-    eye_r=0.44, eye_gap=1.22, eye_up=0.44, pupil=0.6, look=(0.0, -0.01),
-    smile=False, smile_w=0.0, eye_glow=1.2, rim=2400,
-    cam_azimuth=-25.0, cam_elev=14.0, lens=0, fill=0.94,
-)
+HERO = {
+    "name": "hero", "front": 46.0, "back": 64.0, "wire_boost": 0.0,
+    "eye_r": 0.33, "eye_gap": 0.88, "eye_up": 0.48, "pupil": 0.52, "look": (-0.05, 0.03),
+    "smile": True, "smile_w": 0.46, "eye_glow": 0.35, "rim": 700,
+    "cam_azimuth": -38.0, "cam_elev": 16.0, "lens": 70, "fill": 0.85,
+}
+ICON = {
+    "name": "icon", "front": 44.0, "back": 54.0, "wire_boost": 0.05,
+    "eye_r": 0.44, "eye_gap": 1.22, "eye_up": 0.44, "pupil": 0.6, "look": (0.0, -0.01),
+    "smile": False, "smile_w": 0.0, "eye_glow": 1.2, "rim": 2400,
+    "cam_azimuth": -25.0, "cam_elev": 14.0, "lens": 0, "fill": 0.94,
+}
 
 
 def srgb_to_linear(c: float) -> float:
@@ -295,6 +301,162 @@ def make_face(coll, mats, body, pose):
         curve.materials.append(mats["chrome"])
 
 
+# ---------------------------------------------------------------- rig
+
+FPS = 24
+LOOP = 72  # frames; frame LOOP + 1 is keyed equal to frame 1, so 72 -> 1 flows
+
+# The hero loop. Each track is (bone, property, axis, [(frame, value), ...]);
+# every track starts and ends at its rest value so frame 1 is the still.
+# Angles are degrees. Bone axes: body Y is up the clip, body Z faces the
+# viewer (so Z rotation is a side lean); handle Y is the hinge axis (positive
+# swings the handle forward and down); eye Y is the eye's vertical (blink);
+# pupil X runs along the plate (glance).
+ANIM = [
+    # two gentle bobs, each landing a touch low with a small squash
+    ("body", "location", 1, [(1, 0), (16, 0.07), (31, -0.02), (37, 0),
+                             (52, 0.07), (67, -0.02), (73, 0)]),
+    ("body", "scale", 1, [(1, 1), (16, 1.0), (31, 0.955), (37, 1),
+                          (52, 1.0), (67, 0.955), (73, 1)]),
+    ("body", "scale", 0, [(1, 1), (31, 1.022), (37, 1), (67, 1.022), (73, 1)]),
+    ("body", "scale", 2, [(1, 1), (31, 1.022), (37, 1), (67, 1.022), (73, 1)]),
+    # slow side-to-side lean over the whole loop
+    ("body", "rotation_euler", 2, [(1, 0), (19, 2.5), (37, 0), (55, -2.5),
+                                   (73, 0)]),
+    # the near handle waves: two swings, then settles
+    ("handle.front", "rotation_euler", 1, [(1, 0), (7, -5), (15, 12),
+                                           (23, -4), (31, 12), (40, -2),
+                                           (48, 0), (73, 0)]),
+    # the far handle sways a little
+    ("handle.back", "rotation_euler", 1, [(1, 0), (19, -5), (37, 0), (55, 5),
+                                          (73, 0)]),
+    # one quick blink
+    ("eye.L", "scale", 1, [(1, 1), (34, 1), (36, 0.08), (38, 1), (73, 1)]),
+    ("eye.R", "scale", 1, [(1, 1), (34, 1), (36, 0.08), (38, 1), (73, 1)]),
+    # pupils glance toward the waving hand and back
+    ("pupil.L", "location", 0, [(1, 0), (5, 0), (9, 0.085), (26, 0.085),
+                                (31, 0), (73, 0)]),
+    ("pupil.R", "location", 0, [(1, 0), (5, 0), (9, 0.085), (26, 0.085),
+                                (31, 0), (73, 0)]),
+]
+
+
+def add_bone(arm, name, head, tail, z_axis, parent=None, inherit_scale="FULL"):
+    eb = arm.data.edit_bones.new(name)
+    eb.head, eb.tail = head, tail
+    eb.align_roll(z_axis)
+    eb.parent = arm.data.edit_bones[parent] if parent else None
+    eb.use_connect = False
+    eb.inherit_scale = inherit_scale
+    return eb
+
+
+def rig(coll):
+    """Clip_Rig: rigid bone parenting, rest pose identical to the hero still."""
+    objs = {o.name: o for o in coll.objects}
+    body = objs["Clip body"]
+    top = max(p.z for p in world_verts(body))
+
+    data = bpy.data.armatures.new("Clip_Rig")
+    arm = link(bpy.data.objects.new("Clip_Rig", data), coll)
+    data.display_type = "STICK"
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    toward = Vector((0, -1, 0))
+    add_bone(arm, "root", (0, 0, 0), (0, -0.6, 0), Vector((0, 0, 1)))
+    add_bone(arm, "body", (0, 0, 0), (0, 0, top), toward, "root")
+    for tag in ("front", "back"):
+        h = objs[f"Handle {tag}"]
+        pivot = h.location.copy()
+        # head on the hinge axis, bone Y along it (world X), so one rotation
+        # about the bone's Y swings the handle exactly as the real hinge does
+        add_bone(arm, f"handle.{tag}", pivot, pivot + Vector((0.35, 0, 0)),
+                 Vector((0, 0, 1)), "body", inherit_scale="NONE")
+
+    eyes = {s: objs[f"Eye {s}"] for s in "LR"}
+    cols = {s: eyes[s].matrix_world.to_3x3() for s in "LR"}
+    face_mid = (eyes["L"].matrix_world.translation
+                + eyes["R"].matrix_world.translation) / 2
+    n = cols["L"].col[1].normalized()
+    up = cols["L"].col[2].normalized()
+    add_bone(arm, "face", face_mid, face_mid + up * 0.3, n, "body")
+    for s in "LR":
+        m = eyes[s].matrix_world
+        c, e_n, e_up = m.translation, cols[s].col[1].normalized(), \
+            cols[s].col[2].normalized()
+        add_bone(arm, f"eye.{s}", c, c + e_up * 0.2, e_n, "face")
+        pc = objs[f"Pupil {s}"].matrix_world.translation
+        add_bone(arm, f"pupil.{s}", pc, pc + e_up * 0.12, e_n, f"eye.{s}")
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    parents = {"Clip body": "body", "Handle front": "handle.front",
+               "Handle back": "handle.back", "Smile": "face",
+               "Eye L": "eye.L", "Eye R": "eye.R",
+               "Pupil L": "pupil.L", "Pupil R": "pupil.R",
+               "Glint L": "pupil.L", "Glint R": "pupil.R"}
+    for name, bone in parents.items():
+        obj = objs.get(name)
+        if obj is None:
+            continue
+        keep = obj.matrix_world.copy()
+        obj.parent = arm
+        obj.parent_type = "BONE"
+        obj.parent_bone = bone
+        bpy.context.view_layer.update()
+        obj.matrix_world = keep  # rest pose stays exactly the still
+    for pb in arm.pose.bones:
+        pb.rotation_mode = "XYZ"
+    bpy.context.view_layer.update()
+    return arm
+
+
+def animate(arm):
+    scene = bpy.context.scene
+    scene.render.fps = FPS
+    scene.frame_start, scene.frame_end = 1, LOOP
+    for bone, prop, axis, keys in ANIM:
+        pb = arm.pose.bones[bone]
+        for frame, value in keys:
+            vec = getattr(pb, prop)
+            vec[axis] = math.radians(value) if prop == "rotation_euler" \
+                else value
+            pb.keyframe_insert(prop, index=axis, frame=frame)
+            vec[axis] = 0.0 if prop != "scale" else 1.0
+    action = arm.animation_data.action
+    bag = anim_utils.action_get_channelbag_for_slot(
+        action, arm.animation_data.action_slot)
+    for fc in bag.fcurves:
+        # Cycles first, so Blender computes the auto handles cyclically:
+        # the tangent leaving frame 73 matches the one entering frame 1.
+        fc.modifiers.new("CYCLES")
+        for kp in fc.keyframe_points:
+            kp.interpolation = "BEZIER"
+            kp.handle_left_type = kp.handle_right_type = "AUTO_CLAMPED"
+        fc.update()
+    scene.frame_set(1)
+
+
+def loop_extents(cam, meshes):
+    """Worst-case NDC box of the subject over the loop (0..1 is in frame)."""
+    scene = bpy.context.scene
+    lo, hi = [9.0, 9.0], [-9.0, -9.0]
+    for f in range(1, LOOP + 1, 2):
+        scene.frame_set(f)
+        dg = bpy.context.evaluated_depsgraph_get()
+        for o in meshes:
+            ev = o.evaluated_get(dg)
+            mw = ev.matrix_world
+            verts = ev.data.vertices
+            for i in range(0, len(verts), 7):
+                v = verts[i]
+                c = world_to_camera_view(scene, cam, mw @ v.co)
+                lo = [min(lo[0], c.x), min(lo[1], c.y)]
+                hi = [max(hi[0], c.x), max(hi[1], c.y)]
+    scene.frame_set(1)
+    return lo, hi
+
+
 # ---------------------------------------------------------------- staging
 
 def area_light(name, loc, target, energy, size, colour=(1, 1, 1)):
@@ -359,7 +521,7 @@ def clear_scene():
     for coll in list(bpy.data.collections):
         bpy.data.collections.remove(coll)
     for block in (bpy.data.meshes, bpy.data.curves, bpy.data.lights,
-                  bpy.data.cameras):
+                  bpy.data.cameras, bpy.data.armatures, bpy.data.actions):
         for item in list(block):
             block.remove(item)
 
@@ -424,17 +586,41 @@ def render(cam, path: str, size: int, samples: int) -> None:
     print(f"[clip] rendered {path} with {scene.render.engine}")
 
 
+def render_loop(cam, folder: str, samples: int) -> None:
+    scene = bpy.context.scene
+    scene.camera = cam
+    scene.render.resolution_x = scene.render.resolution_y = 512
+    scene.render.engine = "BLENDER_EEVEE"
+    scene.eevee.taa_render_samples = samples
+    os.makedirs(folder, exist_ok=True)
+    scene.render.filepath = folder + "####"
+    bpy.ops.render.render(animation=True)
+    print(f"[clip] rendered loop frames {scene.frame_start}..{scene.frame_end}")
+
+
 def main() -> None:
+    args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    subjects = build(ICON)
-    icon_cam = framed_camera("Icon camera", ICON, subjects)
-    render(icon_cam, f"{OUT_DIR}/clip-mascot-128.png", 128, 64)
+    if "--anim-only" not in args:
+        subjects = build(ICON)
+        icon_cam = framed_camera("Icon camera", ICON, subjects)
+        render(icon_cam, f"{OUT_DIR}/clip-mascot-128.png", 128, 64)
 
     subjects = build(HERO)
-    hero_cam = framed_camera("Hero camera", HERO, subjects)
-    render(hero_cam, f"{OUT_DIR}/clip-512.png", 512, 128)
+    hero_cam = framed_camera("Hero camera", HERO, subjects)  # framed at rest
+    coll = bpy.data.collections["Clip mascot"]
+    arm = rig(coll)
+    animate(arm)
+    lo, hi = loop_extents(hero_cam, subjects)
+    print(f"[clip] loop extents x {lo[0]:.3f}..{hi[0]:.3f} "
+          f"y {lo[1]:.3f}..{hi[1]:.3f} (must stay inside 0..1)")
+    if "--anim-only" not in args:
+        render(hero_cam, f"{OUT_DIR}/clip-512.png", 512, 128)
+    if "--no-anim" not in args:
+        render_loop(hero_cam, f"{OUT_DIR}/anim/", 64)
 
+    bpy.context.scene.frame_set(1)
     for obj in bpy.data.objects:
         obj.select_set(False)
     bpy.context.view_layer.objects.active = None
