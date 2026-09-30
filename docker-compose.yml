@@ -124,6 +124,11 @@ services:
       # Tool-call instrumentation (off | meta | full) into ffb_tool_calls.
       QA_LOG: ${QA_LOG:-off}
       QA_LOG_STDERR: ${QA_LOG_STDERR:-}
+      # Embeddings for similarity search (needs QA_LOG on, pgvector, migration
+      # 0012). Authenticates with GPU_API_KEY below.
+      QA_EMBEDDINGS: ${QA_EMBEDDINGS:-off}
+      QA_EMBED_BASE_URL: ${QA_EMBED_BASE_URL:-https://blender-mcp.gpu.supported.systems/v1}
+      QA_EMBED_MODEL: ${QA_EMBED_MODEL:-mxbai-embed-large}
       # Phase G — OAuth backend selection. ``authentik`` (default) requires the
       # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
       # against the USERS dict (local dev only).
@@ -276,6 +281,11 @@ services:
       # Tool-call instrumentation (off | meta | full) into ffb_tool_calls.
       QA_LOG: ${QA_LOG:-off}
       QA_LOG_STDERR: ${QA_LOG_STDERR:-}
+      # Embeddings for similarity search (needs QA_LOG on, pgvector, migration
+      # 0012). Authenticates with GPU_API_KEY below.
+      QA_EMBEDDINGS: ${QA_EMBEDDINGS:-off}
+      QA_EMBED_BASE_URL: ${QA_EMBED_BASE_URL:-https://blender-mcp.gpu.supported.systems/v1}
+      QA_EMBED_MODEL: ${QA_EMBED_MODEL:-mxbai-embed-large}
       # Phase G — OAuth backend selection. ``authentik`` (default) requires the
       # AUTHENTIK_* vars below. ``inmemory`` falls back to BlenderMCPOAuthProvider
       # against the USERS dict (local dev only).

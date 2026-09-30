@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from fastmcp import Context
 from fastmcp.contrib.mcp_mixin import MCPMixin, mcp_tool
@@ -54,7 +54,7 @@ class _Unknown:
 UNKNOWN = _Unknown()
 
 
-def _parse_category(raw: Optional[str]):
+def _parse_category(raw: str | None):
     """Returns None (no value given), UNKNOWN (bad value), or the enum."""
     if raw is None:
         return None
@@ -64,7 +64,7 @@ def _parse_category(raw: Optional[str]):
         return UNKNOWN
 
 
-def _parse_status(raw: Optional[str]):
+def _parse_status(raw: str | None):
     """Returns None (no value given), UNKNOWN (bad value), or the enum."""
     if raw is None:
         return None
@@ -77,7 +77,7 @@ def _parse_status(raw: Optional[str]):
 LINKED_CALLS_MAX = 20
 
 
-async def _link_recent_calls(ctx: Any, feedback_id: str) -> Optional[int]:
+async def _link_recent_calls(ctx: Any, feedback_id: str) -> int | None:
     """Attach the caller's recent tool calls to a feedback row.
 
     Only when QA instrumentation is on (QA_LOG=meta/full). Returns the number
@@ -98,6 +98,26 @@ async def _link_recent_calls(ctx: Any, feedback_id: str) -> Optional[int]:
         return None
 
 
+def _record_submitted(ctx: Any, row: Any, user_id: str | None) -> None:
+    """A ``feedback.submitted`` event, so the report gets embedded (with
+    QA_EMBEDDINGS on) and ``similar_feedback(ref)`` can find related reports,
+    errors and chat text. Only when QA instrumentation is on; never raises.
+    """
+    try:
+        mw = getattr(getattr(ctx, "fastmcp", None), "qa_middleware", None)
+        if mw is None:
+            return
+        mw.record_event(
+            "feedback.submitted",
+            key=row.id,
+            attrs={"title": row.title, "description": row.body, "type": row.category.value},
+            user_sub=user_id,
+        )
+    except Exception:  # recording is best-effort
+        logger.warning("recording feedback.submitted for %s failed", getattr(row, "id", None),
+                       exc_info=True)
+
+
 _VALID_CATEGORIES = [c.value for c in FeedbackCategory]
 _VALID_STATUSES = [s.value for s in FeedbackStatus]
 
@@ -116,9 +136,9 @@ class BlenderFeedbackComponent(MCPMixin):
         title: str,
         body: str,
         category: str = "friction",
-        context: Optional[dict] = None,
-        submitter_client_uuid: Optional[str] = None,
-        submitter_client_label: Optional[str] = None,
+        context: dict | None = None,
+        submitter_client_uuid: str | None = None,
+        submitter_client_label: str | None = None,
         ctx: Context = None,
     ) -> str:
         """Record structured feedback about the tool surface.
@@ -190,7 +210,7 @@ class BlenderFeedbackComponent(MCPMixin):
                     body=body,
                     context=context or {},
                 )
-        except Exception as exc:
+        except Exception:
             # Defense-in-depth: even with values_callable on the enum
             # column, any future schema mismatch or DB-level failure
             # would previously dump SQLAlchemy's full error including
@@ -207,6 +227,7 @@ class BlenderFeedbackComponent(MCPMixin):
             })
 
         linked = await _link_recent_calls(ctx, row.id)
+        _record_submitted(ctx, row, user_id)
         out = {
             "status": "ok",
             "id": row.id,
@@ -250,8 +271,8 @@ class BlenderFeedbackComponent(MCPMixin):
     @mcp_tool()
     async def list_feedback(
         self,
-        category: Optional[str] = None,
-        status: Optional[str] = None,
+        category: str | None = None,
+        status: str | None = None,
         mine_only: bool = False,
         limit: int = LIST_LIMIT_DEFAULT,
         ctx: Context = None,

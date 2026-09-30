@@ -35,7 +35,7 @@ dependencies = [
     "asyncpg>=0.30.0",         # async driver for runtime
     "psycopg[binary]>=3.2.3",  # sync driver used by alembic at migration time
     "alembic>=1.14.0",
-    "fastmcp-feedback[instrumentation]==2026.9.29",
+    "fastmcp-feedback[instrumentation,embeddings]==2026.9.30",
     "shapely==2.1.2",
     "minio==7.2.20",
     # In-Blender chat: Fernet for stored provider keys, httpx for the

@@ -37,11 +37,14 @@ if db_url:
 # fastmcp-feedback's tool-call instrumentation tables (ffb_*) live in the
 # same database and are migrated here, since the package never creates
 # tables when handed our engine.
-from fastmcp_feedback.instrumentation import build_metadata as _ffb_metadata  # noqa: E402
+from fastmcp_feedback.instrumentation import build_metadata as _ffb_metadata
 
-from blender_mcp.instrumentation import FFB_TABLE_PREFIX  # noqa: E402
+from blender_mcp.instrumentation import FFB_EMBEDDING_DIM, FFB_TABLE_PREFIX
 
-target_metadata = [Base.metadata, _ffb_metadata(prefix=FFB_TABLE_PREFIX)]
+target_metadata = [
+    Base.metadata,
+    _ffb_metadata(prefix=FFB_TABLE_PREFIX, embedding_dim=FFB_EMBEDDING_DIM),
+]
 
 # Tables owned by external libraries that live in the same DB but aren't
 # part of our SQLAlchemy models. Autogenerate would otherwise try to drop
@@ -53,9 +56,7 @@ _EXTERNALLY_MANAGED_TABLES = {
 
 def _include_object(obj, name, type_, reflected, compare_to):
     """Exclude externally-managed tables from autogenerate."""
-    if type_ == "table" and name in _EXTERNALLY_MANAGED_TABLES:
-        return False
-    return True
+    return not (type_ == "table" and name in _EXTERNALLY_MANAGED_TABLES)
 
 
 def run_migrations_offline() -> None:

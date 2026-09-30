@@ -10,6 +10,16 @@
 ``QA_LOG_STDERR`` (truthy) additionally writes each record as a JSON line to
 stderr, so it lands in ``docker logs``.
 
+``QA_EMBEDDINGS`` (truthy, off by default) adds an EmbeddingSink next to the
+database sink: feedback reports, failed calls, event text and chat LLM text
+are embedded off the call path into ``ffb_embeddings`` (migration 0012, needs
+pgvector) for ``mw.similar()`` / ``mw.similar_feedback()``. The embedder is
+the OpenAI-compatible ``QA_EMBED_BASE_URL`` with ``QA_EMBED_MODEL``,
+authenticated with ``GPU_API_KEY`` (the same key the chat's gpu backend uses).
+
+Chat LLM prompts and completions are captured (``capture_llm_text``) whenever
+instrumentation is on; the package redacts and truncates them.
+
 Redaction of secrets (bearer tokens, ``bmcp_`` access tokens, JWTs,
 ``*_token``/``*_secret`` keys) in arguments, results, errors and hook output
 is on by default in the package.
@@ -27,6 +37,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 FFB_TABLE_PREFIX = "ffb_"
+# Vector size of ffb_embeddings (migration 0012): mxbai-embed-large.
+FFB_EMBEDDING_DIM = 1024
+DEFAULT_EMBED_BASE_URL = "https://blender-mcp.gpu.supported.systems/v1"
+DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 
 # Never record payloads for these, even at full: their arguments carry
 # arbitrary Python (execute_code, and submit which wraps it) or their
@@ -161,6 +175,25 @@ def _result_head(result: Any) -> str:
     return ""
 
 
+def embedding_sink(database_sink: Any) -> Any:
+    """An EmbeddingSink over ``database_sink`` when QA_EMBEDDINGS is on, else None."""
+    if not _truthy("QA_EMBEDDINGS"):
+        return None
+    api_key = (os.getenv("GPU_API_KEY") or "").strip() or None
+    if api_key is None:
+        logger.warning("QA_EMBEDDINGS is on but GPU_API_KEY is unset; embeddings stay off")
+        return None
+    from fastmcp_feedback.instrumentation import EmbeddingSink, OpenAIEmbedder
+
+    embedder = OpenAIEmbedder(
+        base_url=(os.getenv("QA_EMBED_BASE_URL") or DEFAULT_EMBED_BASE_URL).strip(),
+        api_key=api_key,
+        model=(os.getenv("QA_EMBED_MODEL") or DEFAULT_EMBED_MODEL).strip(),
+        dim=FFB_EMBEDDING_DIM,
+    )
+    return EmbeddingSink(embedder, database_sink)
+
+
 def install(server: Any) -> Any:
     """Add the instrumentation middleware to ``server`` if QA_LOG enables it.
 
@@ -175,7 +208,11 @@ def install(server: Any) -> Any:
 
     from .storage import get_engine
 
-    sinks = [DatabaseSink(get_engine(), prefix=FFB_TABLE_PREFIX)]
+    db = DatabaseSink(get_engine(), prefix=FFB_TABLE_PREFIX, embedding_dim=FFB_EMBEDDING_DIM)
+    sinks: list[Any] = [db]
+    embed = embedding_sink(db)
+    if embed is not None:
+        sinks.append(embed)
     if _truthy("QA_LOG_STDERR"):
         sinks.append(JsonLinesSink(sys.stderr))
     mw = instrument(
@@ -186,8 +223,11 @@ def install(server: Any) -> Any:
         identity_resolver=identify,
         enricher=enrich,
         server_version=SERVER_VERSION,
+        capture_llm_text=True,
     )
-    logger.info("Tool-call instrumentation on (QA_LOG=%s, table %stool_calls)", mode, FFB_TABLE_PREFIX)
+    logger.info("Tool-call instrumentation on (QA_LOG=%s, table %stool_calls, embeddings %s)",
+                mode, FFB_TABLE_PREFIX,
+                f"{embed.embedder.model} at {embed.embedder.base_url}" if embed else "off")
     return mw
 
 
