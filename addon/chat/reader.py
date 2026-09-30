@@ -96,6 +96,9 @@ def turns(messages: list) -> list[dict]:
 
 
 def turn_seconds(turn: dict) -> float | None:
+    took = (turn.get("user") or {}).get("took_s")
+    if isinstance(took, (int, float)) and took > 0:
+        return float(took)
     total = sum(s.get("ms") or 0 for s in turn["steps"] if isinstance(s.get("ms"), (int, float)))
     return total / 1000.0 if total else None
 

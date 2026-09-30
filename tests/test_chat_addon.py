@@ -87,6 +87,20 @@ def test_unfinished_tool_marked_failed_and_late_result_ignored():
     assert all(m["text"] != "late reply" for m in st.messages)
 
 
+def test_reply_header_uses_wall_time_not_tool_sum(monkeypatch):
+    from addon.chat import reader
+
+    clock = iter([100.0, 172.5])  # begin_turn, then finish_turn
+    monkeypatch.setattr(chat_mod.time, "monotonic", lambda: next(clock))
+    st = ChatState()
+    st.begin_turn("make it glow")
+    st.apply_event({"t": "tool", "name": "execute_code", "phase": "start"})
+    st.apply_event({"t": "tool", "name": "execute_code", "phase": "end", "ok": True, "ms": 410})
+    st.finish_turn(st.turn, "assistant", "Done.")
+    turn = reader.turns(st.messages)[-1]
+    assert reader.reply_header(turn) == "Claude · 1 step · 1m 12s"
+
+
 # --- history -----------------------------------------------------------------
 
 def test_history_is_text_turns_only_and_bounded():
@@ -183,6 +197,13 @@ def test_approval_preview_strips_prefix_and_counts_cut_lines():
     lines, cut = approval_preview(prompt, max_lines=8)
     assert lines[0] == "run this Python?"
     assert len(lines) == 8 and cut == 5
+
+
+def test_approval_preview_collapses_blank_runs():
+    prompt = "BlenderMCP approval: run this Python?\n\n\n\nimport bpy\n\n\n# glow\nx = 1"
+    lines, cut = approval_preview(prompt, max_lines=8)
+    assert lines == ["run this Python?", "", "import bpy", "", "# glow", "x = 1"]
+    assert cut == 0
 
 
 @pytest.fixture

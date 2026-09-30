@@ -402,6 +402,14 @@ class ChatState:
             self.status = ""
             self.inflight = None
             self.revision += 1
+            # Wall time for the reply header, approval waits included. Summing
+            # the tool steps instead reported a minute-long turn as "1.16 s".
+            if self.turn_started_at is not None:
+                took = round(time.monotonic() - self.turn_started_at, 1)
+                for entry in reversed(self.messages):
+                    if entry.get("role") == "user" and entry.get("turn") == turn:
+                        entry["took_s"] = took
+                        break
             for entry in self.messages:
                 if entry.get("turn") == turn and entry.get("streaming"):
                     entry["streaming"] = False
@@ -470,7 +478,13 @@ class ChatState:
 def approval_preview(prompt: str, max_lines: int = 8) -> tuple[list[str], int]:
     """Lines of an approval prompt worth showing in the panel, and how many were cut."""
     body = prompt.removeprefix(APPROVAL_PREFIX)
-    lines = [ln.rstrip() for ln in body.lstrip(" ").strip("\n").splitlines()]
+    lines: list[str] = []
+    for ln in body.lstrip(" ").strip("\n").splitlines():
+        ln = ln.rstrip()
+        # Model code often opens with blank lines; in an 8-line preview each
+        # one pushes a real line into the "more in the Reader" count.
+        if ln or (lines and lines[-1]):
+            lines.append(ln)
     if not lines:
         return [], 0
     return lines[:max_lines], max(0, len(lines) - max_lines)
