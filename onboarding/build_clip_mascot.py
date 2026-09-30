@@ -341,6 +341,26 @@ ANIM = [
 ]
 
 
+# The "thinking" loop for the add-on's chat panel, on the icon pose: the
+# pupils drift up and aside and hold there, the front handle taps three
+# times like drumming fingers, the body sways a little, one slow blink.
+# Rendered every THINK_STEP frames, so the add-on plays 16 frames at 8 fps.
+THINK_LOOP = 48
+THINK_STEP = 3
+THINK = [
+    ("pupil.L", "location", 0, [(1, 0), (7, 0.07), (41, 0.07), (49, 0)]),
+    ("pupil.R", "location", 0, [(1, 0), (7, 0.07), (41, 0.07), (49, 0)]),
+    ("pupil.L", "location", 1, [(1, 0), (7, 0.06), (41, 0.06), (49, 0)]),
+    ("pupil.R", "location", 1, [(1, 0), (7, 0.06), (41, 0.06), (49, 0)]),
+    ("handle.front", "rotation_euler", 1, [(1, 0), (10, 0), (13, 9), (16, 0),
+                                           (19, 9), (22, 0), (25, 9), (28, 0),
+                                           (49, 0)]),
+    ("body", "rotation_euler", 2, [(1, 0), (13, 1.8), (37, -1.8), (49, 0)]),
+    ("eye.L", "scale", 1, [(1, 1), (31, 1), (34, 0.1), (37, 1), (49, 1)]),
+    ("eye.R", "scale", 1, [(1, 1), (31, 1), (34, 0.1), (37, 1), (49, 1)]),
+]
+
+
 def add_bone(arm, name, head, tail, z_axis, parent=None, inherit_scale="FULL"):
     eb = arm.data.edit_bones.new(name)
     eb.head, eb.tail = head, tail
@@ -411,11 +431,11 @@ def rig(coll):
     return arm
 
 
-def animate(arm):
+def animate(arm, tracks=None, loop=LOOP):
     scene = bpy.context.scene
     scene.render.fps = FPS
-    scene.frame_start, scene.frame_end = 1, LOOP
-    for bone, prop, axis, keys in ANIM:
+    scene.frame_start, scene.frame_end = 1, loop
+    for bone, prop, axis, keys in (ANIM if tracks is None else tracks):
         pb = arm.pose.bones[bone]
         for frame, value in keys:
             vec = getattr(pb, prop)
@@ -437,11 +457,11 @@ def animate(arm):
     scene.frame_set(1)
 
 
-def loop_extents(cam, meshes):
+def loop_extents(cam, meshes, loop=LOOP):
     """Worst-case NDC box of the subject over the loop (0..1 is in frame)."""
     scene = bpy.context.scene
     lo, hi = [9.0, 9.0], [-9.0, -9.0]
-    for f in range(1, LOOP + 1, 2):
+    for f in range(1, loop + 1, 2):
         scene.frame_set(f)
         dg = bpy.context.evaluated_depsgraph_get()
         for o in meshes:
@@ -586,10 +606,11 @@ def render(cam, path: str, size: int, samples: int) -> None:
     print(f"[clip] rendered {path} with {scene.render.engine}")
 
 
-def render_loop(cam, folder: str, samples: int) -> None:
+def render_loop(cam, folder: str, samples: int, size: int = 512, step: int = 1) -> None:
     scene = bpy.context.scene
     scene.camera = cam
-    scene.render.resolution_x = scene.render.resolution_y = 512
+    scene.render.resolution_x = scene.render.resolution_y = size
+    scene.frame_step = step
     scene.render.engine = "BLENDER_EEVEE"
     scene.eevee.taa_render_samples = samples
     os.makedirs(folder, exist_ok=True)
@@ -601,6 +622,18 @@ def render_loop(cam, folder: str, samples: int) -> None:
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     os.makedirs(OUT_DIR, exist_ok=True)
+
+    if "--think-only" in args:
+        # Only the add-on's thinking frames; leaves the hero scene alone.
+        subjects = build(ICON)
+        icon_cam = framed_camera("Icon camera", ICON, subjects)
+        arm = rig(bpy.data.collections["Clip mascot"])
+        animate(arm, THINK, THINK_LOOP)
+        lo, hi = loop_extents(icon_cam, subjects, THINK_LOOP)
+        print(f"[clip] think extents x {lo[0]:.3f}..{hi[0]:.3f} "
+              f"y {lo[1]:.3f}..{hi[1]:.3f} (must stay inside 0..1)")
+        render_loop(icon_cam, f"{OUT_DIR}/think/", 32, size=128, step=THINK_STEP)
+        return
 
     if "--anim-only" not in args:
         subjects = build(ICON)

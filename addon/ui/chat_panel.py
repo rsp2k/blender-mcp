@@ -16,7 +16,7 @@ import bpy
 from .. import connection, state
 from ..chat import clip, reader
 from ..chat.state import approval_preview, chat_state, wrap_text
-from .icons import icon_id
+from .icons import ensure_thinking_timer, icon_id, think_frame
 
 PREVIEW_LINES = 8
 REPLY_LINES = 6
@@ -144,7 +144,21 @@ def _draw_turn(layout, context, snap, wrap) -> None:
             elapsed = f"  {int(_time.monotonic() - snap['turn_started_at'])}s"
         n = len(turn["steps"])
         steps = f" · step {n}" if n else ""
-        col.label(text=f"{snap['status'] or 'Working…'}{steps}{elapsed}", icon='SORTTIME')
+        status = f"{snap['status'] or 'Working…'}{steps}{elapsed}"
+        # Redraw on a timer while the turn runs: it plays Clip's thinking loop
+        # and ticks the seconds. Started even before a frame is ready, since
+        # previews load lazily and report icon 0 until a later redraw.
+        ensure_thinking_timer()
+        frame = think_frame(_time.monotonic())
+        if frame:
+            row = col.row(align=True)
+            row.template_icon(icon_value=frame, scale=2.2)
+            text = row.column(align=True)
+            text.separator(factor=1.4)
+            for line in wrap(status, reserve=90.0)[:2]:
+                text.label(text=line)
+        else:
+            col.label(text=status, icon='SORTTIME')
         live = next((r for r in reversed(turn["replies"]) if r.get("streaming")), None)
         if live and (live.get("text") or "").strip():
             # The newest lines of the reply as it streams (it grows downward).
