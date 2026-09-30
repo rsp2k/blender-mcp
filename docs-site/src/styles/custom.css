@@ -1,14 +1,21 @@
-/* BlenderMCP docs — teal accent palette.
- * Hand-tuned, NO purple anywhere. Mobile-first refinements at the bottom. */
+/* BlenderMCP docs: teal accent palette, hand-tuned, no purple.
+ * Mobile-first refinements at the bottom. */
 
+/* Theme colours. Starlight keeps its own palette inside @layer starlight.base,
+ * and this file is unlayered, so anything set here beats Starlight in BOTH
+ * themes. That is why each theme needs a complete set: dark values on :root,
+ * light values on :root[data-theme='light'] (more specific, so it wins when
+ * the light theme is active). Setting only the grays on :root once left light
+ * mode with light-theme accents on dark backgrounds. */
+
+/* Dark theme (Starlight's default). */
 :root {
-	/* Teal primary — picked to read well on both light and dark surfaces.
-	 * Derived from #2bb3a4 with HSL shifts for each Starlight tier. */
+	/* Teal primary, derived from #2bb3a4. */
 	--sl-color-accent-low: #0b3b36;
 	--sl-color-accent: #2bb3a4;
 	--sl-color-accent-high: #9be5dd;
 
-	/* Tighten the neutral grays a hair toward cool — pairs well with the teal. */
+	/* Neutral grays nudged cool to sit with the teal. */
 	--sl-color-white: #ffffff;
 	--sl-color-gray-1: #eef2f3;
 	--sl-color-gray-2: #c4cdd1;
@@ -17,19 +24,46 @@
 	--sl-color-gray-5: #353f44;
 	--sl-color-gray-6: #232a2e;
 	--sl-color-black: #16191c;
+
+	/* Starlight paints every other Card and the "tip" aside with its purple
+	 * scale. Point that hue at a blue-cyan instead; both themes derive their
+	 * purple shades from this one variable. */
+	--sl-hue-purple: 192;
 }
 
-/* Light theme overrides — accent stays teal, just shifted darker for contrast */
+/* Light theme. Same hues, scale inverted. Contrast on white: body text
+ * (gray-2) 11:1, muted text (gray-3) 7:1, accent links and white on accent 5.2:1, and gray-3 on
+ * the gray-6 surfaces still 6:1. */
 :root[data-theme='light'] {
 	--sl-color-accent-low: #c8efe9;
 	--sl-color-accent: #0f7a6d;
 	--sl-color-accent-high: #064a42;
+
+	--sl-color-white: #16191c;
+	--sl-color-gray-1: #232a2e;
+	--sl-color-gray-2: #353f44;
+	--sl-color-gray-3: #4f5a60;
+	--sl-color-gray-4: #7d898f;
+	--sl-color-gray-5: #c4cdd1;
+	--sl-color-gray-6: #e9eef0;
+	--sl-color-gray-7: #f4f7f8;
+	--sl-color-black: #ffffff;
 }
 
 /* Card / surface tweaks — subtle teal-tinted shadow on hover */
 .card a:hover,
 a.card:hover {
 	border-color: var(--sl-color-accent);
+}
+
+/* Splash hero: Starlight's default block padding left a tall empty band
+ * between the hero and the first paragraph. */
+.hero {
+	padding-block: clamp(2rem, 5vw, 3.5rem) 1rem;
+}
+.clip-hero img {
+	width: min(20rem, 100%);
+	height: auto;
 }
 
 /* Mobile-first refinement: a bit more breathing room around the hero on
@@ -53,4 +87,10 @@ a.card:hover {
 .sidebar-content a[aria-current='page'] {
 	color: var(--sl-color-accent);
 	font-weight: 600;
+}
+
+/* Mascot credit under the Overview intro. */
+.clip-credit {
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
 }
