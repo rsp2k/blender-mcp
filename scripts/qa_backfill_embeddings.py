@@ -66,7 +66,9 @@ async def main() -> None:
             items.append(EmbeddingText("feedback", r.id, body))
     print(f"backfill: {len(errors)} errors, {len(feedback)} feedback -> {len(items)} texts")
 
-    written = 0
+    count_sql = text("select count(*) from ffb_embeddings")
+    async with engine.connect() as conn:
+        before = (await conn.execute(count_sql)).scalar_one()
     for i in range(0, len(items), BATCH):
         batch = items[i:i + BATCH]
         vectors = await embedder.embed([t.text for t in batch])
@@ -77,9 +79,11 @@ async def main() -> None:
             "created_at": now, "embedding": "[" + ",".join(f"{x:.7g}" for x in v) + "]",
         } for t, v in zip(batch, vectors, strict=True)]
         async with engine.begin() as conn:
-            res = await conn.execute(INSERT_SQL, rows)
-            written += res.rowcount or 0
-    print(f"backfill: wrote {written} new embeddings")
+            await conn.execute(INSERT_SQL, rows)
+    async with engine.connect() as conn:
+        after = (await conn.execute(count_sql)).scalar_one()
+    # asyncpg reports -1 rows for batched inserts, so count the table instead.
+    print(f"backfill: wrote {after - before} new embeddings ({after} in total)")
     await engine.dispose()
 
 
