@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -101,12 +102,92 @@ _USAGE_ATTRS = ("cache_read_input_tokens", "cache_creation_input_tokens",
                 "advisor_calls", "advisor_input_tokens", "advisor_output_tokens")
 
 
+# Bounds for the text given to record_llm_call. The middleware redacts and
+# truncates again; these keep the work on the call path small.
+PROMPT_MAX_CHARS = 4000
+_TOOL_RESULT_CHARS = 300
+_TOOL_RESULTS_MAX = 8
+# Inline base64 (data URIs, long unbroken runs) never belongs in a record.
+_BASE64_RE = re.compile(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+|[A-Za-z0-9+/]{200,}={0,2}")
+
+
+def _field(obj: Any, name: str) -> Any:
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+def _blocks(content: Any) -> list:
+    if content is None:
+        return []
+    return content if isinstance(content, list) else [content]
+
+
+def _scrub(text: str) -> str:
+    return _BASE64_RE.sub("[base64]", text).strip()
+
+
+_PLACEHOLDERS = frozenset({"[image]", "[audio]"})
+
+
+def _block_text(block: Any) -> str:
+    """A text block's text; images and audio as a placeholder, never their data."""
+    if isinstance(block, str):
+        return _scrub(block)
+    kind = _field(block, "type")
+    if kind == "text":
+        return _scrub(str(_field(block, "text") or ""))
+    if kind in ("image", "audio"):
+        return f"[{kind}]"
+    return ""
+
+
+def _tool_result_text(block: Any) -> str:
+    parts = [_block_text(b) for b in _blocks(_field(block, "content"))]
+    text = " ".join(p for p in parts if p)
+    return text[:_TOOL_RESULT_CHARS]
+
+
+def prompt_text(messages: Any) -> str | None:
+    """What a model call was asked, for ``llm.call``: the user's last turn plus
+    a short summary of the newest tool results. Image and audio data are
+    dropped, inline base64 is masked, and the whole is cut to PROMPT_MAX_CHARS.
+    """
+    try:
+        user_text = ""
+        results: list[str] = []
+        for msg in reversed(list(messages or [])):
+            if _field(msg, "role") != "user":
+                continue
+            texts, tool_results = [], []
+            for block in _blocks(_field(msg, "content")):
+                if _field(block, "type") == "tool_result":
+                    tool_results.append(_tool_result_text(block))
+                else:
+                    texts.append(_block_text(block))
+            if not results:
+                results = [t for t in tool_results if t][:_TOOL_RESULTS_MAX]
+            # The user's own turn: the newest user message with real text.
+            if any(t and t not in _PLACEHOLDERS for t in texts):
+                user_text = "\n".join(t for t in texts if t)
+                break
+        lines = [user_text] if user_text else []
+        if results:
+            lines.append("tool results:")
+            lines.extend(f"- {r}" for r in results)
+        return "\n".join(lines).strip()[:PROMPT_MAX_CHARS] or None
+    except Exception:  # recording must never break a chat turn
+        logger.debug("prompt text extraction failed", exc_info=True)
+        return None
+
+
 def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
-                    error: BaseException | None = None) -> None:
+                    error: BaseException | None = None, messages: Any = None,
+                    completion: str | None = None) -> None:
     """One ``llm.call`` event per completion when QA_LOG is on, keyed by the
     chat turn so a turn's model calls read back together. The event links to
     the enclosing tool call (blender_chat, a vision tool) by itself.
 
+    The prompt (from ``messages``, see prompt_text) and ``completion`` are
+    built and passed only when the middleware has capture_llm_text on.
     Never passes the backend's key or base URL. Never raises.
     """
     try:
@@ -115,6 +196,12 @@ def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
             return
         attrs = {"advisor": backend.advisor or None}
         attrs.update({k: getattr(usage, k, None) for k in _USAGE_ATTRS})
+        prompt = None
+        if getattr(mw, "capture_llm_text", False):
+            prompt = prompt_text(messages)
+            completion = _scrub(completion)[:PROMPT_MAX_CHARS] if completion else None
+        else:
+            completion = None
         mw.record_llm_call(
             model=backend.model,
             provider=backend.provider,
@@ -124,6 +211,8 @@ def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
             error=error,
             key=current_turn.get(),
             attrs={k: v for k, v in attrs.items() if v is not None},
+            prompt=prompt,
+            completion=completion or None,
         )
     except Exception:  # recording must never break a chat turn
         logger.debug("llm.call record failed", exc_info=True)
@@ -198,9 +287,9 @@ class RoutingSamplingHandler:
                 **extra,
             )
         except Exception as e:
-            record_llm_call(backend, t0, error=e)
+            record_llm_call(backend, t0, error=e, messages=messages)
             raise
-        record_llm_call(backend, t0, usage=c.usage)
+        record_llm_call(backend, t0, usage=c.usage, messages=messages, completion=c.text)
         if scope is not None and c.raw and c.tool_calls:
             self.thinking.put(scope, frozenset(t.id for t in c.tool_calls), c.raw)
         return c
