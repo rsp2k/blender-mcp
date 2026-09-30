@@ -12,10 +12,12 @@ def register() -> None:
     global _collection
     import bpy.utils.previews
     _collection = bpy.utils.previews.new()
-    for key, filename in (("binder_clip", "binder-clip.png"), ("clip_mascot", "clip-mascot.png")):
+    for key, filename in (("binder_clip", "binder-clip.png"),
+                          ("binder_clip_full", "binder-clip-full.png"),
+                          ("clip_mascot", "clip-mascot.png")):
         path = os.path.join(ICON_DIR, filename)
         if os.path.exists(path):
-            _collection.load(key, path, 'IMAGE')
+            _ = _collection.load(key, path, 'IMAGE').icon_id  # load now, not on first draw
     # Clip's thinking loop, one icon per frame (think/00.png ...).
     think = os.path.join(ICON_DIR, "think")
     if os.path.isdir(think):

@@ -29,6 +29,8 @@ It writes, under /home/blender/projects/clip-mascot/:
 
 Options after "--": --no-anim skips the 72 loop frames, --anim-only skips
 the icon and still renders (it still rebuilds, rigs and saves the scene).
+--icons renders only the chat input's clip button (input/binder-clip.png,
+input/binder-clip-full.png) for addon/icons/.
 
 Copy them to web/public/img/mascot/clip-512.png,
 addon/icons/clip-mascot.png and onboarding/clip-mascot.blend.
@@ -565,7 +567,8 @@ def build(pose: dict):
     pose_handles(body, handles, pose)
     finish_surfaces(body, handles, mats, pose)
     bpy.context.view_layer.update()
-    make_face(coll, mats, body, pose)
+    if pose.get("face", True):
+        make_face(coll, mats, body, pose)
 
     centre = (0, 0, 1.0)
     area_light("Key", (-3.5, -4.5, 5.0), centre, 900, 4.0)
@@ -617,6 +620,61 @@ def render_loop(cam, folder: str, samples: int, size: int = 512, step: int = 1) 
     scene.render.filepath = folder + "####"
     bpy.ops.render.render(animation=True)
     print(f"[clip] rendered loop frames {scene.frame_start}..{scene.frame_end}")
+
+
+# ---------------------------------------------------------------- input-row icon
+
+# The chat input's attach button. No face: Clip the assistant is already in
+# the header, and this is the tool you clip things with. Empty, it's the bare
+# clip; once something is clipped it grips paper, so the state reads in form.
+# Handles folded lower than Clip's so the body fills more of 16-20 px, and a
+# brighter steel: the mascot's navy vanishes on Blender's dark input row.
+CLIP_ICON = {**ICON, "name": "clip-icon", "face": False, "wire_boost": 0.07,
+             "front": 58.0, "back": 64.0, "rim": 3200,
+             "cam_azimuth": -24.0, "cam_elev": 16.0, "fill": 0.97}
+ICON_STEEL = "#2f5db8"
+PAPER = "#f6f8fb"
+
+
+def add_paper(coll, body, handles):
+    """Two sheets standing in the jaws, peeking out between the handles."""
+    mat = material("Clip paper", PAPER, roughness=0.6, emission=0.45)
+    pts = world_verts(body)
+    top = max(p.z for p in pts)
+    tips = max(max(p.z for p in world_verts(h)) for h in handles)
+    width = CLIP_LENGTH * 0.8
+    rise = (tips - top) * 0.9  # stays under the handle tips: framing unchanged
+    sheets = []
+    for i, (dx, tilt, dy) in enumerate(((-0.08, -7.0, 0.0), (0.12, 5.0, 0.03))):
+        me = bpy.data.meshes.new(f"Paper {i}")
+        h, t = rise + 0.45, 0.012  # 0.45 of it hides inside the jaws
+        x0, x1, z0, z1 = -width / 2, width / 2, top - 0.45, top - 0.45 + h
+        v = [(x, y, z) for z in (z0, z1) for y in (-t, t) for x in (x0, x1)]
+        f = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6),
+             (0, 2, 6, 4), (1, 5, 7, 3)]
+        me.from_pydata(v, [], f)
+        me.materials.append(mat)
+        obj = bpy.data.objects.new(f"Paper {i}", me)
+        link(obj, coll)
+        obj.location = (dx, dy, 0.0)
+        obj.rotation_euler = (0.0, math.radians(tilt), 0.0)
+        sheets.append(obj)
+    bpy.context.view_layer.update()
+    return sheets
+
+
+def render_input_icons(folder: str) -> None:
+    subjects = build(CLIP_ICON)
+    material("Clip steel", ICON_STEEL, metallic=0.7, roughness=0.3, coat=0.6)
+    coll = bpy.data.collections["Clip mascot"]
+    body = bpy.data.objects["Clip body"]
+    handles = [bpy.data.objects["Handle front"], bpy.data.objects["Handle back"]]
+    sheets = add_paper(coll, body, handles)
+    cam = framed_camera("Clip icon camera", CLIP_ICON, subjects + sheets)
+    render(cam, f"{folder}binder-clip-full.png", 128, 64)
+    for obj in sheets:
+        obj.hide_render = True
+    render(cam, f"{folder}binder-clip.png", 128, 64)
 
 
 # ---------------------------------------------------------------- web eyes
@@ -685,6 +743,11 @@ def web_eyes(pose, cam, folder):
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     os.makedirs(OUT_DIR, exist_ok=True)
+
+    if "--icons" in args:
+        # The chat input's clip button, empty and holding paper.
+        render_input_icons(f"{OUT_DIR}/input/")
+        return
 
     if "--eyes-web" in args:
         # The homepage's cursor-following Clip: pupil-less frames + eye data.

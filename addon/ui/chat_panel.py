@@ -14,7 +14,7 @@ import time as _time
 import bpy
 
 from .. import connection, state
-from ..chat import clip, reader
+from ..chat import reader
 from ..chat.state import approval_preview, chat_state, wrap_text
 from .icons import ensure_thinking_timer, icon_id, think_frame
 
@@ -95,12 +95,12 @@ def _draw_model_chip(layout, snap) -> None:
 
 
 def _draw_clip(layout, context) -> None:
-    """The binder clip: an icon button at the start of the input row. It
-    shows a count when something is clipped; the popover says what."""
+    """The binder clip: an icon button at the start of the input row. When
+    something is clipped it grips paper and shows a count; the popover says what."""
     wm = context.window_manager
     n = (len(context.selected_objects) if wm.blendermcp_clip_selection else 0) \
         + int(bool(wm.blendermcp_clip_viewport)) + int(bool(wm.blendermcp_clip_text))
-    ico = icon_id("binder_clip")
+    ico = (n and icon_id("binder_clip_full")) or icon_id("binder_clip")
     kwargs = {"icon_value": ico} if ico else {"icon": 'LINKED'}
     layout.popover("BLENDERMCP_PT_ChatClip", text=str(n) if n else "", **kwargs)
 
