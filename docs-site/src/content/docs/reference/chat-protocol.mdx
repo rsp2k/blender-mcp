@@ -93,7 +93,7 @@ Refusals are `{"status": "error", "error", "detail", "trial"}`, and nothing is s
 | `invalid_argument` | A missing or malformed `model` or `base_url`, or a value that is too long. |
 | `api_key_required` | `provider: "anthropic"` with no key given and none saved. |
 | `secret_key_not_configured` | The server can't store keys (`CHAT_SECRET_KEY` is unset). |
-| `invalid_api_key` | Anthropic answered 401 or 403. `detail` is "Anthropic didn't accept that key. Check it at console.anthropic.com/settings/keys." |
+| `invalid_api_key` | Anthropic answered 401 or 403. `detail` is "Anthropic didn't accept that key. Check it at platform.claude.com/settings/keys." |
 | `key_check_failed` | Anthropic couldn't be reached, didn't answer in time, or answered something other than success or 401/403. `detail` says which. The key may be fine; try again. |
 
 The account's previously saved backend, if any, is left as it was.

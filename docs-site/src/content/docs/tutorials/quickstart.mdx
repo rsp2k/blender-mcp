@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Install the Blender MCP extension, log in, connect Claude to https://mcp.blender.bet/, and watch it change your scene. About ten minutes."
+description: "Install the Blender MCP extension, log in, and ask Claude for a change in Blender's sidebar. Your account starts with a free trial; after that, paste your own Claude API key. About ten minutes."
 sidebar:
   order: 1
 ---
@@ -8,9 +8,9 @@ sidebar:
 import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 import InstallWalkthrough from '../../../components/InstallWalkthrough.astro';
 
-By the end of this page, Claude will read your Blender scene and change it while you watch. You'll add the Blender MCP extension to Blender, log in once through your browser, and point Claude at the hosted server. Nothing runs on your machine except Blender and the client you already use.
+By the end of this page, Claude will change your Blender scene while you watch. You'll add the Blender MCP extension to Blender, log in once through your browser, and type a request in Blender's own sidebar. Nothing else needs installing.
 
-You need Blender 4.2 or newer, a web browser, and an MCP client such as Claude Code, Claude Desktop, or claude.ai. Never used Blender? It's free and takes about ten minutes to install: [Get Blender](/tutorials/get-blender/) walks you through it.
+You need Blender 4.2 or newer and a web browser. Never used Blender? It's free and takes about ten minutes to install: [Get Blender](/tutorials/get-blender/) walks you through it.
 
 ## Install and log in
 
@@ -24,9 +24,60 @@ Do these in Blender. You're done when the BlenderMCP panel reads **Connected · 
 Installed BlenderMCP from a single file in the past? Remove that copy first, as [Install and update the add-on](/how-to/install-addon/#moving-from-an-older-file-based-install) explains, then come back here.
 </Aside>
 
-## Connect your MCP client
+## Ask Claude for a change
 
-Your client connects to the same server as Blender. Use the root address `https://mcp.blender.bet/` exactly as written, with no `/mcp` on the end, and sign in with the same account you used in Blender. The server only shows a client the Blenders logged in as the same person, so a different account finds nothing to talk to.
+Below the connection status in the BlenderMCP tab is the **Chat** panel. New accounts start with a free trial, and the panel shows how much of it is left.
+
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-trial-start.webp" width="245" height="238" alt="The Chat panel on a new account: the model button reading Claude Haiku 4.5 › Fable 5.1, a row reading 100% free left with a Use my own key button, a hint about asking for something in the scene, and the message field." />
+</div>
+
+Click the message field, type this, and press `Enter`:
+
+```text
+What's in my Blender scene?
+```
+
+Claude looks at your scene and describes what's there. On a fresh file that's the default cube, a camera and a light. Now ask for a change:
+
+```text
+Add a sphere next to the cube and make it orange.
+```
+
+Watch the viewport: the sphere appears and turns orange. Each change Claude makes is one `Ctrl+Z` step, and **Undo last chat change** takes back a whole reply at once. If Claude needs to run Python, the panel shows the code first and waits for **Allow** or **Deny**.
+
+[Chat inside Blender](/how-to/chat-in-blender/) covers the rest: clipping objects to a message, the Reader, and choosing a model.
+
+## When the free trial runs out
+
+When the trial is used up, or any time you click **Use my own key**, the panel asks for a Claude API key:
+
+<div class="shot-pair not-content">
+  <figure>
+    <img src="/img/chat/chat-key-box.webp" width="245" height="345" alt="The Chat panel with a box reading Paste your Claude API key to keep chatting, a password field, Get a key and Save key buttons, and a note that the key is sent once to the server and stored encrypted, never saved in Blender." />
+    <figcaption>Paste a key to keep chatting.</figcaption>
+  </figure>
+  <figure>
+    <img src="/img/chat/chat-key-refused.webp" width="245" height="160" alt="The same box after a mistyped key, with the message Anthropic didn't accept that key. Check it at platform.claude.com/settings/keys." />
+    <figcaption>A key that doesn't work is turned away before it's saved.</figcaption>
+  </figure>
+</div>
+
+<Steps>
+
+1. Click **Get a key**. It opens **Settings › API keys** in the Claude Console. Sign in, or create an account if you don't have one, then click **Create key**. The Console shows the key, which starts with `sk-ant-`, only once, so copy it right away.
+
+2. Paste the key into the field in the Chat panel and click **Save key**.
+
+3. The server checks the key with Anthropic before saving it, then the box closes and you can carry on where you left off.
+
+</Steps>
+
+Your key is sent to the server once and stored there encrypted. It is never saved in Blender's preferences or your .blend file, and from then on your requests are billed to your Anthropic account. To remove it, open `Edit › Preferences › Add-ons › Blender MCP` and click **Clear backend** under **Chat backend**.
+
+## Use Claude Code or Claude Desktop too (optional)
+
+The same server works with other MCP clients, which helps when you'd rather drive Blender from the tools you already use. Your client connects to `https://mcp.blender.bet/`, exactly as written with no `/mcp` on the end, and signs in with the same account you used in Blender. The server only shows a client the Blenders logged in as the same person, so a different account finds nothing to talk to.
 
 <Tabs syncKey="mcp-client">
 <TabItem label="Claude Code">
@@ -53,37 +104,13 @@ Start Claude Code, type `/mcp`, pick **blender**, and authenticate. Your browser
 </TabItem>
 </Tabs>
 
-## Your first request
-
-Start a new conversation and ask:
-
-```text
-What's in my Blender scene?
-```
-
-Claude calls the server, the server asks your Blender, and the answer describes what's actually there. On a fresh file that's the default cube, a camera, and a light.
-
-Now ask for a change:
-
-```text
-Add a sphere next to the cube and make it orange.
-```
-
-Watch the viewport. The sphere appears and takes on its new color. If you expand **Activity** under the BlenderMCP panel, it lists each command Claude ran, newest first.
-
-<Aside type="tip" title="Prefer to stay in Blender?">
-In the **BlenderMCP** tab, scroll to the **Chat** panel under the connection status, type the same request, and press the play button. A model does the work in the Blender you typed in, with no other client needed. Before it runs any Python, the panel shows the code with **Allow** and **Deny**. See [Chat inside Blender](/how-to/chat-in-blender/).
-</Aside>
-
-## What just happened
-
-Blender and Claude both signed in to the same server as you. The server keeps a private bus for each account: your Blender joined it as a long-lived client and your Claude session joined as a short-lived one. Each Blender tool Claude called traveled over that bus to the add-on, ran inside Blender, and came back to Claude as an ordinary tool result. [How OAuth isolates buses](/explanation/oauth-buses/) has the details.
+Then ask the same questions as above in that client. These clients use your own Claude plan, not the Chat panel's trial.
 
 ## Next steps
 
 <CardGrid>
-  <LinkCard title="Chat inside Blender" description="Ask for changes in the Chat panel and choose which model does the work." href="/how-to/chat-in-blender/" />
+  <LinkCard title="Chat inside Blender" description="Clip objects to a message, approve Python, undo a reply, choose the model." href="/how-to/chat-in-blender/" />
+  <LinkCard title="Add your own tools" description="Give Claude extra tools, such as a PDF reader, running next to Blender." href="/how-to/tool-servers/" />
+  <LinkCard title="Install and update the add-on" description="One-click updates, and moving off an old single-file install." href="/how-to/install-addon/" />
   <LinkCard title="Use it from CI or scripts" description="Personal access tokens for jobs that can't open a browser." href="/how-to/ci-and-scripts/" />
-  <LinkCard title="Dispatch tools" description="Every tool a client can call on your Blender." href="/reference/dispatch-tools/" />
-  <LinkCard title="Architecture" description="How the server, the add-on, and clients fit together." href="/explanation/architecture/" />
 </CardGrid>

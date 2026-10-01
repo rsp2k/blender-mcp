@@ -48,7 +48,7 @@ USER_KEY = "sk-ant-user-" + "u" * 24
 ENDED_HINT = ("Your free trial is used up. Paste your Claude API key in the "
               "Chat panel to keep going.")
 INVALID_DETAIL = ("Anthropic didn't accept that key. Check it at "
-                  "console.anthropic.com/settings/keys.")
+                  "platform.claude.com/settings/keys.")
 BUDGET = 0.05
 FRESH = {"unit": "usd", "limit": BUDGET, "used": 0.0, "remaining": BUDGET, "percent_left": 100}
 

@@ -205,7 +205,7 @@ def _clean(value: str | None, limit: int, name: str) -> str | None:
 
 
 INVALID_KEY_DETAIL = ("Anthropic didn't accept that key. Check it at "
-                      "console.anthropic.com/settings/keys.")
+                      "platform.claude.com/settings/keys.")
 
 
 async def verify_anthropic_key(api_key: str, transport=None) -> None:
