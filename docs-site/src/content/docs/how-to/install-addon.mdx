@@ -1,123 +1,74 @@
 ---
-title: "Install and upgrade the addon"
-description: "Two install paths: extension repo on Blender 4.2+ (recommended, bundles fastmcp) or legacy Install-from-Disk on 3.2-4.1 (needs pip). How each one gets updates."
+title: "Install and update the add-on"
+description: "Add the Blender MCP extension repository to Blender 4.2 or newer, install the add-on, log in, and get one-click updates from then on. Also covers moving from an older file-based install."
 ---
 
-import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import InstallWalkthrough from '../../../components/InstallWalkthrough.astro';
 
-Two ways to get the BlenderMCP addon into Blender, depending on your version.
+BlenderMCP installs from its own extension repository, so Blender downloads the right build for your computer and tells you when a new version is out. It needs **Blender 4.2 or newer**. On an older Blender, upgrade Blender first; 4.2 LTS and every release since work.
 
-| Path | Blender | Deps | Updates |
-|---|---|---|---|
-| **Extension repo** | 4.2+ | fastmcp + requests bundled in the zip | One click in `Preferences → Extensions` |
-| **Legacy addon** | 3.2 - 4.1 (or 4.2+ if you prefer) | `pip install fastmcp` into Blender's Python, once | Redownload + reinstall |
+## Install from the repository
 
-If you're on Blender 4.2 or newer, use the extension repo. It's a real one-click install, dependencies come bundled, and Blender itself notifies you when a new release lands on the repo. The legacy path exists for older Blender and for anyone who needs the addon as a plain file (air-gapped installs, custom builds).
+You're done when the BlenderMCP panel reads **Connected · Personal** (step 11).
 
-## Recommended: extension repo (Blender 4.2+)
-
-The repo lives at `https://mcp.blender.bet/install`. Add it once, install "Blender MCP" from it, and every future update surfaces in the extensions manager.
-
-<Steps>
-
-1. Open `Edit → Preferences → Get Extensions`.
-
-2. Click the dropdown at the top-right (three horizontal lines) and pick `Repositories`.
-
-3. Click the `+` to add a new repository. Enter:
-
-   ```
-   https://mcp.blender.bet/install
-   ```
-
-   If you added the repo before, it may read `https://mcp.blender.bet/extensions/index.json`. Both addresses serve the same repo, so there's nothing to change.
-
-   Leave "Check for Updates on Startup" enabled so Blender polls the repo automatically.
-
-4. Back on the `Get Extensions` page, search for `Blender MCP`. It will appear with a tagline and a permissions summary (network access for the OAuth flow, file access for asset downloads).
-
-5. Click `Install`. Blender downloads the extension zip, extracts the bundled wheels, and enables the addon.
-
-6. Open the `BlenderMCP` panel in the 3D viewport sidebar (`N` to toggle it) and click `Login with OAuth (browser)` to authenticate against `mcp.blender.bet`. See the [Quickstart](/tutorials/quickstart/) for the full first-run flow.
-
-</Steps>
+<div class="not-content">
+  <InstallWalkthrough heading="" />
+</div>
 
 <Aside type="note">
-The extension zip is around 65 MB because it bundles fastmcp, requests, and their platform-specific wheels (pydantic-core alone ships as separate binaries per OS/arch). Runtime footprint on your machine is much smaller because Blender extracts only the wheels matching your platform.
+The download is about 22 to 27 MB, depending on your platform, because it bundles the Python packages the add-on needs. The repository publishes a separate build for Windows, macOS (Apple silicon and Intel) and Linux (x64 and ARM), and Blender picks yours, so nothing else needs installing.
 </Aside>
 
-## Legacy: Install-from-Disk (Blender 3.2 - 4.1)
+## What to do next
 
-The pre-extensions install path is a plain single-file addon plus a manual pip step for `fastmcp`.
+- **Chat from the sidebar.** The Chat panel sits in the same BlenderMCP tab, below the connection status. Type a request and Claude works on the scene you have open. See [Chat inside Blender](/how-to/chat-in-blender/).
+- **Connect another MCP client.** Claude Desktop, Claude Code or any MCP client can use the Blender you just connected. The [Quickstart](/tutorials/quickstart/) walks through the first one.
+
+## Updating
+
+When a new version is published, an **Update to** button naming it appears at the top of the BlenderMCP panel. Click it and the add-on downloads the build for your platform, showing a progress bar with a Cancel button in the panel and in Blender's status bar. Once the download matches the repository's checksum, Blender installs it in about a second, reloads the add-on, and it reconnects on its own from your saved login. The status bar says **Updated to** the new version, and no restart is needed. If the repository's cache is turned off or the download fails, Blender's own installer downloads it instead.
+
+<div class="shot-pair not-content">
+  <figure>
+    <img src="/img/update/update-offer.webp" width="245" height="223" loading="lazy" alt="The BlenderMCP panel at version 2026.930.1 with an Update to 2026.930.2 button above the connection status." />
+    <figcaption>A new version is out: one button names it.</figcaption>
+  </figure>
+  <figure>
+    <img src="/img/update/update-done.webp" width="245" height="97" loading="lazy" alt="The panel header now reads 2026.930.2 and Connected, Personal, and Blender's status bar says Updated to 2026.930.2." />
+    <figcaption>A couple of seconds later: new version, still connected.</figcaption>
+  </figure>
+</div>
+
+The same offer appears in `Preferences → Add-ons → Blender MCP` as a box reading, for example, `Addon update available: 2026.930.1 → 2026.930.2`, with an **Update now** button.
+
+You can also update the usual way: `Preferences → Get Extensions → Check for Updates`, then `Update` beside Blender MCP.
+
+The one-click button needs online access turned on in Blender (it offers to turn it on) and works from 2026.926.7 onward. Versions 2026.926.0 to 2026.926.6 had an Update now button that could crash Blender, so the server no longer offers them the update; update those through `Get Extensions` instead.
+
+<Aside type="tip">
+Versions are calendar-based, `YYYY.MDD.N`: `2026.930.2` is the third release on September 30, 2026. Releases before the switch used `1.5.x`.
+</Aside>
+
+## Moving from an older file-based install
+
+Early versions of BlenderMCP installed as a single file through `Preferences → Add-ons → Install`. If yours did, the panel offers **Get** and the version number instead of Update to, and it opens this page, because installing from the repository on top would leave two copies side by side. Move over once:
 
 <Steps>
 
-1. Download the addon source from the [GitHub releases page](https://github.com/rsp2k/blender-mcp/releases). Grab `addon.py` from the latest tag, or clone the repo and use `addon.py` from the root.
+1. Open `Edit → Preferences → Add-ons`, find **Blender MCP**, expand it, and click `Remove`.
 
-2. In Blender, open `Edit → Preferences → Add-ons → Install...` and select the `addon.py` file. Blender copies it into your scripts directory and lists it under "Blender MCP" in the addon browser.
+2. Restart Blender.
 
-3. Enable the checkbox next to "Interface: Blender MCP."
-
-4. Install fastmcp into the Python that Blender uses. From a terminal:
-
-   <Tabs syncKey="os">
-   <TabItem label="Linux">
-   ```bash
-   /path/to/blender/4.1/python/bin/python3.11 -m pip install fastmcp requests
-   ```
-   </TabItem>
-   <TabItem label="macOS">
-   ```bash
-   /Applications/Blender.app/Contents/Resources/4.1/python/bin/python3.11 \
-       -m pip install fastmcp requests
-   ```
-   </TabItem>
-   <TabItem label="Windows">
-   ```powershell
-   & "C:\Program Files\Blender Foundation\Blender 4.1\4.1\python\bin\python.exe" `
-       -m pip install fastmcp requests
-   ```
-   </TabItem>
-   </Tabs>
-
-   To find the right python path from inside Blender, open the Python console (`Scripting` workspace) and run:
-
-   ```python
-   import sys; print(sys.executable)
-   ```
-
-5. Restart Blender so the newly installed packages are picked up. Open the `BlenderMCP` sidebar panel and log in as in the extension path above.
+3. Follow [Install from the repository](#install-from-the-repository) above, including the login. The old install kept its login in its own preferences, so you sign in once more.
 
 </Steps>
 
-<Aside type="caution">
-The legacy path is also available on Blender 4.2+, but you lose the automatic update flow and the bundled dependencies. Extensions are the direction the platform is moving; there's no reason to pick this on a modern Blender unless you specifically need the single-file addon shape.
-</Aside>
-
-## Upgrading
-
-### Extension path
-
-When the server knows about a newer version, the sidebar and preferences panel show a banner like `Addon update available: 2026.926.0 → 2026.926.1` with an **Update now** button. Clicking it refreshes the Blender MCP repository and downloads the update for your platform, with a progress bar and a Cancel button in the banner. Once the download is verified against the repository's checksum, Blender installs it from its cache in about a second, reloads the addon, and it reconnects on its own from your saved login. If the repository's cache is turned off, or the download fails, Blender's own installer downloads it instead.
-
-You can also update the usual way: `Preferences → Get Extensions → Check for Updates`, then the "Update" button next to Blender MCP.
-
-The one-click button needs online access enabled (Blender offers to turn it on) and works from 2026.926.7 onward. Versions 2026.926.0 through 2026.926.6 had an Update now button that could crash Blender; the server no longer shows them the banner, so update those through `Preferences → Get Extensions` instead.
-
-### Legacy path
-
-When your addon is behind, the same banner appears, but with a "Get the update" button that opens the download page, because installing from the repository would add a second copy next to a single-file install rather than replace it.
-
-Repeat the install steps from above. Blender's addon installer replaces the old `addon.py` in place. If the new version requires a newer `fastmcp`, redo the pip step too. Restart Blender.
-
-<Aside type="tip">
-The version banner is driven by the server sending its known `latest_addon_version` in the `register_client` response envelope. If you don't see the banner, your addon is either current or your server is on an older build that predates the hint (before addon 1.5.17).
-
-Versions are calendar-based, `YYYY.MDD.N`: `2026.926.1` is the second release on September 26, 2026. Releases before the switch used `1.5.x`.
-</Aside>
+From then on, updates arrive through the Update to button.
 
 ## Reference
 
-- [Quickstart](/tutorials/quickstart/) — first authenticated dispatch, once the addon is running
-- [Bus tools](/reference/bus-tools/) — `register_client` shape, including the `server` version-hint envelope
-- [Architecture](/explanation/architecture/) — where the addon sits in the three-tier picture
+- [Quickstart](/tutorials/quickstart/): your first MCP client, once the add-on is connected
+- [Chat inside Blender](/how-to/chat-in-blender/): the sidebar chat, approvals, and choosing a model
+- [Bus tools](/reference/bus-tools/): the `register_client` response, including the version hint that drives the update banner
+- [Architecture](/explanation/architecture/): where the add-on sits between your Blender and the server

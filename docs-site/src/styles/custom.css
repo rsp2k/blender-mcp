@@ -29,6 +29,10 @@
 	 * scale. Point that hue at a blue-cyan instead; both themes derive their
 	 * purple shades from this one variable. */
 	--sl-hue-purple: 192;
+	/* The "note" aside uses the blue scale, whose default hue (234) sits at
+	 * indigo and reads as purple on dark backgrounds. A sky blue keeps it
+	 * apart from the teal accent. */
+	--sl-hue-blue: 205;
 }
 
 /* Light theme. Same hues, scale inverted. Contrast on white: body text
@@ -94,3 +98,16 @@ a.card:hover {
 	font-size: var(--sl-text-sm);
 	color: var(--sl-color-gray-3);
 }
+
+/* Before/after panel captures (UI scale 2, shown at half size so they stay
+   sharp). Top-aligned; stacks on narrow screens. */
+.shot-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 1.25rem;
+  align-items: start;
+  margin-block: 1.25rem;
+}
+.shot-pair figure { margin: 0; display: grid; gap: 0.5rem; justify-items: start; }
+.shot-pair img { width: 100%; max-width: 245px; height: auto; border-radius: 6px; border: 1px solid var(--sl-color-hairline); }
+.shot-pair figcaption { font-size: var(--sl-text-sm); color: var(--sl-color-gray-3); }

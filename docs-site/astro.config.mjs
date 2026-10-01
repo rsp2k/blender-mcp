@@ -49,11 +49,13 @@ export default defineConfig({
       description:
         'Multiple LLM clients collaborating on shared Blender 3D instances over the Model Context Protocol.',
       logo: {
-        src: './src/assets/logo.svg',
-        alt: 'BlenderMCP — connected nodes',
+        src: './src/assets/clip-logo.png',
+        alt: 'Clip, the BlenderMCP mascot',
         replacesTitle: false,
       },
-      favicon: '/favicon.svg',
+      favicon: '/favicon-32.png',
+      // Clip's pupils follow the pointer in the header logo.
+      components: { SiteTitle: './src/components/SiteTitle.astro' },
       customCss: ['./src/styles/custom.css'],
       social: [
         {

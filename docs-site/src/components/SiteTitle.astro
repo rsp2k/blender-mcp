@@ -1,0 +1,31 @@
+---
+// Starlight's site title, with Clip's pupils following the pointer. The still
+// logo shows without JavaScript, with reduced motion, and until the
+// pupil-less render has loaded; then a canvas draws the same Clip with live
+// pupils (see scripts/clip-eyes.ts, shared with the homepage hero).
+import config from 'virtual:starlight/user-config';
+import logo from '../assets/clip-logo.png';
+import './site-title.css';
+
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+const alt = config.logo?.alt ?? 'Clip, the BlenderMCP mascot';
+---
+
+<a href={siteTitleHref} class="site-title sl-flex">
+  <span class="clip-logo" data-clip-logo>
+    <picture>
+      <img src={logo.src} width={logo.width} height={logo.height} alt={alt} />
+    </picture>
+    <canvas hidden width="96" height="96" role="img" aria-label={alt}></canvas>
+  </span>
+  <span class="site-title-text" translate="no">{siteTitle}</span>
+</a>
+
+<script>
+  import data from '../data/clip-logo-eyes.json';
+  import { startClipEyes } from '../scripts/clip-eyes';
+
+  const root = document.querySelector<HTMLElement>('[data-clip-logo]');
+  const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (root && !calm) startClipEyes(root, '/img/logo/clip-logo-eyes.webp', data);
+</script>
