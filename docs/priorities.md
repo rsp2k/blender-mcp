@@ -1,9 +1,8 @@
----
-title: "Priority levels"
-description: "MCP log levels repurposed as job priorities. Eight tiers, lower-int = higher urgency."
----
+# Priority levels
 
-import { Aside } from '@astrojs/starlight/components';
+_MCP log levels repurposed as job priorities. Eight tiers, lower-int = higher urgency._
+
+> Internal note, moved from docs.blender.bet on 2026-10-01. Links to `/reference/...` and `/how-to/...` pages point at https://docs.blender.bet.
 
 Priorities ride on the standard MCP log-level field. The bus uses all eight RFC 5424 levels, mapped 1:1 to integer priorities (0 = highest urgency, 7 = lowest).
 
@@ -60,9 +59,7 @@ await client.set_logging_level("debug")
 
 If you're writing an LLM client and you don't call this, you will miss every `info` and `notice` message — including `blender_job_update` replies (server emits these at `notice`).
 
-<Aside type="caution">
-A common silent failure: write an LLM client, dispatch a job, see `job_id` in the send response, then wait forever for the update. Almost always the cause is forgetting `await client.set_logging_level("debug")` before the dispatch. Server-side everything works; the notification never reaches the client because the subscription level filters it out.
-</Aside>
+> **Caution:** A common silent failure: write an LLM client, dispatch a job, see `job_id` in the send response, then wait forever for the update. Almost always the cause is forgetting `await client.set_logging_level("debug")` before the dispatch. Server-side everything works; the notification never reaches the client because the subscription level filters it out.
 
 ## When to pick each tier
 
@@ -89,6 +86,6 @@ The MCP log-level string lives on the parent notification's `level` field. The a
 
 ## Reference
 
-- [Routing modes](/reference/routing-modes/) — the orthogonal addressing axis
-- [Bus tools](/reference/bus-tools/) — `blender_send_message` accepts `priority` as a string
-- [Architecture](/explanation/architecture/) — where the priority queue sits in the round-trip
+- [Routing modes](routing-modes.md) — the orthogonal addressing axis
+- [Bus tools](https://docs.blender.bet/reference/bus-tools/) — `blender_send_message` accepts `priority` as a string
+- [Architecture](https://docs.blender.bet/explanation/architecture/) — where the priority queue sits in the round-trip

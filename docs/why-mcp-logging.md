@@ -1,9 +1,8 @@
----
-title: "Why MCP logging as a bus"
-description: "Three alternatives considered for the cross-instance transport — custom socket, WebSocket, MCP sampling. Why logging won. Honest tradeoffs."
----
+# Why MCP logging as a bus
 
-import { Aside } from '@astrojs/starlight/components';
+_Three alternatives considered for the cross-instance transport — custom socket, WebSocket, MCP sampling. Why logging won. Honest tradeoffs._
+
+> Internal note, moved from docs.blender.bet on 2026-10-01. Links to `/reference/...` and `/how-to/...` pages point at https://docs.blender.bet.
 
 BlenderMCP needs a way to push messages from the server to subscribed clients. We picked the MCP `notifications/message` log channel. This page is the why — and what we gave up.
 
@@ -83,12 +82,10 @@ The authentication story is what closed the deal. JWT on the HTTP transport, `Co
 
 And the practical proof: a vanilla `fastmcp.Client` with a `message_handler` that filters `logger == "_message_bus"` is a working bus subscriber in about 30 lines of code. That's the "no extra moving parts" property paying off.
 
-<Aside type="note">
-If MCP standardizes a generic server-to-client event channel later, we'd switch. The bus's wire shape is decoupled from the transport — the routing record is what matters, not which notification type carries it.
-</Aside>
+> **Note:** If MCP standardizes a generic server-to-client event channel later, we'd switch. The bus's wire shape is decoupled from the transport — the routing record is what matters, not which notification type carries it.
 
 ## Related
 
-- [Architecture](/explanation/architecture/) — the full round-trip
-- [Priority levels](/reference/priorities/) — the `set_logging_level` gotcha
-- [Bus tools](/reference/bus-tools/) — the five tools that pump the bus
+- [Architecture](https://docs.blender.bet/explanation/architecture/) — the full round-trip
+- [Priority levels](priorities.md) — the `set_logging_level` gotcha
+- [Bus tools](https://docs.blender.bet/reference/bus-tools/) — the five tools that pump the bus

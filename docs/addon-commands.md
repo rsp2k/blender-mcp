@@ -1,13 +1,10 @@
----
-title: "Addon commands"
-description: "Every command the BlenderMCP addon registers, grouped by domain. 23 commands across 8 handler mixins."
----
+# Addon commands
 
-import { Aside } from '@astrojs/starlight/components';
+_Every command the BlenderMCP addon registers, grouped by domain. 23 commands across 8 handler mixins._
 
-<Aside title="These are wrapped as MCP tools">
-All 23 commands below are also exposed as 24 first-class MCP [dispatch tools](/reference/dispatch-tools/) (`blender_<command_name>`). The dispatch tools are the recommended way to call them from an LLM client — they handle the bus round-trip via JobWaiter and return results synchronously. This page documents the underlying registry, useful when you want to dispatch via a custom `command_dispatch` payload, write a [`job_dispatch`](/explanation/dispatch-vs-script/) script that calls `executor.<name>(...)` directly, or extend the addon with new commands (see [Add an addon command](/how-to/add-an-addon-command/)).
-</Aside>
+> Internal note, moved from docs.blender.bet on 2026-10-01. Links to `/reference/...` and `/how-to/...` pages point at https://docs.blender.bet.
+
+> **These are wrapped as MCP tools:** All 23 commands below are also exposed as 24 first-class MCP [dispatch tools](https://docs.blender.bet/reference/dispatch-tools/) (`blender_<command_name>`). The dispatch tools are the recommended way to call them from an LLM client — they handle the bus round-trip via JobWaiter and return results synchronously. This page documents the underlying registry, useful when you want to dispatch via a custom `command_dispatch` payload, write a [`job_dispatch`](https://docs.blender.bet/explanation/dispatch-vs-script/) script that calls `executor.<name>(...)` directly, or extend the addon with new commands (see [Add an addon command](https://docs.blender.bet/how-to/add-an-addon-command/)).
 
 The addon registers commands via `@command(name, gate=...)` on per-domain mixins. The composed `BlenderCommandExecutor` exposes the union. `executor` is in scope inside every `job_dispatch` script, so anything below is callable as `executor.<name>(...)`.
 
@@ -37,9 +34,7 @@ The addon registers commands via `@command(name, gate=...)` on per-domain mixins
 |---|---|---|---|
 | `execute_code` | `code: str` | `{executed: true, result: <stdout>}` | — |
 
-<Aside type="caution">
-`execute_code` runs arbitrary Python in the Blender process. Anyone on the user's bus with `target_uuid` knowledge of a Blender peer can invoke it. Per-user bus isolation is the only access control.
-</Aside>
+> **Caution:** `execute_code` runs arbitrary Python in the Blender process. Anyone on the user's bus with `target_uuid` knowledge of a Blender peer can invoke it. Per-user bus isolation is the only access control.
 
 ## console (`addon/executor/handlers/console.py`)
 
@@ -66,9 +61,7 @@ Blender's `bpy.msgbus` RNA property change system, exposed as five commands.
 
 Supported `data_path` values for subscribe/publish: `frame_current`, `active_object`, `selected_objects`, `active_material`, plus `scene.<prop>` and `object.<prop>` patterns.
 
-<Aside type="note">
-The Blender `bpy.msgbus` is **unrelated** to the BlenderMCP cross-instance message bus. The names collide because both are message buses, but `bpy.msgbus` is a single-Blender RNA-change observer; the BlenderMCP bus carries cross-process MCP traffic.
-</Aside>
+> **Note:** The Blender `bpy.msgbus` is **unrelated** to the BlenderMCP cross-instance message bus. The names collide because both are message buses, but `bpy.msgbus` is a single-Blender RNA-change observer; the BlenderMCP bus carries cross-process MCP traffic.
 
 ## polyhaven (`addon/executor/handlers/polyhaven.py`)
 
@@ -123,6 +116,6 @@ The drainer captures stdout, then calls `blender_job_update` with the captured t
 
 ## Reference
 
-- [Dispatch tools](/reference/dispatch-tools/) — the consumer-facing MCP-tool wrappers around these commands
-- [Routing modes](/reference/routing-modes/) — how dispatches reach the addon
-- [Use cases](/explanation/use-cases/) — patterns for combining these commands
+- [Dispatch tools](https://docs.blender.bet/reference/dispatch-tools/) — the consumer-facing MCP-tool wrappers around these commands
+- [Routing modes](routing-modes.md) — how dispatches reach the addon
+- [Use cases](https://docs.blender.bet/explanation/use-cases/) — patterns for combining these commands

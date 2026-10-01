@@ -1,9 +1,8 @@
----
-title: "Large files: uploads and downloads"
-description: "Move big inputs onto the Blender host and get renders and exports back without pushing bytes through MCP. Covers presigned URLs, storing tool outputs, retention, and the chunked fallback when the server has no object storage."
----
+# Large files: uploads and downloads
 
-import { Aside } from '@astrojs/starlight/components';
+_Move big inputs onto the Blender host and get renders and exports back without pushing bytes through MCP. Covers presigned URLs, storing tool outputs, retention, and the chunked fallback when the server has no object storage._
+
+> Internal note, moved from docs.blender.bet on 2026-10-01. Links to `/reference/...` and `/how-to/...` pages point at https://docs.blender.bet.
 
 An MCP message tops out around 25 MB, and long before that a big payload fills the calling model's context with bytes it can't use. So large files skip MCP entirely. The server runs S3-compatible object storage ([Garage](https://garagehq.deuxfleurs.fr/)) and hands out **presigned URLs**: short-lived links that allow exactly one upload or download of one object, with no credentials involved. You move the bytes with plain HTTP; the tool calls only carry the link and an `object_key`.
 
@@ -35,13 +34,11 @@ curl -T site-plan.json "<upload_url>"
 blender_fetch_object_to_blender(object_key="7c1e…/3fa92b…/site-plan.json")
 ```
 
-Blender downloads the object itself into the same per-bus folder [`blender_upload`](/reference/data-tools/) writes to, and the reply gives the local `path`. Tools that read uploaded files take the bare name, for example `blender_create_mesh(source="site-plan.json")`.
+Blender downloads the object itself into the same per-bus folder [`blender_upload`](https://docs.blender.bet/reference/data-tools/) writes to, and the reply gives the local `path`. Tools that read uploaded files take the bare name, for example `blender_create_mesh(source="site-plan.json")`.
 
 Files up to 16 MB arrive before the call returns. Bigger ones download on a background thread so Blender's UI keeps responding; the call polls until they finish (or `_timeout`, 180 s by default). With `wait=false`, or when the wait runs out, you get a `transfer_id` to check with `blender_object_transfer_status`.
 
-<Aside type="tip">
-If you send `content_type` to `blender_create_upload_url`, send the same `Content-Type` header on the PUT (it's echoed back in `headers`). A single upload can be up to 5 GB.
-</Aside>
+> **Tip:** If you send `content_type` to `blender_create_upload_url`, send the same `Content-Type` header on the PUT (it's echoed back in `headers`). A single upload can be up to 5 GB.
 
 ## Get renders and exports back
 
@@ -93,8 +90,6 @@ Object storage is optional. The compose stack has a `blender-mcp-garage` service
 
 Objects are deleted `STORAGE_RETENTION_DAYS` after upload. The server sets an S3 lifecycle rule, which Garage applies in a once-a-day pass, and also runs its own hourly prune by upload time, so expiry doesn't depend on that pass.
 
-<Aside type="caution">
-A presigned URL is signed for one hostname, and the signature covers the `Host` header. Caddy's `reverse_proxy` passes `Host` through unchanged, which is what makes this work; a proxy that rewrites `Host` breaks every URL with a 403 "Invalid signature". `S3_PUBLIC_URL` (derived from `STORAGE_DOMAIN`) must be the exact origin clients connect to.
-</Aside>
+> **Caution:** A presigned URL is signed for one hostname, and the signature covers the `Host` header. Caddy's `reverse_proxy` passes `Host` through unchanged, which is what makes this work; a proxy that rewrites `Host` breaks every URL with a 403 "Invalid signature". `S3_PUBLIC_URL` (derived from `STORAGE_DOMAIN`) must be the exact origin clients connect to.
 
 Only the S3 API is proxied. Garage's admin API stays on the Docker networks, behind `GARAGE_ADMIN_TOKEN`. The image is the official `dxflrs/garage`, pinned by tag (`GARAGE_IMAGE` overrides it).

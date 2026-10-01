@@ -51,23 +51,12 @@ On mcp.blender.bet, Chat answers with Claude Haiku 4.5 and can consult a stronge
 ## Guides
 
 <CardGrid>
-  <LinkCard title="Chat inside Blender" description="Pick the model that answers, approve Python, read the transcript." href="/how-to/chat-in-blender/" />
-  <LinkCard title="Use it from CI or scripts" description="Personal access tokens for jobs that can't open a browser." href="/how-to/ci-and-scripts/" />
-  <LinkCard title="Add your own tool servers" description="Give the Chat assistant extra tools, such as a PDF reader, running next to Blender." href="/how-to/tool-servers/" />
+  <LinkCard title="Chat inside Blender" description="Ask for changes, clip objects or the viewport, approve Python, undo a reply, choose the model." href="/how-to/chat-in-blender/" />
+  <LinkCard title="Add your own tools" description="Give the Chat assistant extra tools, such as a PDF reader, running next to Blender." href="/how-to/tool-servers/" />
   <LinkCard title="Install and update the add-on" description="The extension repository for Blender 4.2 and newer, one-click updates, and moving off an old single-file install." href="/how-to/install-addon/" />
+  <LinkCard title="Use it from CI or scripts" description="Personal access tokens for jobs that can't open a browser." href="/how-to/ci-and-scripts/" />
 </CardGrid>
 
-## Look things up
+## Building your own client
 
-<CardGrid>
-  <LinkCard title="Dispatch tools" description="The tools a client can call on your Blender, with arguments and results." href="/reference/dispatch-tools/" />
-  <LinkCard title="Authentication" description="OAuth sign-in and personal access tokens, on the wire." href="/reference/auth/" />
-</CardGrid>
-
-## Understand the design
-
-<CardGrid>
-  <LinkCard title="Architecture" description="How the server, the add-on, and clients fit together." href="/explanation/architecture/" />
-  <LinkCard title="OAuth and per-user buses" description="How signing in keeps your Blender visible only to your own clients." href="/explanation/oauth-buses/" />
-  <LinkCard title="Use cases" description="Render farms, approval workflows, several clients on one scene." href="/explanation/use-cases/" />
-</CardGrid>
+Everything an MCP client can do with your Blender is in the **For developers** section of the sidebar: the [tool reference](/reference/dispatch-tools/), [authentication](/reference/auth/), the [Chat protocol](/reference/chat-protocol/), and how the server, the add-on and clients fit together in [Architecture](/explanation/architecture/).

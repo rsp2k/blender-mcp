@@ -1,9 +1,8 @@
----
-title: "Routing modes"
-description: "Four routing modes: direct, group, type_filter, broadcast. Precedence rules, sender exclusion, when to use which."
----
+# Routing modes
 
-import { Aside } from '@astrojs/starlight/components';
+_Four routing modes: direct, group, type_filter, broadcast. Precedence rules, sender exclusion, when to use which._
+
+> Internal note, moved from docs.blender.bet on 2026-10-01. Links to `/reference/...` and `/how-to/...` pages point at https://docs.blender.bet.
 
 `blender_send_message` picks a routing mode from the targeting fields you set. Precedence is strict — first match wins.
 
@@ -100,9 +99,7 @@ Clients can use this for logging or for selective handling — e.g. an LLM clien
 
 `blender_job_update` always routes `direct` to the originating client looked up from `_pending_jobs`. There's no way to override this. If the originator is unknown (e.g. the server restarted and lost the in-memory table), the update is **broadcast** as a fallback.
 
-<Aside type="note">
-The fan-out is server-side. Each targeted client gets its own log record with its own `target_uuid` and `target_session`, so the forwarding handler can address the right MCP session. The original `payload` dict is shared by reference across the records — don't mutate it after sending.
-</Aside>
+> **Note:** The fan-out is server-side. Each targeted client gets its own log record with its own `target_uuid` and `target_session`, so the forwarding handler can address the right MCP session. The original `payload` dict is shared by reference across the records — don't mutate it after sending.
 
 ## Combining modes — the caller does it
 
@@ -125,10 +122,10 @@ for uuid in targets:
     })
 ```
 
-See [Use capabilities](/how-to/use-capabilities/) for more.
+See [Use capabilities](https://docs.blender.bet/how-to/use-capabilities/) for more.
 
 ## Reference
 
-- [Bus tools](/reference/bus-tools/) — `blender_send_message` full signature
-- [ClientInfo](/reference/client-info/) — what `group_id` and `client_type` look like on the wire
-- [Priority levels](/reference/priorities/) — the orthogonal axis for message ordering
+- [Bus tools](https://docs.blender.bet/reference/bus-tools/) — `blender_send_message` full signature
+- [ClientInfo](client-info.md) — what `group_id` and `client_type` look like on the wire
+- [Priority levels](priorities.md) — the orthogonal axis for message ordering

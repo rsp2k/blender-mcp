@@ -53,7 +53,7 @@ Create one mesh object from `vertices` (`[[x,y,z], ...]`) and `faces` (lists of 
 
 Put a file on the Blender machine. This works whether Blender runs on your desk or on a remote host that only shares the bus with you.
 
-Every byte here is a tool argument, so it costs context. When the server has object storage, prefer `blender_create_upload_url` plus `blender_fetch_object_to_blender` for anything more than a few MB; see [Large files: uploads and downloads](/how-to/large-files/). This tool is the fallback when it doesn't.
+Every byte here is a tool argument, so it costs context. When the server has object storage, prefer `blender_create_upload_url` plus `blender_fetch_object_to_blender` for anything more than a few MB; see [Large files: uploads and downloads](https://github.com/rsp2k/blender-mcp/blob/main/docs/large-files.md). This tool is the fallback when it doesn't.
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|

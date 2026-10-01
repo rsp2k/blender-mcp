@@ -60,7 +60,7 @@ Route a message. Routing mode is picked by which targeting field is set. Precede
 | `priority` | `str` | `"info"` | no |
 | `from_uuid` | `str | null` | `null` | no |
 
-`priority` accepts MCP log-level names: `emergency`, `alert`, `critical`, `error`, `warning`, `notice`, `info`, `debug`. See [Priority levels](/reference/priorities/).
+`priority` accepts MCP log-level names: `emergency`, `alert`, `critical`, `error`, `warning`, `notice`, `info`, `debug`. See [Priority levels](https://github.com/rsp2k/blender-mcp/blob/main/docs/priorities.md).
 
 `payload` is opaque to the bus — pass any dict. The convention for a runnable job is:
 
@@ -114,7 +114,7 @@ No parameters.
 }
 ```
 
-Each entry omits the `session` field (the live MCP `ServerSession` isn't serializable). See [ClientInfo](/reference/client-info/) for the full wire shape.
+Each entry omits the `session` field (the live MCP `ServerSession` isn't serializable). See [ClientInfo](https://github.com/rsp2k/blender-mcp/blob/main/docs/client-info.md) for the full wire shape.
 
 ## Tool naming
 

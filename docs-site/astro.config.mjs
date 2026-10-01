@@ -69,26 +69,64 @@ export default defineConfig({
       },
       lastUpdated: true,
       pagination: true,
+      // A user's guide first; material for people building their own MCP
+      // clients sits in one collapsed group at the end. Internal and admin
+      // notes live in the repository's docs/ folder, not on this site.
       sidebar: [
         {
           label: 'Start here',
-          items: [{ label: 'Overview', slug: 'index' }],
+          items: [
+            { label: 'Overview', slug: 'index' },
+            { slug: 'tutorials/quickstart' },
+          ],
         },
         {
-          label: 'Tutorials',
-          items: [{ autogenerate: { directory: 'tutorials' } }],
+          label: 'Using BlenderMCP',
+          items: [
+            { slug: 'how-to/chat-in-blender' },
+            { slug: 'how-to/tool-servers' },
+            { slug: 'how-to/install-addon' },
+            { slug: 'how-to/ci-and-scripts' },
+          ],
         },
         {
-          label: 'How-to guides',
-          items: [{ autogenerate: { directory: 'how-to' } }],
-        },
-        {
-          label: 'Reference',
-          items: [{ autogenerate: { directory: 'reference' } }],
-        },
-        {
-          label: 'Explanation',
-          items: [{ autogenerate: { directory: 'explanation' } }],
+          label: 'For developers',
+          collapsed: true,
+          items: [
+            {
+              label: 'Guides',
+              items: [
+                { slug: 'how-to/write-llm-client' },
+                { slug: 'how-to/long-running-jobs' },
+                { slug: 'how-to/background-workers' },
+                { slug: 'how-to/use-capabilities' },
+              ],
+            },
+            {
+              label: 'Tool reference',
+              items: [
+                { slug: 'reference/dispatch-tools' },
+                { slug: 'reference/data-tools' },
+                { slug: 'reference/file-scene-tools' },
+                { slug: 'reference/view-render-tools' },
+                { slug: 'reference/polyhaven-texture-tools' },
+                { slug: 'reference/bus-tools' },
+                { slug: 'reference/resources' },
+                { slug: 'reference/prompts' },
+                { slug: 'reference/auth' },
+                { slug: 'reference/chat-protocol' },
+              ],
+            },
+            {
+              label: 'How it works',
+              items: [
+                { slug: 'explanation/architecture' },
+                { slug: 'explanation/dispatch-vs-script' },
+                { slug: 'explanation/oauth-buses' },
+                { slug: 'explanation/use-cases' },
+              ],
+            },
+          ],
         },
       ],
     }),

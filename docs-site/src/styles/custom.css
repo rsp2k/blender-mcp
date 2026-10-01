@@ -111,3 +111,10 @@ a.card:hover {
 .shot-pair figure { margin: 0; display: grid; gap: 0.5rem; justify-items: start; }
 .shot-pair img { width: 100%; max-width: 245px; height: auto; border-radius: 6px; border: 1px solid var(--sl-color-hairline); }
 .shot-pair figcaption { font-size: var(--sl-text-sm); color: var(--sl-color-gray-3); }
+
+/* A single panel capture, shown at half its 2x size. .shot-wide for the
+   wider ones (the Reader, preferences), which may use the full column. */
+.shot-single { margin-block: 1.25rem; }
+.shot-single img { width: 100%; max-width: 245px; height: auto; border-radius: 6px; border: 1px solid var(--sl-color-hairline); display: block; }
+.shot-single img[width="330"] { max-width: 330px; }
+.shot-wide img { max-width: 100%; }
