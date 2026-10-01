@@ -1,0 +1,123 @@
+---
+title: "Use your own Claude API key"
+description: "Get a Claude API key from the Claude Console, paste it into the Chat panel, and keep chatting in Blender with usage billed to your own Anthropic account."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The Chat panel starts you on a free trial. When it runs out, or any time before that, you can add your own Claude API key and keep going. A key is a long password that lets BlenderMCP ask Claude on your behalf. You get one from Anthropic, the company that makes Claude, and it takes a few minutes.
+
+With your own key, what you ask for in the Chat panel is billed to your Anthropic account instead of the trial. Anthropic's [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) lists what each model costs.
+
+<Aside type="tip" title="Don't want a key?">
+Claude Desktop, claude.ai and Claude Code can drive your Blender on your regular Claude plan instead. See [No API key? Use your Claude plan](#no-api-key-use-your-claude-plan) at the end of this page.
+</Aside>
+
+## Open the key box
+
+In Blender, press `N` over the 3D Viewport to show the sidebar, open the **BlenderMCP** tab, and find the **Chat** panel.
+
+While the trial lasts, a row near the top shows how much is left, for example **96% free left**. Click **Use my own key** next to it and the key box opens below. When the trial is used up, the box opens by itself with the heading **Paste your Claude API key to keep chatting**.
+
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-key-open.webp" width="238" height="370" alt="The Chat panel with the trial row reading 96% free left and the Use my own key button pressed. Below it, a box headed Paste your Claude API key with an empty field, Get a key and Save key buttons, the note Sent once to the server and stored encrypted; never saved in Blender, and a line reading No API key? Use Claude Desktop or Claude Code with your Claude plan instead, above a How to connect button." />
+</div>
+
+## Get a key from the Claude Console
+
+The Claude Console is Anthropic's website for API keys. Keep Blender open while you do this.
+
+<Steps>
+
+1. Click **Get a key** in the key box. Your browser opens [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys), the **Settings › API keys** page.
+
+2. Sign in, or create an account if you don't have one yet.
+
+3. Click **Create key**.
+
+4. Give the key a name you'll recognize later, such as "Blender". Choose when it should expire, and leave the linked account set to yourself.
+
+5. Copy the key. It starts with `sk-ant-`. The Console shows the whole key only this once, so copy it before you close the window. If you lose it, create another one.
+
+</Steps>
+
+<Aside>
+If **Create key** is grayed out, your role in that Anthropic organization may not allow creating keys. Ask an admin of the organization to create one for you or change your role. Anthropic's own walkthrough is [Get an API key](https://platform.claude.com/docs/en/get-api-key).
+</Aside>
+
+## Paste it into the Chat panel
+
+<Steps>
+
+1. Back in Blender, click the empty field in the key box and paste the key with `Ctrl+V`. The field hides what you paste, like any password field.
+
+   <div class="shot-single not-content">
+     <img src="/img/chat/chat-key-pasted.webp" width="245" height="109" alt="The key box with a key pasted into the field, shown only as a row of asterisks, above the Get a key and Save key buttons." />
+   </div>
+
+2. Click **Save key**.
+
+3. The field clears straight away and the box shows **Checking key…** for a moment. The server asks Anthropic whether the key works. This check is free and uses none of your credit.
+
+   <div class="shot-single not-content">
+     <img src="/img/chat/chat-key-checking.webp" width="245" height="135" alt="The key box while the key is checked: the field is empty, Save key is grayed out, and a clock icon reads Checking key…" />
+   </div>
+
+4. When the key passes, the box closes and you can carry on chatting where you left off.
+
+</Steps>
+
+Nothing is stored unless the check passes. If it doesn't, the box tells you why; see [If something goes wrong](#if-something-goes-wrong).
+
+## What happens next
+
+Your requests now go to Claude with your key, and Anthropic bills the account the key belongs to.
+
+The model stays the same as before. On mcp.blender.bet that is Claude Haiku 4.5, which hands harder requests to a stronger model, Claude Fable 5.1 unless you pick another. The button under the chat picker shows both, for example **Claude Haiku 4.5 › Fable 5.1**.
+
+To change either one, open `Edit › Preferences › Add-ons › Blender MCP` and look under **Chat backend**:
+
+- **Escalate to** picks the stronger model for hard requests, or **Off** to always use the main one.
+- **Model** names a different main model. Leave it blank to use the server's pick.
+
+[Choose the model](/how-to/chat-in-blender/#choose-the-model) explains the rest of that section.
+
+## Where your key is kept
+
+The key is sent once to the BlenderMCP server and stored there encrypted. It is never saved in Blender's preferences or in your .blend file, so sharing a .blend never shares your key.
+
+## Change or remove your key
+
+Both are in `Edit › Preferences › Add-ons › Blender MCP`, in the **Chat backend** section.
+
+<div class="shot-single shot-wide not-content">
+  <img src="/img/chat/chat-backend.webp" width="651" height="131" alt="The Chat backend preferences: Current: Claude API, claude-haiku-4-5, server default; Escalate to: Claude Fable 5.1 (server default); Provider: Server default; an empty Model field; Save backend and Clear backend buttons." />
+</div>
+
+**To use a different key**, set **Provider** to **Claude API**, paste the new key into the **API key** field that appears, and click **Save backend**. The new key is checked with Anthropic the same way and replaces the old one once it passes. Leave **Model** blank to keep the server's pick. Once you have a key saved, the Chat panel no longer shows the trial row, so this is the place to change it.
+
+**To remove your key**, click **Clear backend**. Chat goes back to the server default. On mcp.blender.bet that means the free trial, so once the trial is used up, chat stops working until you add a key again.
+
+<Aside type="caution">
+Clearing the key removes it from BlenderMCP only. The key itself still exists in your Anthropic account, where you manage it on the [API keys page](https://platform.claude.com/settings/keys).
+</Aside>
+
+## If something goes wrong
+
+**"Anthropic didn't accept that key."** The message appears in red under the buttons.
+
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-key-not-accepted.webp" width="238" height="165" alt="The key box after an invalid key, with the message in red: Anthropic didn't accept that key. Check it at platform.claude.com/settings/keys." />
+</div>
+
+The key was mistyped, cut short, or is no longer active in your Anthropic account. Copy it again from the start, making sure you have the whole thing beginning with `sk-ant-`, and paste it once more. If you no longer have the full key, create a new one; the Console won't show an old key again.
+
+**"Couldn't check the key with Anthropic… Try again."** The server couldn't reach Anthropic at that moment, so it didn't know whether the key works. Nothing was saved. Wait a minute and click **Save key** again.
+
+**The key box isn't there.** The box only shows while the add-on is connected. Check the top of the BlenderMCP tab says **Connected**, and see [Install the add-on](/how-to/install-addon/) if it doesn't. During the trial, click **Use my own key** to open it. If you already saved a key, the box stays hidden; change the key in Preferences as described in [Change or remove your key](#change-or-remove-your-key).
+
+**Get a key didn't open a browser.** Go to [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys) yourself.
+
+## No API key? Use your Claude plan
+
+Below the key box, **How to connect** explains the other route. Claude Desktop, claude.ai and Claude Code can all drive your Blender through BlenderMCP on your regular Claude plan, with no API key. Add `https://mcp.blender.bet/` as a custom connector in Claude Desktop or claude.ai (it works on every plan, and the Free plan allows one custom connector), or add it to Claude Code. The steps are in [Use Claude Code or Claude Desktop too](/tutorials/quickstart/#use-claude-code-or-claude-desktop-too-optional).

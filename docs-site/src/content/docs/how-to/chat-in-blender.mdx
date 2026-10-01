@@ -81,10 +81,10 @@ To use something else, set **Provider** and press **Save backend**:
 | Provider | What you need | Notes |
 |---|---|---|
 | Server default | Nothing | Whatever this server is set up to use. |
-| Claude API | Your Anthropic API key | Claude Opus 5 unless you name another model in **Model**. |
+| Claude API | Your Anthropic API key | The server's default Claude model (Claude Haiku 4.5 on mcp.blender.bet) unless you name another in **Model**. |
 | OpenAI-compatible | A base URL, a model name, and a key if the endpoint needs one | Ollama, LiteLLM, vLLM, or a hosted OpenAI-style API. |
 
-Your key goes to the server once and the field clears; it is stored there encrypted and never saved in Blender's preferences or your .blend. **Clear backend** forgets your key and goes back to the server default.
+Your key goes to the server once and the field clears; it is stored there encrypted and never saved in Blender's preferences or your .blend. **Clear backend** forgets your key and goes back to the server default. For a step-by-step guide to getting and adding a Claude key, see [Use your own Claude API key](/how-to/claude-api-key/).
 
 <Aside type="caution">
 With OpenAI-compatible, the server fetches the base URL, not your computer, so `http://localhost:11434` means the server's own machine. Use an address the server can reach.

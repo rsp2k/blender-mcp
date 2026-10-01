@@ -85,6 +85,7 @@ export default defineConfig({
           label: 'Using BlenderMCP',
           items: [
             { slug: 'how-to/chat-in-blender' },
+            { slug: 'how-to/claude-api-key' },
             { slug: 'how-to/tool-servers' },
             { slug: 'how-to/install-addon' },
             { slug: 'how-to/ci-and-scripts' },
