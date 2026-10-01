@@ -205,7 +205,7 @@ class BLENDERMCP_OT_ChatKeyPrompt(bpy.types.Operator):
 
     bl_idname = "blendermcp.chat_key_prompt"
     bl_label = "Use my own key"
-    bl_description = "Paste your own Claude API key so chat keeps working after the free messages"
+    bl_description = "Paste your own Claude API key so chat keeps working after the free trial"
 
     def execute(self, context):
         chat_state.toggle_key_prompt()

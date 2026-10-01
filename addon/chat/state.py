@@ -27,7 +27,7 @@ _STATUS_TEXT = {
         "in the Chat panel, or set a backend in Preferences > Add-ons > Blender MCP > Chat backend."
     ),
     "trial_ended": (
-        "Your free messages are used up. Paste your Claude API key in the Chat panel to keep going."
+        "Your free trial is used up. Paste your Claude API key in the Chat panel to keep going."
     ),
     "busy": "A chat turn is already running for your account. Try again when it finishes.",
     "backend_error": "The model call failed.",
@@ -132,7 +132,9 @@ def result_message(payload: dict | None) -> tuple[str, str]:
 # blender_chat statuses that mean "no model answers until you add a key".
 KEY_STATUSES = ("trial_ended", "no_backend")
 KEY_URL = "https://console.anthropic.com/settings/keys"
-TRIAL_LOW = 3
+# Low-trial alert: percent of the budget left, or (older servers) messages left.
+TRIAL_LOW_PERCENT = 15
+TRIAL_LOW_MESSAGES = 3
 TRIAL_ROW_PAD = 8
 _KEY_ERRORS = {
     "invalid_api_key": "That key wasn't accepted. Check it and paste it again.",
@@ -140,18 +142,46 @@ _KEY_ERRORS = {
 }
 
 
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def normalize_trial(value: Any) -> dict | None:
-    """The server's ``trial`` field as {"limit", "used", "remaining"} ints, or
-    None (unlimited account, no trial configured, or an older server)."""
+    """The server's ``trial`` field, or None (unlimited account, no trial
+    configured, or a server without trials).
+
+    A cost budget comes as {"unit", "limit", "used", "remaining",
+    "percent_left"} and keeps that shape. Servers before budgets sent whole
+    message counts with no "unit"; those come back with unit "messages"."""
     if not isinstance(value, dict):
         return None
-    out = {}
-    for key in ("limit", "used", "remaining"):
-        n = value.get(key)
-        if isinstance(n, bool) or not isinstance(n, (int, float)):
-            return None
-        out[key] = max(0, int(n))
-    return out
+    nums = {key: _number(value.get(key)) for key in ("limit", "used", "remaining")}
+    if any(n is None for n in nums.values()):
+        return None
+    if "unit" not in value:
+        return {"unit": "messages", **{k: max(0, int(n)) for k, n in nums.items()}}
+    pct = _number(value.get("percent_left"))
+    if pct is None:
+        limit = nums["limit"]
+        pct = 100.0 * nums["remaining"] / limit if limit > 0 else 0.0
+    return {"unit": str(value.get("unit") or ""), **nums,
+            "percent_left": max(0, min(100, int(pct)))}
+
+
+def trial_exhausted(trial: dict | None) -> bool:
+    if not trial:
+        return False
+    return trial["remaining"] <= 0 or trial.get("percent_left") == 0
+
+
+def trial_low(trial: dict | None) -> bool:
+    if not trial:
+        return False
+    if trial.get("unit") == "messages":
+        return trial["remaining"] <= TRIAL_LOW_MESSAGES
+    return trial.get("percent_left", 100) <= TRIAL_LOW_PERCENT
 
 
 def key_error_text(payload: Any) -> str:
@@ -170,24 +200,32 @@ def key_prompt_heading(snap: dict) -> str | None:
     trial = snap.get("trial")
     if snap.get("needs_key") == "no_backend":
         return "Paste your Claude API key to start chatting"
-    if snap.get("needs_key") or (trial and trial["remaining"] == 0):
+    if snap.get("needs_key") or trial_exhausted(trial):
         return "Paste your Claude API key to keep chatting"
     if snap.get("key_prompt_requested") or snap.get("key_checking"):
         return "Paste your Claude API key"
     return None
 
 
-def trial_row_text(remaining: int, chars: int) -> tuple[str, str]:
+def trial_row_text(trial: dict, chars: int) -> tuple[str, str]:
     """(label, button) for the trial row, shortened when the sidebar is narrow.
-    ``chars`` is how many characters fit across the row."""
-    noun = "message" if remaining == 1 else "messages"
-    short = f"{remaining} free left"
-    for label, button in ((f"{remaining} free {noun} left", "Use my own key"),
-                          (short, "Use my own key")):
+    ``chars`` is how many characters fit across the row. A budget shows as a
+    percentage only, never money or tokens."""
+    if trial.get("unit") == "messages":
+        n = trial["remaining"]
+        noun = "message" if n == 1 else "messages"
+        labels = (f"{n} free {noun} left", f"{n} free left")
+    else:
+        pct = trial["percent_left"]
+        labels = (f"Free trial: {pct}% left", f"{pct}% free left", f"{pct}% left")
+    tries = [(labels[0], "Use my own key")]
+    for label in labels[1:]:
+        tries += [(label, "Use my own key"), (label, "Use my key")]
+    for label, button in tries:
         # Room for the label's icon and both widgets' padding.
         if len(label) + len(button) + TRIAL_ROW_PAD <= chars:
             return label, button
-    return short, "Use my key"
+    return labels[-1], "Use my key"
 
 
 def format_duration(ms: Any) -> str:
@@ -300,7 +338,7 @@ class ChatState:
         self.conversation_id: str | None = None
         # Bumped on every transcript change, so the panel knows to rebuild rows.
         self.revision = 0
-        # Free trial from the server ({"limit", "used", "remaining"}), or None.
+        # Free trial from the server (see normalize_trial), or None.
         self.trial: dict | None = None
         # "trial_ended" or "no_backend" once a turn was refused for want of a
         # key; None again when a key is saved.
@@ -538,7 +576,7 @@ class ChatState:
                 self.backend_error = None
                 if "trial" in payload or not keep_trial:
                     self.trial = normalize_trial(payload.get("trial"))
-                if saved and not (self.trial and self.trial["remaining"] == 0):
+                if saved and not trial_exhausted(self.trial):
                     self.needs_key = None
                     self.key_prompt_requested = False
                     self.key_error = None

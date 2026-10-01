@@ -17,10 +17,11 @@ from .. import connection, state
 from ..chat import reader
 from ..chat.state import (
     KEY_URL,
-    TRIAL_LOW,
     approval_preview,
     chat_state,
     key_prompt_heading,
+    trial_exhausted,
+    trial_low,
     trial_row_text,
     wrap_text,
 )
@@ -103,18 +104,18 @@ def _draw_model_chip(layout, snap) -> None:
 
 
 def _draw_trial(layout, context, snap) -> None:
-    """One quiet row under the model chip while free messages remain."""
+    """One quiet row under the model chip while some free trial remains."""
     trial = snap["trial"]
-    if not trial or trial["remaining"] <= 0 or snap["needs_key"]:
+    if not trial or trial_exhausted(trial) or snap["needs_key"]:
         return
     width = context.region.width if context.region else 300
     scale = _ui_scale(context)
     chars = int((width - 20 * scale) / (7 * scale))
-    label, button = trial_row_text(trial["remaining"], chars)
+    label, button = trial_row_text(trial, chars)
     # Split by text length: a plain row halves the width and cuts the label.
     left, right = len(label) + 5, len(button) + 3
     split = layout.split(factor=left / (left + right), align=True)
-    low = trial["remaining"] <= TRIAL_LOW
+    low = trial_low(trial)
     text = split.row(align=True)
     text.alert = low
     text.label(text=label, icon='ERROR' if low else 'INFO')
