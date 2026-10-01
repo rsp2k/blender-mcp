@@ -322,9 +322,11 @@ def draw_login_section(layout, prefs, compact: bool = False):
 
 
 CHAT_PROVIDERS = [
-    ("gateway", "Shared GPU gateway",
-     "The server's own backend (the default): open models on the operator's GPUs, "
-     "unless the operator has set a different server default"),
+    # The key stays "gateway" so saved settings keep working; it has meant
+    # "whatever the server is set up to use" since servers got a configurable
+    # default (on mcp.blender.bet that is Claude, not the GPU gateway).
+    ("gateway", "Server default",
+     "Whatever model this server is set up to use; the Current line above names it"),
     ("anthropic", "Claude API", "Your own Anthropic API key"),
     ("openai", "OpenAI-compatible", "Ollama, LiteLLM, vLLM or a hosted OpenAI-style API"),
 ]

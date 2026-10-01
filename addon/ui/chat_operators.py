@@ -150,7 +150,7 @@ class BLENDERMCP_OT_ChatBackendSettings(bpy.types.Operator):
 
     bl_idname = "blendermcp.chat_backend_settings"
     bl_label = "Chat model"
-    bl_description = "The model answering in this tab. Click to change it in Preferences"
+    bl_description = "The model answering in this chat. Click to change it in Preferences"
 
     def execute(self, context):
         from ..preferences import ADDON_PACKAGE_NAME
@@ -262,7 +262,7 @@ class BLENDERMCP_OT_ClearChatBackend(bpy.types.Operator):
 
     bl_idname = "blendermcp.clear_chat_backend"
     bl_label = "Clear backend"
-    bl_description = "Forget the stored backend and key; chat falls back to the shared gateway"
+    bl_description = "Forget the stored backend and key; chat goes back to the server default"
 
     def execute(self, context):
         from ..preferences import get_prefs, persist_prefs

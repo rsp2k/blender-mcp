@@ -222,7 +222,7 @@ def _draw_undo(layout, snap) -> None:
         sub = col.column(align=True)
         sub.enabled = False
         sub.scale_y = 0.8
-        sub.label(text="Use Ctrl+Z: the scene changed since", icon='INFO')
+        sub.label(text="Not undoable in one step; use Ctrl+Z", icon='INFO')
 
 
 class BLENDERMCP_PT_ChatClip(bpy.types.Panel):
