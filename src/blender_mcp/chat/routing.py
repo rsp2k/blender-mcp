@@ -243,17 +243,26 @@ class RoutingSamplingHandler:
             return get_session
         return self._session_factory
 
-    async def resolve(self, user_sub: str | None, cfg: ChatConfig | None = None) -> Backend | None:
-        """The user's backend, None when they have none. ProviderError on bad state."""
+    async def load_settings(self, user_sub: str | None):
+        """The account's chat_settings row (None without one). ProviderError
+        when the database can't be read."""
+        if not user_sub:
+            return None
+        try:
+            return await chat_settings.load(self.session_factory, user_sub)
+        except Exception as e:
+            logger.warning("chat settings lookup failed: %s", type(e).__name__)
+            raise ProviderError("could not load this account's chat settings") from e
+
+    async def resolve(self, user_sub: str | None, cfg: ChatConfig | None = None, *,
+                      trial_ok: bool = False) -> Backend | None:
+        """The user's backend, None when they have none. ProviderError on bad state.
+
+        Trial accounts (CHAT_TRIAL_TURNS) get None unless ``trial_ok``: only
+        blender_chat counts their turns, so nothing else may spend them."""
         cfg = cfg or self.config_loader()
-        row = None
-        if user_sub:
-            try:
-                row = await chat_settings.load(self.session_factory, user_sub)
-            except Exception as e:
-                logger.warning("chat settings lookup failed: %s", type(e).__name__)
-                raise ProviderError("could not load this account's chat settings") from e
-        return chat_settings.backend_for(row, cfg, user_sub)
+        row = await self.load_settings(user_sub)
+        return chat_settings.backend_for(row, cfg, user_sub, trial_ok=trial_ok)
 
     async def complete(self, backend: Backend, system, messages, tools, *,
                        tool_choice: str | None = None, max_tokens: int | None = None,

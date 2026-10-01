@@ -82,10 +82,28 @@ def _own(row: ChatSettings | None) -> bool:
     return row is not None and row.provider in ("anthropic", "openai")
 
 
+def on_trial(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> bool:
+    """Is this account limited to CHAT_TRIAL_TURNS free turns on the server
+    default? Never when no trial is configured, when the account has its own
+    backend, or when CHAT_GATEWAY_USERS lists it."""
+    return (cfg.trial_turns > 0 and bool(user_sub) and not _own(row)
+            and user_sub not in cfg.gateway_users)
+
+
+def user_anthropic_model(row: ChatSettings, cfg: ChatConfig) -> str:
+    """The model for an account's own Claude key: the one it saved, else the
+    server default's model when that is Claude too, else DEFAULT_ANTHROPIC_MODEL."""
+    if row.model:
+        return row.model
+    if cfg.default_provider == "anthropic" and cfg.default_model:
+        return cfg.default_model
+    return DEFAULT_ANTHROPIC_MODEL
+
+
 def public_view(row: ChatSettings | None, cfg: ChatConfig) -> dict:
     """What the add-on may see. Never a key, the server's or the user's."""
     if _own(row):
-        model = row.model or {"anthropic": DEFAULT_ANTHROPIC_MODEL}.get(row.provider)
+        model = user_anthropic_model(row, cfg) if row.provider == "anthropic" else row.model
         return {
             "provider": row.provider,
             "model": model,
@@ -138,25 +156,33 @@ def advisor_view(model: str | None, provider: str, row: ChatSettings | None,
     }
 
 
-def backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> Backend | None:
-    return with_advisor(_backend_for(row, cfg, user_sub), row, cfg)
+def backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None,
+                trial_ok: bool = True) -> Backend | None:
+    return with_advisor(_backend_for(row, cfg, user_sub, trial_ok), row, cfg)
 
 
-def _backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> Backend | None:
+def _backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None,
+                 trial_ok: bool = True) -> Backend | None:
     """The backend this user's turns go to, or None when they have none.
 
     Precedence: the user's own saved backend, then the server default
     (CHAT_DEFAULT_PROVIDER, gated by CHAT_GATEWAY_USERS like the gateway
-    always was). Raises ProviderError when a stored key can't be decrypted.
+    always was). With CHAT_TRIAL_TURNS set, accounts outside that list get
+    the server default as a trial; ``trial_ok=False`` refuses them (for
+    callers that don't count trial turns). Raises ProviderError when a stored
+    key can't be decrypted.
     """
     if row is not None and row.provider == "anthropic":
-        return Backend("anthropic", row.model or DEFAULT_ANTHROPIC_MODEL,
+        return Backend("anthropic", user_anthropic_model(row, cfg),
                        row.base_url or DEFAULT_ANTHROPIC_BASE_URL,
                        decrypt(cfg, row.api_key_enc) if row.api_key_enc else "")
     if row is not None and row.provider == "openai":
         return Backend("openai", row.model or "", row.base_url or "",
                        decrypt(cfg, row.api_key_enc) if row.api_key_enc else "")
-    if not cfg.user_allowed(user_sub):
+    if on_trial(row, cfg, user_sub):
+        if not trial_ok:
+            return None
+    elif not cfg.user_allowed(user_sub):
         return None
     backend = server_default(cfg)
     if backend is not None and backend.provider == "gateway" and row is not None and row.model:
@@ -176,6 +202,37 @@ def _clean(value: str | None, limit: int, name: str) -> str | None:
     if len(value) > limit:
         raise SettingsError("invalid_argument", f"{name} is longer than {limit} characters")
     return value or None
+
+
+INVALID_KEY_DETAIL = ("Anthropic didn't accept that key. Check it at "
+                      "console.anthropic.com/settings/keys.")
+
+
+async def verify_anthropic_key(api_key: str, transport=None) -> None:
+    """Refuse a Claude key Anthropic doesn't accept (SettingsError
+    ``invalid_api_key``) or that couldn't be checked (``key_check_failed``)."""
+    from .providers.anthropic import check_key
+
+    try:
+        code = await check_key(api_key, DEFAULT_ANTHROPIC_BASE_URL, transport=transport)
+    except ProviderError as e:
+        raise SettingsError("key_check_failed",
+                            f"Couldn't check the key with Anthropic: {e}. Try again.") from e
+    if code in (401, 403):
+        raise SettingsError("invalid_api_key", INVALID_KEY_DETAIL)
+    if not 200 <= code < 300:
+        raise SettingsError("key_check_failed",
+                            f"Couldn't check the key with Anthropic (HTTP {code}). Try again.")
+
+
+def check_key_storable(cfg: ChatConfig, api_key: str | None, model: str | None = None) -> None:
+    """The checks save() would refuse a new Claude key on, run before the key
+    goes to Anthropic for verification."""
+    if fernet(cfg.secret_key) is None:
+        raise SettingsError("secret_key_not_configured",
+                            "This server can't store API keys (CHAT_SECRET_KEY is not set).")
+    _clean(api_key, MAX_KEY_LEN, "api_key")
+    _clean(model, MAX_MODEL_LEN, "model")
 
 
 async def save(

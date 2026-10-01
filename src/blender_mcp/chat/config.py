@@ -61,6 +61,9 @@ class ChatConfig:
     tools: frozenset[str] = frozenset()
     # Empty = every authenticated user may use the shared gateway.
     gateway_users: frozenset[str] = frozenset()
+    # Free turns on the server default for accounts with no backend of their
+    # own and not in gateway_users; 0 = no trial (gateway_users alone decides).
+    trial_turns: int = 0
     secret_key: str = field(default="", repr=False)
     # The server-wide backend for users with none of their own.
     default_provider: str = "gateway"
@@ -105,6 +108,7 @@ def load_config(env=None) -> ChatConfig:
         max_tools=_int(env, "CHAT_MAX_TOOLS", 40, hi=128),
         tools=_csv(env, "CHAT_TOOLS"),
         gateway_users=_csv(env, "CHAT_GATEWAY_USERS"),
+        trial_turns=_int(env, "CHAT_TRIAL_TURNS", 0, lo=0),
         secret_key=_get(env, "CHAT_SECRET_KEY"),
         default_provider=_choice(env, "CHAT_DEFAULT_PROVIDER", DEFAULT_PROVIDERS, "gateway"),
         default_model=_get(env, "CHAT_DEFAULT_MODEL"),

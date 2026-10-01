@@ -167,6 +167,7 @@ services:
       CHAT_MAX_TOOLS: ${CHAT_MAX_TOOLS:-40}
       CHAT_TOOLS: ${CHAT_TOOLS:-}
       CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
+      CHAT_TRIAL_TURNS: ${CHAT_TRIAL_TURNS:-0}
       CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
       # Server-wide backend for users who saved none (gateway | anthropic | openai).
       CHAT_DEFAULT_PROVIDER: ${CHAT_DEFAULT_PROVIDER:-gateway}
@@ -324,6 +325,7 @@ services:
       CHAT_MAX_TOOLS: ${CHAT_MAX_TOOLS:-40}
       CHAT_TOOLS: ${CHAT_TOOLS:-}
       CHAT_GATEWAY_USERS: ${CHAT_GATEWAY_USERS:-}
+      CHAT_TRIAL_TURNS: ${CHAT_TRIAL_TURNS:-0}
       CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:-}
       # Server-wide backend for users who saved none (gateway | anthropic | openai).
       CHAT_DEFAULT_PROVIDER: ${CHAT_DEFAULT_PROVIDER:-gateway}
