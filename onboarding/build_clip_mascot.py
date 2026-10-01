@@ -687,15 +687,15 @@ def _px(scene, cam, co, size):
     return [round(c.x * size, 3), round((1 - c.y) * size, 3)]
 
 
-def eye_track(cam, size):
+def eye_track(cam, size, frames=None):
     """Per frame, each eye as an ellipse in pixels, plus where the loop's own
     pupils sit inside it. The page draws the pupils itself, so it needs:
     c (centre), u (the eye's horizontal semi-axis, a vector from c) and
     v (its vertical semi-axis; it shrinks to nothing in the blink), and
     look (the rendered pupil's centre as fractions of u and v)."""
     scene = bpy.context.scene
-    frames = []
-    for f in range(1, LOOP + 1):
+    out = []
+    for f in (frames or range(1, LOOP + 1)):
         scene.frame_set(f)
         dg = bpy.context.evaluated_depsgraph_get()
         eyes = {}
@@ -711,20 +711,18 @@ def eye_track(cam, size):
             eyes[s] = {"c": c, "u": [round(eu[0] - c[0], 3), round(eu[1] - c[1], 3)],
                        "v": [round(ev[0] - c[0], 3), round(ev[1] - c[1], 3)],
                        "look": look}
-        frames.append(eyes)
+        out.append(eyes)
     scene.frame_set(1)
-    return frames
+    return out
 
 
-def web_eyes(pose, cam, folder):
-    """Render the hero loop without pupils and write eyes.json beside it."""
-    import json
-    track = eye_track(cam, EYES_SIZE)
+def eye_meta(pose, track, size, frames, fps):
+    """What the page needs to draw pupils: pupil and glint sizes as fractions
+    of each eye's u and v semi-axes, plus the per-frame eye track."""
     er = pose["eye_r"]
     pr = er * pose["pupil"]
-    # pupil and glint sizes as fractions of the eye's u and v semi-axes
-    meta = {
-        "size": EYES_SIZE, "frames": LOOP, "fps": FPS,
+    return {
+        "size": size, "frames": frames, "fps": fps,
         "pupil": [round(pr / (er * 0.9), 4), round(pr * 1.1 / (er * 1.12), 4)],
         "glint": {"offset": [round(-0.35 * pr / (er * 0.9), 4),
                              round(0.42 * pr / (er * 1.12), 4)],
@@ -732,8 +730,38 @@ def web_eyes(pose, cam, folder):
         "pupil_colour": PUPIL,
         "eyes": track,
     }
+
+
+def hide_pupils():
     for name in ("Pupil L", "Pupil R", "Glint L", "Glint R"):
         bpy.data.objects[name].hide_render = True
+
+
+LOGO_EYES_SIZE = 192  # the docs header logo; ~40 CSS px, so this covers 4x screens
+
+
+def logo_eyes(folder):
+    """The docs logo: the icon pose, one frame, no pupils, plus its eyes."""
+    import json
+    os.makedirs(folder, exist_ok=True)
+    subjects = build(ICON)
+    cam = framed_camera("Icon camera", ICON, subjects)
+    # Smaller pupils than the still's: at ~40 px the icon pose's big pupils
+    # leave under a pixel of travel, and the glance would never show.
+    meta = eye_meta({**ICON, "pupil": 0.36}, eye_track(cam, LOGO_EYES_SIZE, frames=[1]),
+                    LOGO_EYES_SIZE, 1, 1)
+    hide_pupils()
+    render(cam, f"{folder}logo-eyes.png", LOGO_EYES_SIZE, 64)
+    with open(os.path.join(folder, "logo-eyes.json"), "w") as fh:
+        json.dump(meta, fh, separators=(",", ":"))
+    print(f"[clip] wrote {folder}logo-eyes.json")
+
+
+def web_eyes(pose, cam, folder):
+    """Render the hero loop without pupils and write eyes.json beside it."""
+    import json
+    meta = eye_meta(pose, eye_track(cam, EYES_SIZE), EYES_SIZE, LOOP, FPS)
+    hide_pupils()
     render_loop(cam, folder, 64, size=EYES_SIZE)
     with open(os.path.join(folder, "eyes.json"), "w") as fh:
         json.dump(meta, fh, separators=(",", ":"))
@@ -743,6 +771,11 @@ def web_eyes(pose, cam, folder):
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     os.makedirs(OUT_DIR, exist_ok=True)
+
+    if "--logo-eyes" in args:
+        # The docs header logo, whose pupils the page draws to follow the pointer.
+        logo_eyes(f"{OUT_DIR}/logo/")
+        return
 
     if "--icons" in args:
         # The chat input's clip button, empty and holding paper.
