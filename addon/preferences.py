@@ -594,8 +594,8 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
     chat_model: StringProperty(
         name="Chat model",
         description=(
-            "Model name. Leave blank for the provider's default "
-            "(the server's choice on the gateway, claude-opus-5 on the Claude API)"
+            "Model name. Leave blank and the server picks "
+            "(on mcp.blender.bet, Claude Haiku 4.5)"
         ),
         default="",
     )

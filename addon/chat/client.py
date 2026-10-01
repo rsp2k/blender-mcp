@@ -335,9 +335,30 @@ def _on_key_result(fut: Any) -> None:
     else:
         if getattr(result, "is_error", False) or getattr(result, "isError", False):
             chat_state.finish_key_check(error=tool_error_text(result))
-        else:
-            chat_state.finish_key_check(decode_tool_result(result))
+        elif chat_state.finish_key_check(decode_tool_result(result)):
+            _sync_prefs_to_key()
     request_redraw()
+
+
+def _sync_prefs_to_key() -> None:
+    """After the panel saved a key, make Preferences agree (main thread), so a
+    later "Save backend" there doesn't switch the account back."""
+    def apply():
+        try:
+            import bpy
+            from ..preferences import get_prefs
+            prefs = get_prefs(bpy.context)
+            if prefs is not None:
+                prefs.chat_provider = "anthropic"
+                prefs.chat_model = ""
+        except Exception as e:  # noqa: BLE001 - a stale dropdown isn't worth an error
+            print(f"[BlenderMCP] Couldn't update chat preferences: {e}")
+        return None
+    try:
+        import bpy
+        bpy.app.timers.register(apply, first_interval=0.0)
+    except Exception:  # noqa: BLE001 - outside Blender (tests)
+        pass
 
 
 def save_key(api_key: str) -> str | None:
