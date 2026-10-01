@@ -45,21 +45,23 @@ blender_chat(message: str,
 
 ### The free trial
 
-When the server has a trial configured (`CHAT_TRIAL_TURNS`, see [Server configuration](#server-configuration)), accounts without a backend of their own get that many turns on the server's default backend. Every result from the backend lookup on (`ok`, `timeout`, `backend_error`, `no_backend`, `trial_ended`) carries a `trial` field:
+When the server has a trial configured (`CHAT_TRIAL_USD`, see [Server configuration](#server-configuration)), accounts without a backend of their own may spend that many US dollars of model use on the server's default backend, priced at Anthropic's list prices. Every result from the backend lookup on (`ok`, `timeout`, `backend_error`, `no_backend`, `trial_ended`) carries a `trial` field:
 
 ```json
-"trial": {"limit": 20, "used": 3, "remaining": 17}
+"trial": {"unit": "usd", "limit": 0.5, "used": 0.1234, "remaining": 0.3766, "percent_left": 75}
 ```
+
+`used` and `remaining` are rounded to 4 decimals. `percent_left` is a whole number from 0 to 100, rounded down, and is the easiest thing to show. `remaining` never goes below 0, but `used` can pass `limit`: a turn that starts with budget left runs to the end, and its last calls may overshoot.
 
 `trial` is `null` for an account with no limit: one that saved its own Claude key or OpenAI-compatible URL, one listed in `CHAT_GATEWAY_USERS`, or any account when the server has no trial. Results refused before the lookup (`disabled`, `busy`, and the `error` results above) have no `trial` field at all; keep showing the last value you saw.
 
-A turn counts once, at the moment the server commits to calling the model. A turn that is cancelled, times out or fails after that still counts; a turn refused before any model call does not. On an `ok` result, `trial` already includes the turn just run.
+Every model call in a trial turn is charged as soon as it returns: each round, retried requests, requests that were billed but then failed, and the vision model's descriptions for `look_at_viewport` and viewport attachments. On an `ok` result, `trial` already includes the whole turn. A turn that is cancelled loses only the cost of the call still running.
 
-When no free turns are left, the server makes no model call and returns:
+When `used` has reached `limit`, the server makes no model call and returns:
 
 ```json
-{"status": "trial_ended", "trial": {"limit": 20, "used": 20, "remaining": 0},
- "hint": "Your free messages are used up. Paste your Claude API key in the Chat panel to keep going."}
+{"status": "trial_ended", "trial": {"unit": "usd", "limit": 0.5, "used": 0.5012, "remaining": 0.0, "percent_left": 0},
+ "hint": "Your free trial is used up. Paste your Claude API key in the Chat panel to keep going."}
 ```
 
 Saving a Claude key (or an OpenAI-compatible URL) with `blender_set_chat_backend` lifts the limit at once.
@@ -104,7 +106,9 @@ When chat is enabled, the result of `blender_register_client` includes `"feature
 
 Accounts that haven't saved a Claude key or an OpenAI-compatible URL use the server's default backend. It is normally the GPU gateway, but the operator can point it elsewhere, for example at Claude with the server's own key while the local models are paused (`CHAT_DEFAULT_PROVIDER=anthropic` plus `ANTHROPIC_API_KEY`; the model defaults to `claude-opus-5`, or `CHAT_DEFAULT_MODEL`). A backend you saved yourself always wins. The **Current:** line in the preferences says `server default` when you are on it; the server's key is never sent to Blender. `CHAT_GATEWAY_USERS`, when set, limits the server default to the listed accounts, whichever provider it is.
 
-`CHAT_TRIAL_TURNS` (default `0`) turns the server default into a free trial. With `0` there is no trial and nothing above changes. With a number above zero, every account that has no backend of its own and isn't listed in `CHAT_GATEWAY_USERS` may run that many turns on the server default, and is then asked for its own key (the `trial_ended` status). This includes accounts outside a non-empty `CHAT_GATEWAY_USERS`, which would otherwise get `no_backend`: with a trial they get the trial instead. Listed accounts and accounts with their own key or URL are unlimited. Turns are counted per account in the `chat_trial_usage` table (migration `20261001_0013`) and are never reset by the server; to give an account more turns, lower its `turns_used` row or raise the limit. Only `blender_chat` spends trial turns; other sampling requests from a trial account get no server backend.
+`CHAT_TRIAL_USD` (default `0`, a decimal number of US dollars such as `0.5`) turns the server default into a free trial. With `0` there is no trial and nothing above changes. With an amount above zero, every account that has no backend of its own and isn't listed in `CHAT_GATEWAY_USERS` may spend that much on the server default, and is then asked for its own key (the `trial_ended` status). This includes accounts outside a non-empty `CHAT_GATEWAY_USERS`, which would otherwise get `no_backend`: with a trial they get the trial instead. Listed accounts and accounts with their own key or URL are unlimited. Only `blender_chat` spends the trial; other sampling requests from a trial account get no server backend.
+
+Spend is kept per account in the `chat_trial_usage` table (migration `20261001_0013`): `used_usd`, plus running `tokens_in` and `tokens_out` totals. The server never resets it; to give an account more, lower its `used_usd` or raise the limit. Each call's cost is worked out from the token counts the provider reports and the per-model table in `src/blender_mcp/chat/pricing.py`, which holds Anthropic's list prices (input, cache writes, cache reads, output). Cache writes are priced at the 5 minute rate, which is what the server's requests use, unless Anthropic's usage breaks them down by cache lifetime. Advisor (escalation) tokens are priced at the advisor model's rates. Any model not in the table, including the GPU gateway's and OpenAI-compatible models, is priced at Claude Haiku 4.5 rates; that is a stand-in so a trial on a non-Claude default still drains, not that model's real cost. A call whose provider reports no token usage costs nothing. When the server's call logging is on, each `llm.call` event carries the call's `cost_usd` (Claude calls always; other providers only when the call was charged to a trial).
 
 With Claude (your key or the server's), `look_at_viewport` sends the screenshot to Claude itself rather than to the gateway's vision model. Claude calls think adaptively between tool steps, and requests Claude declines are re-run on Anthropic's recommended fallback model where the API supports it (`CHAT_ANTHROPIC_FALLBACKS`, on by default); a request that is still declined ends the turn with a message naming the refusal category. `CHAT_ANTHROPIC_EFFORT` (`low` to `max`) sets the effort level; unset leaves the API's default.
 
