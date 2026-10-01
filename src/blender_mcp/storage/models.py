@@ -27,6 +27,7 @@ from sqlalchemy import (
     JSON,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -448,6 +449,20 @@ class ChatSettings(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class ChatTrialUsage(Base):
+    """Free chat turns an account has spent on the server's default backend
+    (CHAT_TRIAL_TURNS). No row = none spent. Incremented in place, never
+    reset by the server."""
+
+    __tablename__ = "chat_trial_usage"
+
+    user_sub: Mapped[str] = mapped_column(String(128), primary_key=True)
+    turns_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )
