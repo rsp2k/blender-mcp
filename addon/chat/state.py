@@ -23,8 +23,11 @@ EVENT_TYPES = ("status", "tool", "text")
 _STATUS_TEXT = {
     "disabled": "Chat is turned off on this server.",
     "no_backend": (
-        "No chat backend is available for your account. "
-        "Set one in Preferences > Add-ons > Blender MCP > Chat backend."
+        "No chat model is available for your account. Paste your Claude API key "
+        "in the Chat panel, or set a backend in Preferences > Add-ons > Blender MCP > Chat backend."
+    ),
+    "trial_ended": (
+        "Your free messages are used up. Paste your Claude API key in the Chat panel to keep going."
     ),
     "busy": "A chat turn is already running for your account. Try again when it finishes.",
     "backend_error": "The model call failed.",
@@ -114,12 +117,77 @@ def result_message(payload: dict | None) -> tuple[str, str]:
     base = _STATUS_TEXT.get(status)
     if base is None:
         return "error", f"Unexpected reply from the server (status {status!r})."
-    extra = payload.get("hint") if status == "no_backend" else payload.get("detail")
-    if status == "no_backend" and extra:
-        return "error", str(extra)
+    # The free trial running out is a note, not a failure.
+    role = "status" if status == "trial_ended" else "error"
+    if status in KEY_STATUSES:
+        return role, str(payload.get("hint") or base)
+    extra = payload.get("detail")
     if extra:
-        return "error", f"{base} {extra}"
-    return "error", base
+        return role, f"{base} {extra}"
+    return role, base
+
+
+# --- free trial and the key prompt -------------------------------------------
+
+# blender_chat statuses that mean "no model answers until you add a key".
+KEY_STATUSES = ("trial_ended", "no_backend")
+KEY_URL = "https://console.anthropic.com/settings/keys"
+TRIAL_LOW = 3
+TRIAL_ROW_PAD = 8
+_KEY_ERRORS = {
+    "invalid_api_key": "That key wasn't accepted. Check it and paste it again.",
+    "key_check_failed": "Couldn't check the key right now. Try again in a moment.",
+}
+
+
+def normalize_trial(value: Any) -> dict | None:
+    """The server's ``trial`` field as {"limit", "used", "remaining"} ints, or
+    None (unlimited account, no trial configured, or an older server)."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in ("limit", "used", "remaining"):
+        n = value.get(key)
+        if isinstance(n, bool) or not isinstance(n, (int, float)):
+            return None
+        out[key] = max(0, int(n))
+    return out
+
+
+def key_error_text(payload: Any) -> str:
+    """What the key box says when saving a key failed."""
+    if not isinstance(payload, dict):
+        return "The server sent a reply the add-on couldn't read."
+    detail = payload.get("detail") or payload.get("message")
+    if detail:
+        return str(detail)
+    code = payload.get("error")
+    return _KEY_ERRORS.get(code, f"Couldn't save the key ({code or payload.get('status')!r}).")
+
+
+def key_prompt_heading(snap: dict) -> str | None:
+    """The key box's first line, or None when the box shouldn't show."""
+    trial = snap.get("trial")
+    if snap.get("needs_key") == "no_backend":
+        return "Paste your Claude API key to start chatting"
+    if snap.get("needs_key") or (trial and trial["remaining"] == 0):
+        return "Paste your Claude API key to keep chatting"
+    if snap.get("key_prompt_requested") or snap.get("key_checking"):
+        return "Paste your Claude API key"
+    return None
+
+
+def trial_row_text(remaining: int, chars: int) -> tuple[str, str]:
+    """(label, button) for the trial row, shortened when the sidebar is narrow.
+    ``chars`` is how many characters fit across the row."""
+    noun = "message" if remaining == 1 else "messages"
+    short = f"{remaining} free left"
+    for label, button in ((f"{remaining} free {noun} left", "Use my own key"),
+                          (short, "Use my own key")):
+        # Room for the label's icon and both widgets' padding.
+        if len(label) + len(button) + TRIAL_ROW_PAD <= chars:
+            return label, button
+    return short, "Use my key"
 
 
 def format_duration(ms: Any) -> str:
@@ -232,6 +300,15 @@ class ChatState:
         self.conversation_id: str | None = None
         # Bumped on every transcript change, so the panel knows to rebuild rows.
         self.revision = 0
+        # Free trial from the server ({"limit", "used", "remaining"}), or None.
+        self.trial: dict | None = None
+        # "trial_ended" or "no_backend" once a turn was refused for want of a
+        # key; None again when a key is saved.
+        self.needs_key: str | None = None
+        # The key box: opened by hand, a save in flight, the last save's error.
+        self.key_prompt_requested = False
+        self.key_checking = False
+        self.key_error: str | None = None
 
     # --- transcript -------------------------------------------------------
 
@@ -419,6 +496,7 @@ class ChatState:
                     entry["ok"] = False
             if isinstance(payload, dict) and isinstance(payload.get("backend"), dict):
                 self.backend_used = payload["backend"]
+            self._note_chat_result(payload)
             if role == "assistant":
                 shown = {
                     (m.get("text") or "").strip() for m in self.messages
@@ -432,6 +510,76 @@ class ChatState:
             elif text:
                 self.add_message("status", text)
             return True
+
+    # --- trial, backend and key ---------------------------------------------
+
+    def _note_chat_result(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        # Older servers never send "trial", so it stays None for them.
+        if "trial" in payload:
+            self.trial = normalize_trial(payload["trial"])
+        status = payload.get("status")
+        if status in KEY_STATUSES:
+            self.needs_key = status
+        elif status == "ok":
+            self.needs_key = None
+
+    def apply_backend_result(self, payload: Any, saved: bool = False,
+                             keep_trial: bool = False) -> None:
+        """A blender_get/set_chat_backend answer. With ``saved`` (a set call),
+        a backend that answers ends the key prompt unless the trial says zero.
+        ``keep_trial`` for tools whose answer may not carry "trial" at all
+        (set_chat_advisor), so a missing field isn't read as unlimited."""
+        payload = payload if isinstance(payload, dict) else {}
+        with self.lock:
+            if payload.get("status") == "ok" and isinstance(payload.get("backend"), dict):
+                self.backend = payload["backend"]
+                self.backend_error = None
+                if "trial" in payload or not keep_trial:
+                    self.trial = normalize_trial(payload.get("trial"))
+                if saved and not (self.trial and self.trial["remaining"] == 0):
+                    self.needs_key = None
+                    self.key_prompt_requested = False
+                    self.key_error = None
+            else:
+                self.backend_error = str(
+                    payload.get("detail") or payload.get("message")
+                    or f"status {payload.get('status')!r}"
+                )
+
+    def toggle_key_prompt(self) -> bool:
+        with self.lock:
+            self.key_prompt_requested = not self.key_prompt_requested
+            if not self.key_prompt_requested:
+                self.key_error = None
+            return self.key_prompt_requested
+
+    def begin_key_check(self) -> None:
+        with self.lock:
+            self.key_checking = True
+            self.key_error = None
+
+    def finish_key_check(self, payload: Any = None, error: str | None = None) -> bool:
+        """Close a "Save key" call; True if the server took the key."""
+        with self.lock:
+            self.key_checking = False
+            if (error is None and isinstance(payload, dict) and payload.get("status") == "ok"
+                    and isinstance(payload.get("backend"), dict)):
+                self.apply_backend_result(payload)
+                self.needs_key = None
+                self.key_prompt_requested = False
+                self.key_error = None
+                return True
+            self.key_error = error or key_error_text(payload)
+            return False
+
+    def reset_account(self) -> None:
+        """A new registration may be another account: forget its key state."""
+        with self.lock:
+            self.trial = None
+            self.needs_key = None
+            self.key_error = None
 
     # --- registration / approval -------------------------------------------
 
@@ -472,6 +620,11 @@ class ChatState:
                 "turn_started_at": self.turn_started_at,
                 "revision": self.revision,
                 "conversation_id": self.conversation_id,
+                "trial": dict(self.trial) if self.trial else None,
+                "needs_key": self.needs_key,
+                "key_prompt_requested": self.key_prompt_requested,
+                "key_checking": self.key_checking,
+                "key_error": self.key_error,
             }
 
 

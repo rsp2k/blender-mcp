@@ -143,6 +143,8 @@ def send_problem() -> str | None:
         return "Still checking whether this server offers chat."
     if chat_state.busy:
         return "A reply is still coming. Press Stop to cancel it."
+    if chat_state.needs_key:
+        return "Paste your Claude API key in the Chat panel first."
     return None
 
 
@@ -289,7 +291,7 @@ def stop() -> bool:
 
 # --- backend settings -------------------------------------------------------
 
-def _on_backend_result(fut: Any) -> None:
+def _on_backend_result(fut: Any, name: str = GET_BACKEND_TOOL) -> None:
     try:
         result = fut.result()
     except Exception as e:  # noqa: BLE001
@@ -298,19 +300,14 @@ def _on_backend_result(fut: Any) -> None:
         if getattr(result, "is_error", False) or getattr(result, "isError", False):
             chat_state.backend_error = tool_error_text(result)
         else:
-            payload = decode_tool_result(result) or {}
-            if payload.get("status") == "ok" and isinstance(payload.get("backend"), dict):
-                chat_state.backend = payload["backend"]
-                chat_state.backend_error = None
-            else:
-                chat_state.backend_error = str(
-                    payload.get("detail") or payload.get("message")
-                    or f"status {payload.get('status')!r}"
-                )
+            chat_state.apply_backend_result(
+                decode_tool_result(result), saved=name == SET_BACKEND_TOOL,
+                keep_trial=name == SET_ADVISOR_TOOL,
+            )
     request_redraw()
 
 
-def _call_backend_tool(name: str, args: dict) -> str | None:
+def _start_backend_call(name: str, args: dict, on_done: Any) -> str | None:
     client = _live_client()
     if client is None:
         return "Not connected."
@@ -321,8 +318,44 @@ def _call_backend_tool(name: str, args: dict) -> str | None:
         )
     except Exception as e:  # noqa: BLE001
         return str(e)
-    fut.add_done_callback(_on_backend_result)
+    fut.add_done_callback(on_done)
     return None
+
+
+def _call_backend_tool(name: str, args: dict) -> str | None:
+    return _start_backend_call(name, args, lambda f: _on_backend_result(f, name))
+
+
+def _on_key_result(fut: Any) -> None:
+    """Done callback for "Save key" (loop thread)."""
+    try:
+        result = fut.result()
+    except Exception as e:  # noqa: BLE001
+        chat_state.finish_key_check(error=f"Couldn't reach the server: {str(e) or type(e).__name__}")
+    else:
+        if getattr(result, "is_error", False) or getattr(result, "isError", False):
+            chat_state.finish_key_check(error=tool_error_text(result))
+        else:
+            chat_state.finish_key_check(decode_tool_result(result))
+    request_redraw()
+
+
+def save_key(api_key: str) -> str | None:
+    """Store the user's Claude API key from the Chat panel. The server checks
+    it first; the answer lands in chat_state. Main thread; never waits."""
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return "Paste a key first."
+    if chat_state.key_checking:
+        return "Still checking the last key."
+    chat_state.begin_key_check()
+    problem = _start_backend_call(
+        SET_BACKEND_TOOL, {"provider": "anthropic", "api_key": api_key}, _on_key_result,
+    )
+    if problem:
+        chat_state.finish_key_check(error=problem)
+    request_redraw()
+    return problem
 
 
 def refresh_backend() -> str | None:
@@ -355,6 +388,7 @@ def on_registered(payload: dict | None) -> None:
     """Registration answered (loop thread): read features, fetch the backend."""
     features = payload.get("features") if isinstance(payload, dict) else None
     chat_state.set_features(features)
+    chat_state.reset_account()
     if chat_state.available:
         refresh_backend()
     request_redraw()

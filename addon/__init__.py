@@ -220,12 +220,21 @@ def register():
 
     # Chat message field. On WindowManager so it never saves into a .blend;
     # its update hook sends on Enter.
-    from .ui.chat_operators import on_chat_input_update
+    from .ui.chat_operators import on_chat_input_update, on_chat_key_update
     bpy.types.WindowManager.blendermcp_chat_input = bpy.props.StringProperty(
         name="Message",
         description="Type a request and press Enter",
         default="",
         update=on_chat_input_update,
+    )
+    # The Chat panel's key field: WindowManager, so neither the .blend nor
+    # userpref.blend ever holds it, and Save key clears it at once.
+    bpy.types.WindowManager.blendermcp_chat_key = bpy.props.StringProperty(
+        name="Claude API key",
+        description="Paste your Claude API key and press Enter or Save key",
+        default="",
+        subtype='PASSWORD',
+        update=on_chat_key_update,
     )
 
     # Register the UI classes (panel + operators).
@@ -374,6 +383,8 @@ def unregister():
 
     if hasattr(bpy.types.WindowManager, "blendermcp_chat_input"):
         del bpy.types.WindowManager.blendermcp_chat_input
+    if hasattr(bpy.types.WindowManager, "blendermcp_chat_key"):
+        del bpy.types.WindowManager.blendermcp_chat_key
 
     # Remove transient Scene props.
     for prop in _TRANSIENT_SCENE_PROPS:

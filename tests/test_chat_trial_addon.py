@@ -1,0 +1,291 @@
+"""The add-on's side of the free trial and the Chat panel's key prompt:
+trial counts from every result, the needs-key flag, and Save key."""
+
+import json
+import sys
+from concurrent.futures import Future
+from types import SimpleNamespace
+
+import pytest
+
+from addon.chat import client as chat_client
+from addon.chat.state import (
+    ChatState,
+    key_prompt_heading,
+    normalize_trial,
+    result_message,
+    trial_row_text,
+)
+
+TRIAL = {"limit": 5, "used": 2, "remaining": 3}
+ENDED = {"limit": 5, "used": 5, "remaining": 0}
+BACKEND = {"provider": "anthropic", "model": "claude-sonnet-5", "has_key": True, "source": "user"}
+HINT = "Your free messages are used up. Paste your Claude API key in the Chat panel to keep going."
+
+
+def finish(st, payload):
+    st.begin_turn("add a cube")
+    role, text = result_message(payload)
+    assert st.finish_turn(st.turn, role, text, payload)
+    return role, text
+
+
+def text_result(obj, is_error=False):
+    return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(obj))], data=None,
+                           is_error=is_error)
+
+
+def done(result=None, exc=None):
+    fut = Future()
+    if exc is not None:
+        fut.set_exception(exc)
+    else:
+        fut.set_result(result)
+    return fut
+
+
+# --- trial from each result type ----------------------------------------------
+
+def test_trial_from_get_backend():
+    st = ChatState()
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": TRIAL})
+    assert st.trial == TRIAL and st.backend == BACKEND
+    assert st.snapshot()["trial"] == TRIAL
+
+
+def test_trial_from_chat_results_ok_and_error():
+    st = ChatState()
+    finish(st, {"status": "ok", "reply": "Added.", "trial": TRIAL})
+    assert st.trial == TRIAL
+    finish(st, {"status": "backend_error", "detail": "HTTP 502",
+                "trial": {"limit": 5, "used": 3, "remaining": 2}})
+    assert st.trial["remaining"] == 2
+
+
+def test_unlimited_account_clears_trial():
+    st = ChatState()
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": TRIAL})
+    finish(st, {"status": "ok", "reply": "hi", "trial": None})
+    assert st.trial is None
+
+
+@pytest.mark.parametrize("raw", [None, "5", {"limit": 5}, {"limit": 5, "used": 1, "remaining": "4"},
+                                 {"limit": True, "used": 0, "remaining": 1}])
+def test_malformed_trial_reads_as_none(raw):
+    assert normalize_trial(raw) is None
+
+
+def test_trial_counts_never_negative():
+    assert normalize_trial({"limit": 5, "used": 6, "remaining": -1})["remaining"] == 0
+
+
+# --- older servers (no "trial" field) -------------------------------------------
+
+def test_old_server_get_backend_means_no_trial():
+    st = ChatState()
+    st.trial = dict(TRIAL)
+    st.apply_backend_result({"status": "ok", "backend": BACKEND})
+    assert st.trial is None
+
+
+def test_old_server_chat_result_leaves_trial_unset():
+    st = ChatState()
+    finish(st, {"status": "ok", "reply": "hi"})
+    assert st.trial is None and st.needs_key is None
+    assert key_prompt_heading(st.snapshot()) is None
+
+
+def test_advisor_answer_without_trial_keeps_it():
+    st = ChatState()
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": TRIAL})
+    st.apply_backend_result({"status": "ok", "backend": BACKEND}, keep_trial=True)
+    assert st.trial == TRIAL
+
+
+# --- needs-key ------------------------------------------------------------------
+
+def test_trial_ended_sets_needs_key_and_reads_well():
+    st = ChatState()
+    role, text = finish(st, {"status": "trial_ended", "trial": ENDED, "hint": HINT})
+    assert st.needs_key == "trial_ended" and st.trial == ENDED
+    # A note, not an error: nothing failed.
+    assert role == "status" and text == HINT
+    assert st.last_error is None
+    snap = st.snapshot()
+    assert snap["needs_key"] == "trial_ended"
+    assert key_prompt_heading(snap) == "Paste your Claude API key to keep chatting"
+
+
+def test_trial_ended_without_hint_still_says_what_to_do():
+    role, text = result_message({"status": "trial_ended"})
+    assert role == "status"
+    assert "free messages are used up" in text and "API key" in text
+    assert "—" not in text and "!" not in text
+
+
+def test_no_backend_sets_needs_key_with_start_heading():
+    st = ChatState()
+    finish(st, {"status": "no_backend", "hint": "Add a key to start."})
+    assert st.needs_key == "no_backend"
+    assert key_prompt_heading(st.snapshot()) == "Paste your Claude API key to start chatting"
+
+
+def test_ok_reply_clears_a_stale_needs_key():
+    st = ChatState()
+    st.needs_key = "trial_ended"
+    finish(st, {"status": "ok", "reply": "hi", "trial": None})
+    assert st.needs_key is None
+
+
+def test_saved_key_clears_needs_key():
+    st = ChatState()
+    finish(st, {"status": "trial_ended", "trial": ENDED, "hint": HINT})
+    st.begin_key_check()
+    assert st.snapshot()["key_checking"]
+    assert st.finish_key_check({"status": "ok", "backend": BACKEND, "trial": None})
+    snap = st.snapshot()
+    assert snap["needs_key"] is None and snap["trial"] is None
+    assert snap["backend"] == BACKEND and not snap["key_checking"]
+    assert key_prompt_heading(snap) is None
+
+
+@pytest.mark.parametrize("code", ["invalid_api_key", "key_check_failed"])
+def test_rejected_key_shows_detail_and_keeps_the_box(code):
+    st = ChatState()
+    finish(st, {"status": "trial_ended", "trial": ENDED, "hint": HINT})
+    st.begin_key_check()
+    assert not st.finish_key_check({"status": "error", "error": code, "detail": "Anthropic said 401."})
+    snap = st.snapshot()
+    assert snap["key_error"] == "Anthropic said 401."
+    assert snap["needs_key"] == "trial_ended" and snap["trial"] == ENDED
+    assert key_prompt_heading(snap) is not None
+
+
+def test_rejected_key_without_detail_gets_plain_text():
+    st = ChatState()
+    st.finish_key_check({"status": "error", "error": "invalid_api_key"})
+    assert "wasn't accepted" in st.key_error
+
+
+def test_preferences_save_also_ends_the_prompt():
+    st = ChatState()
+    st.needs_key = "no_backend"
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": None}, saved=True)
+    assert st.needs_key is None
+
+
+def test_refresh_alone_does_not_end_the_prompt():
+    st = ChatState()
+    st.needs_key = "no_backend"
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": None})
+    assert st.needs_key == "no_backend"
+
+
+def test_backend_error_path_unchanged():
+    st = ChatState()
+    st.apply_backend_result({"status": "error", "error": "invalid_api_key", "detail": "Bad key."},
+                            saved=True)
+    assert st.backend_error == "Bad key." and st.backend is None
+
+
+# --- the box and the trial row ----------------------------------------------------
+
+def test_box_shows_when_trial_hits_zero_without_a_refusal():
+    st = ChatState()
+    finish(st, {"status": "ok", "reply": "Last one.", "trial": ENDED})
+    snap = st.snapshot()
+    assert snap["needs_key"] is None
+    assert key_prompt_heading(snap) == "Paste your Claude API key to keep chatting"
+
+
+def test_use_my_own_key_toggles_the_box():
+    st = ChatState()
+    st.trial = dict(TRIAL)
+    assert key_prompt_heading(st.snapshot()) is None
+    assert st.toggle_key_prompt()
+    assert key_prompt_heading(st.snapshot()) == "Paste your Claude API key"
+    assert not st.toggle_key_prompt()
+    assert key_prompt_heading(st.snapshot()) is None
+
+
+def test_trial_row_text_fits_or_shortens():
+    assert trial_row_text(12, 60) == ("12 free messages left", "Use my own key")
+    assert trial_row_text(1, 60) == ("1 free message left", "Use my own key")
+    for chars in range(10, 60):
+        label, button = trial_row_text(12, chars)
+        assert label.startswith("12 free") and button.startswith("Use my")
+    assert trial_row_text(3, 20) == ("3 free left", "Use my key")
+
+
+def test_new_account_forgets_key_state():
+    st = ChatState()
+    st.trial, st.needs_key, st.key_error = dict(ENDED), "trial_ended", "Bad key."
+    st.reset_account()
+    assert (st.trial, st.needs_key, st.key_error) == (None, None, None)
+
+
+# --- client callbacks ---------------------------------------------------------------
+
+@pytest.fixture
+def fresh_state(monkeypatch):
+    st = ChatState()
+    monkeypatch.setattr(chat_client, "chat_state", st)
+    monkeypatch.setattr(chat_client, "request_redraw", lambda: None)
+    return st
+
+
+def test_send_refused_while_a_key_is_needed(fresh_state, monkeypatch):
+    # preferences.py needs bpy; send_problem only wants the login token from it.
+    prefs = SimpleNamespace(get_prefs=lambda: SimpleNamespace(jwt_token="t"))
+    monkeypatch.setitem(sys.modules, "addon.preferences", prefs)
+    monkeypatch.setattr(chat_client, "_live_client", lambda: object())
+    fresh_state.available = True
+    fresh_state.needs_key = "trial_ended"
+    assert "API key" in chat_client.send_problem()
+
+
+def test_key_result_callback_success(fresh_state):
+    fresh_state.needs_key = "trial_ended"
+    fresh_state.begin_key_check()
+    chat_client._on_key_result(done(text_result({"status": "ok", "backend": BACKEND, "trial": None})))
+    assert fresh_state.needs_key is None and fresh_state.backend == BACKEND
+    assert not fresh_state.key_checking
+
+
+def test_key_result_callback_failure_and_exception(fresh_state):
+    fresh_state.begin_key_check()
+    chat_client._on_key_result(done(text_result(
+        {"status": "error", "error": "invalid_api_key", "detail": "That key was refused."})))
+    assert fresh_state.key_error == "That key was refused."
+    fresh_state.begin_key_check()
+    chat_client._on_key_result(done(exc=TimeoutError()))
+    assert "Couldn't reach the server" in fresh_state.key_error and not fresh_state.key_checking
+
+
+def test_save_key_when_not_connected(fresh_state, monkeypatch):
+    monkeypatch.setattr(chat_client, "_live_client", lambda: None)
+    assert chat_client.save_key("sk-ant-x") == "Not connected."
+    assert fresh_state.key_error == "Not connected." and not fresh_state.key_checking
+    assert chat_client.save_key("   ") == "Paste a key first."
+
+
+def test_save_key_sends_provider_and_key_only(fresh_state, monkeypatch):
+    calls = []
+
+    def fake_start(name, args, on_done):
+        calls.append((name, args, on_done))
+
+    monkeypatch.setattr(chat_client, "_start_backend_call", fake_start)
+    assert chat_client.save_key("  sk-ant-abc  ") is None
+    assert fresh_state.key_checking
+    assert calls == [("blender_set_chat_backend", {"provider": "anthropic", "api_key": "sk-ant-abc"},
+                      chat_client._on_key_result)]
+
+
+def test_backend_callback_marks_set_calls_as_saves(fresh_state):
+    fresh_state.needs_key = "no_backend"
+    ok = text_result({"status": "ok", "backend": BACKEND, "trial": None})
+    chat_client._on_backend_result(done(ok), chat_client.GET_BACKEND_TOOL)
+    assert fresh_state.needs_key == "no_backend"
+    chat_client._on_backend_result(done(ok), chat_client.SET_BACKEND_TOOL)
+    assert fresh_state.needs_key is None
