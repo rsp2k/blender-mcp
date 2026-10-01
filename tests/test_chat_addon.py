@@ -149,8 +149,8 @@ def test_wrap_text_scales_with_ui_and_has_a_floor():
 @pytest.mark.parametrize("payload,role,needle", [
     ({"status": "ok", "reply": "hi"}, "assistant", "hi"),
     ({"status": "disabled"}, "error", "turned off"),
-    ({"status": "no_backend", "hint": "Set a key in prefs"}, "error", "Set a key in prefs"),
-    ({"status": "no_backend"}, "error", "Chat backend"),
+    ({"status": "no_backend", "hint": "Set a key in prefs"}, "error", "No chat model"),
+    ({"status": "no_backend"}, "error", "No chat model"),
     ({"status": "busy"}, "error", "already running"),
     ({"status": "backend_error", "detail": "HTTP 502"}, "error", "HTTP 502"),
     ({"status": "timeout"}, "error", "too long"),

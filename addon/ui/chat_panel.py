@@ -238,10 +238,12 @@ def _draw_turn(layout, context, snap, wrap) -> None:
     backend = snap["backend_used"] or snap["backend"]
     who = (reader.model_label(backend) or "Assistant").split(" ")[0]
     failed = sum(1 for s in turn["steps"] if s.get("ok") is False)
-    header = reader.reply_header(turn, who)
-    if failed:
-        header += f" · {failed} failed"
-    _mascot_label(col, header)
+    # A turn refused before any model ran (trial used up) has no reply to head.
+    if turn["steps"] or turn["replies"]:
+        header = reader.reply_header(turn, who)
+        if failed:
+            header += f" · {failed} failed"
+        _mascot_label(col, header)
 
     # The last reply is the answer; earlier ones are narration between steps.
     reply = (turn["replies"][-1].get("text") or "") if turn["replies"] else ""

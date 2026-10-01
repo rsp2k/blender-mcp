@@ -144,18 +144,19 @@ def test_trial_ended_sets_needs_key_and_reads_well():
     st = ChatState()
     role, text = finish(st, {"status": "trial_ended", "trial": ENDED, "hint": HINT})
     assert st.needs_key == "trial_ended" and st.trial == ENDED
-    # A note, not an error: nothing failed.
-    assert role == "status" and text == HINT
+    # A note, not an error: nothing failed. Short, because the key box
+    # right below carries the instructions the server's hint repeats.
+    assert role == "status" and text == "Your free trial is used up."
     assert st.last_error is None
     snap = st.snapshot()
     assert snap["needs_key"] == "trial_ended"
     assert key_prompt_heading(snap) == "Paste your Claude API key to keep chatting"
 
 
-def test_trial_ended_without_hint_still_says_what_to_do():
+def test_trial_ended_note_is_the_same_with_or_without_hint():
     role, text = result_message({"status": "trial_ended"})
     assert role == "status"
-    assert "free trial is used up" in text and "API key" in text
+    assert text == "Your free trial is used up."
     assert "—" not in text and "!" not in text
 
 

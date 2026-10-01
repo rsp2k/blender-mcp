@@ -22,13 +22,9 @@ EVENT_TYPES = ("status", "tool", "text")
 
 _STATUS_TEXT = {
     "disabled": "Chat is turned off on this server.",
-    "no_backend": (
-        "No chat model is available for your account. Paste your Claude API key "
-        "in the Chat panel, or set a backend in Preferences > Add-ons > Blender MCP > Chat backend."
-    ),
-    "trial_ended": (
-        "Your free trial is used up. Paste your Claude API key in the Chat panel to keep going."
-    ),
+    # Short on purpose: the key box right below says what to do next.
+    "no_backend": "No chat model is available for your account yet.",
+    "trial_ended": "Your free trial is used up.",
     "busy": "A chat turn is already running for your account. Try again when it finishes.",
     "backend_error": "The model call failed.",
     "timeout": "The turn took too long and was stopped.",
@@ -120,7 +116,7 @@ def result_message(payload: dict | None) -> tuple[str, str]:
     # The free trial running out is a note, not a failure.
     role = "status" if status == "trial_ended" else "error"
     if status in KEY_STATUSES:
-        return role, str(payload.get("hint") or base)
+        return role, base  # the server's hint repeats what the key box says
     extra = payload.get("detail")
     if extra:
         return role, f"{base} {extra}"
