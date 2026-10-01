@@ -80,6 +80,10 @@ class FakeModels:
     def __init__(self, *script):
         self.script = list(script)
         self.requests: list[dict] = []
+        # Claude key checks (GET /v1/models) when a key is saved; kept apart
+        # from the model calls. ``key_status`` is what Anthropic answers.
+        self.key_checks: list[dict] = []
+        self.key_status = 200
         self.gate: asyncio.Event | None = None
         self.entered = asyncio.Event()
 
@@ -87,6 +91,9 @@ class FakeModels:
         # httpx requests from the OpenAI-compatible providers, httpx2 ones from
         # the Anthropic SDK; answer each in its own library's Response type.
         response = httpx2.Response if isinstance(request, httpx2.Request) else httpx.Response
+        if request.method == "GET" and request.url.path.endswith("/v1/models"):
+            self.key_checks.append({"url": str(request.url), "headers": dict(request.headers)})
+            return response(self.key_status, json={"data": [], "has_more": False})
         body = json.loads(request.content)
         self.requests.append({"url": str(request.url), "headers": dict(request.headers), "body": body})
         self.entered.set()
@@ -545,7 +552,8 @@ async def test_per_user_anthropic_backend(cfg, sessions):
         out = await h.chat(client, "a lamp please")
 
     assert _no_advisor(saved) == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
-                                                 "base_url": None, "has_key": True, "source": "user"}}
+                                                 "base_url": None, "has_key": True, "source": "user"},
+                                  "trial": None}
     assert got == saved
     assert key not in json.dumps(saved) + json.dumps(got) + json.dumps(out)
 
@@ -587,7 +595,8 @@ async def test_server_default_anthropic_backend(cfg, sessions):
             "provider": "openai", "base_url": "http://ollama.internal:11434/v1", "model": "llama3"})
         out2 = await h.chat(client)
     assert _no_advisor(got) == {"status": "ok", "backend": {"provider": "anthropic", "model": "claude-opus-5",
-                                               "base_url": None, "has_key": True, "source": "server"}}
+                                               "base_url": None, "has_key": True, "source": "server"},
+                                "trial": None}
     assert server_key not in json.dumps(got) + json.dumps(out) + json.dumps(out2)
     assert out["status"] == "ok" and out["reply"] == "Made a crate."
     assert out["backend"] == {"provider": "anthropic", "model": "claude-opus-5"}

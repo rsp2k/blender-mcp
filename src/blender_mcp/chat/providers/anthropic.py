@@ -357,6 +357,29 @@ def _translate(e: Exception, backend: Backend, timeout_s: float) -> ProviderErro
     return ProviderError(f"the Anthropic API call failed: {type(e).__name__}")
 
 
+# ---- key check -----------------------------------------------------------------
+
+API_VERSION = "2023-06-01"
+KEY_CHECK_TIMEOUT_S = 10.0
+
+
+async def check_key(api_key: str, base_url: str, *,
+                    transport: httpx2.AsyncBaseTransport | None = None,
+                    timeout_s: float = KEY_CHECK_TIMEOUT_S) -> int:
+    """HTTP status of ``GET {base_url}/v1/models`` with this key: authenticated,
+    spends no tokens. ProviderError when Anthropic didn't answer."""
+    url = base_url.rstrip("/") + "/v1/models"
+    headers = {"x-api-key": api_key, "anthropic-version": API_VERSION}
+    try:
+        async with httpx2.AsyncClient(timeout=timeout_s, transport=transport) as client:
+            r = await client.get(url, headers=headers)
+    except httpx2.TimeoutException as e:
+        raise ProviderError(f"no answer within {timeout_s:g}s") from e
+    except httpx2.HTTPError as e:
+        raise ProviderError(f"could not connect ({type(e).__name__})") from e
+    return r.status_code
+
+
 # ---- the call ----------------------------------------------------------------
 
 def make_client(backend: Backend, timeout_s: float,
