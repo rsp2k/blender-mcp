@@ -14,11 +14,16 @@ from addon.chat.state import (
     key_prompt_heading,
     normalize_trial,
     result_message,
+    trial_exhausted,
+    trial_low,
     trial_row_text,
 )
 
-TRIAL = {"limit": 5, "used": 2, "remaining": 3}
-ENDED = {"limit": 5, "used": 5, "remaining": 0}
+TRIAL = {"unit": "usd", "limit": 0.5, "used": 0.1234, "remaining": 0.3766, "percent_left": 75}
+ENDED = {"unit": "usd", "limit": 0.5, "used": 0.5, "remaining": 0.0, "percent_left": 0}
+# Servers from before cost budgets counted messages, with no "unit".
+OLD_TRIAL = {"limit": 5, "used": 2, "remaining": 3}
+OLD_ENDED = {"limit": 5, "used": 5, "remaining": 0}
 BACKEND = {"provider": "anthropic", "model": "claude-sonnet-5", "has_key": True, "source": "user"}
 HINT = "Your free messages are used up. Paste your Claude API key in the Chat panel to keep going."
 
@@ -58,8 +63,8 @@ def test_trial_from_chat_results_ok_and_error():
     finish(st, {"status": "ok", "reply": "Added.", "trial": TRIAL})
     assert st.trial == TRIAL
     finish(st, {"status": "backend_error", "detail": "HTTP 502",
-                "trial": {"limit": 5, "used": 3, "remaining": 2}})
-    assert st.trial["remaining"] == 2
+                "trial": {**TRIAL, "used": 0.3, "remaining": 0.2, "percent_left": 40}})
+    assert st.trial["percent_left"] == 40
 
 
 def test_unlimited_account_clears_trial():
@@ -69,14 +74,45 @@ def test_unlimited_account_clears_trial():
     assert st.trial is None
 
 
-@pytest.mark.parametrize("raw", [None, "5", {"limit": 5}, {"limit": 5, "used": 1, "remaining": "4"},
-                                 {"limit": True, "used": 0, "remaining": 1}])
+@pytest.mark.parametrize("raw", [
+    None, "5", {"limit": 5}, {"limit": 5, "used": 1, "remaining": "4"},
+    {"limit": True, "used": 0, "remaining": 1},
+    {"unit": "usd", "limit": 0.5, "used": "x", "remaining": 0.1, "percent_left": 80},
+])
 def test_malformed_trial_reads_as_none(raw):
     assert normalize_trial(raw) is None
 
 
-def test_trial_counts_never_negative():
+def test_budget_shape_kept_and_percent_bounded():
+    assert normalize_trial(TRIAL) == TRIAL
+    assert normalize_trial({**TRIAL, "percent_left": 140})["percent_left"] == 100
+    assert normalize_trial({**TRIAL, "percent_left": -3})["percent_left"] == 0
+    # Missing percent: worked out from remaining / limit.
+    no_pct = {k: v for k, v in TRIAL.items() if k != "percent_left"}
+    assert normalize_trial(no_pct)["percent_left"] == 75
+
+
+def test_old_message_shape_is_tagged_and_never_negative():
+    assert normalize_trial(OLD_TRIAL) == {"unit": "messages", **OLD_TRIAL}
     assert normalize_trial({"limit": 5, "used": 6, "remaining": -1})["remaining"] == 0
+
+
+@pytest.mark.parametrize("trial,exhausted", [
+    (TRIAL, False), (ENDED, True),
+    ({**TRIAL, "remaining": 0.002, "percent_left": 0}, True),   # rounds to 0%
+    ({**TRIAL, "remaining": -0.01, "percent_left": 3}, True),   # overspent by the last turn
+    (OLD_TRIAL, False), (OLD_ENDED, True), (None, False),
+])
+def test_trial_exhausted(trial, exhausted):
+    assert trial_exhausted(normalize_trial(trial)) is exhausted
+
+
+@pytest.mark.parametrize("trial,low", [
+    ({**TRIAL, "percent_left": 16}, False), ({**TRIAL, "percent_left": 15}, True),
+    ({**OLD_TRIAL, "remaining": 4}, False), ({**OLD_TRIAL, "remaining": 3}, True),
+])
+def test_trial_low_threshold(trial, low):
+    assert trial_low(normalize_trial(trial)) is low
 
 
 # --- older servers (no "trial" field) -------------------------------------------
@@ -119,7 +155,7 @@ def test_trial_ended_sets_needs_key_and_reads_well():
 def test_trial_ended_without_hint_still_says_what_to_do():
     role, text = result_message({"status": "trial_ended"})
     assert role == "status"
-    assert "free messages are used up" in text and "API key" in text
+    assert "free trial is used up" in text and "API key" in text
     assert "—" not in text and "!" not in text
 
 
@@ -208,13 +244,42 @@ def test_use_my_own_key_toggles_the_box():
     assert key_prompt_heading(st.snapshot()) is None
 
 
-def test_trial_row_text_fits_or_shortens():
-    assert trial_row_text(12, 60) == ("12 free messages left", "Use my own key")
-    assert trial_row_text(1, 60) == ("1 free message left", "Use my own key")
-    for chars in range(10, 60):
-        label, button = trial_row_text(12, chars)
+def test_budget_row_shows_percent_and_shortens():
+    trial = normalize_trial(TRIAL)
+    assert trial_row_text(trial, 60) == ("Free trial: 75% left", "Use my own key")
+    assert trial_row_text(trial, 35) == ("75% free left", "Use my own key")
+    assert trial_row_text(trial, 31) == ("75% free left", "Use my key")
+    assert trial_row_text(trial, 30) == ("75% left", "Use my own key")
+    assert trial_row_text(trial, 10) == ("75% left", "Use my key")
+    for chars in range(5, 80):
+        label, button = trial_row_text(trial, chars)
+        # A percentage only: never money or tokens.
+        assert "75%" in label and "$" not in label and "0.37" not in label
+        assert "token" not in label and button.startswith("Use my")
+
+
+def test_old_server_row_still_counts_messages():
+    trial = normalize_trial({"limit": 15, "used": 3, "remaining": 12})
+    assert trial_row_text(trial, 60) == ("12 free messages left", "Use my own key")
+    assert trial_row_text(normalize_trial({"limit": 5, "used": 4, "remaining": 1}), 60) == \
+        ("1 free message left", "Use my own key")
+    for chars in range(5, 60):
+        label, button = trial_row_text(trial, chars)
         assert label.startswith("12 free") and button.startswith("Use my")
-    assert trial_row_text(3, 20) == ("3 free left", "Use my key")
+    assert trial_row_text(trial, 20) == ("12 free left", "Use my key")
+
+
+def test_old_server_zero_messages_opens_the_box():
+    st = ChatState()
+    finish(st, {"status": "ok", "reply": "Last one.", "trial": OLD_ENDED})
+    assert key_prompt_heading(st.snapshot()) == "Paste your Claude API key to keep chatting"
+
+
+def test_save_with_budget_still_empty_keeps_the_prompt():
+    st = ChatState()
+    st.needs_key = "trial_ended"
+    st.apply_backend_result({"status": "ok", "backend": BACKEND, "trial": ENDED}, saved=True)
+    assert st.needs_key == "trial_ended"
 
 
 def test_new_account_forgets_key_state():
