@@ -128,6 +128,9 @@ def result_message(payload: dict | None) -> tuple[str, str]:
 # blender_chat statuses that mean "no model answers until you add a key".
 KEY_STATUSES = ("trial_ended", "no_backend")
 KEY_URL = "https://platform.claude.com/settings/keys"
+# The other way to keep going: drive this Blender from Claude Desktop or
+# Claude Code, which run on the user's own Claude plan, not a key.
+CLIENTS_URL = "https://docs.blender.bet/tutorials/quickstart/#use-claude-code-or-claude-desktop-too-optional"
 # Low-trial alert: percent of the budget left, or (older servers) messages left.
 TRIAL_LOW_PERCENT = 15
 TRIAL_LOW_MESSAGES = 3

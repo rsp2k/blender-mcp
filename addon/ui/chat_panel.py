@@ -16,6 +16,7 @@ import bpy
 from .. import connection, state
 from ..chat import reader
 from ..chat.state import (
+    CLIENTS_URL,
     KEY_URL,
     approval_preview,
     chat_state,
@@ -156,6 +157,14 @@ def _draw_key_prompt(layout, context, snap, wrap) -> None:
     for line in wrap("Sent once to the server and stored encrypted; "
                      "never saved in Blender.", reserve=30.0):
         note.label(text=line)
+    # No key? Claude Desktop or Claude Code can drive this Blender on the
+    # user's own Claude plan.
+    col.separator(factor=0.8)
+    alt = col.column(align=True)
+    for line in wrap("No API key? Use Claude Desktop or Claude Code with "
+                     "your Claude plan instead.", reserve=30.0):
+        alt.label(text=line)
+    alt.operator("wm.url_open", text="How to connect", icon='HELP').url = CLIENTS_URL
 
 
 def _draw_clip(layout, context) -> None:
