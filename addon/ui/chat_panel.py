@@ -15,7 +15,15 @@ import bpy
 
 from .. import connection, state
 from ..chat import reader
-from ..chat.state import approval_preview, chat_state, wrap_text
+from ..chat.state import (
+    KEY_URL,
+    TRIAL_LOW,
+    approval_preview,
+    chat_state,
+    key_prompt_heading,
+    trial_row_text,
+    wrap_text,
+)
 from .icons import ensure_thinking_timer, icon_id, think_frame
 
 PREVIEW_LINES = 8
@@ -92,6 +100,61 @@ def _draw_model_chip(layout, snap) -> None:
     kwargs = {"icon_value": ico} if ico else {"icon": 'MONKEY'}
     row.operator("blendermcp.chat_backend_settings",
                  text=label or "Choose a model", **kwargs)
+
+
+def _draw_trial(layout, context, snap) -> None:
+    """One quiet row under the model chip while free messages remain."""
+    trial = snap["trial"]
+    if not trial or trial["remaining"] <= 0 or snap["needs_key"]:
+        return
+    width = context.region.width if context.region else 300
+    scale = _ui_scale(context)
+    chars = int((width - 20 * scale) / (7 * scale))
+    label, button = trial_row_text(trial["remaining"], chars)
+    # Split by text length: a plain row halves the width and cuts the label.
+    left, right = len(label) + 5, len(button) + 3
+    split = layout.split(factor=left / (left + right), align=True)
+    low = trial["remaining"] <= TRIAL_LOW
+    text = split.row(align=True)
+    text.alert = low
+    text.label(text=label, icon='ERROR' if low else 'INFO')
+    split.operator("blendermcp.chat_key_prompt", text=button,
+                   depress=bool(snap["key_prompt_requested"]))
+
+
+def _draw_key_prompt(layout, context, snap, wrap) -> None:
+    """The box for the user's own Claude API key, above the input row.
+    Drawn only while connected (no notice), so Save key can reach the server."""
+    heading = key_prompt_heading(snap)
+    if heading is None:
+        return
+    box = layout.box()
+    col = box.column(align=True)
+    _label_lines(col, wrap(heading, reserve=40.0), 'KEYINGSET')
+    col.separator(factor=0.5)
+    checking = bool(snap["key_checking"])
+    field = col.row(align=True)
+    field.enabled = not checking
+    field.prop(context.window_manager, "blendermcp_chat_key", text="")
+    row = col.row(align=True)
+    row.operator("wm.url_open", text="Get a key", icon='URL').url = KEY_URL
+    save = row.row(align=True)
+    save.enabled = not checking
+    save.operator("blendermcp.chat_save_key", text="Save key", icon='CHECKMARK')
+    if checking:
+        col.separator(factor=0.5)
+        col.label(text="Checking key…", icon='TIME')
+    elif snap["key_error"]:
+        col.separator(factor=0.5)
+        _label_lines(col.column(align=True), wrap(snap["key_error"], reserve=40.0),
+                     'ERROR', alert=True)
+    col.separator(factor=0.5)
+    note = col.column(align=True)
+    note.enabled = False
+    note.scale_y = 0.8
+    for line in wrap("Sent once to the server and stored encrypted; "
+                     "never saved in Blender.", reserve=30.0):
+        note.label(text=line)
 
 
 def _draw_clip(layout, context) -> None:
@@ -285,6 +348,7 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
             _label_lines(layout.column(align=True), wrap(notice[0]), notice[1])
         else:
             _draw_model_chip(layout, snap)
+            _draw_trial(layout, context, snap)
 
         _draw_approval(layout, snap, wrap)
         _draw_turn(layout, context, snap, wrap)
@@ -297,7 +361,10 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
             _label_lines(layout.column(align=True), wrap(snap["last_error"]), 'ERROR', alert=True)
 
         layout.separator(factor=0.5)
-        can_send = notice is None and not snap["busy"]
+        if not notice:
+            _draw_key_prompt(layout, context, snap, wrap)
+        # The server refuses every turn until a key is saved, so don't offer one.
+        can_send = notice is None and not snap["busy"] and not snap["needs_key"]
         row = layout.row(align=True)
         row.scale_y = 1.25
         if not notice:

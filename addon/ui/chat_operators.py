@@ -31,6 +31,22 @@ def on_chat_input_update(wm, context):
         wm.blendermcp_chat_input = ""
 
 
+def _take_key(wm) -> str:
+    """The pasted key, with the field cleared at once so it never lingers."""
+    key = (wm.blendermcp_chat_key or "").strip()
+    if wm.blendermcp_chat_key:
+        wm.blendermcp_chat_key = ""
+    return key
+
+
+def on_chat_key_update(wm, context):
+    """Enter in the key field saves it, like the Save key button. Clearing
+    the field re-fires this with an empty value, which is a no-op."""
+    if not (wm.blendermcp_chat_key or "").strip() or chat_state.key_checking:
+        return
+    chat_client.save_key(_take_key(wm))
+
+
 class BLENDERMCP_OT_ChatSend(bpy.types.Operator):
     """Send the message to the chat"""
 
@@ -159,6 +175,41 @@ class BLENDERMCP_OT_ChatBackendSettings(bpy.types.Operator):
         except Exception as e:  # noqa: BLE001
             self.report({'WARNING'}, f"Open Preferences > Add-ons > Blender MCP ({e})")
             return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatSaveKey(bpy.types.Operator):
+    """Check your Claude API key and store it on the server"""
+
+    bl_idname = "blendermcp.chat_save_key"
+    bl_label = "Save key"
+    bl_description = (
+        "Send the key to the server, which checks it and stores it encrypted. "
+        "The field is cleared here right away"
+    )
+
+    def execute(self, context):
+        key = _take_key(context.window_manager)
+        if not key:
+            self.report({'WARNING'}, "Paste your Claude API key first")
+            return {'CANCELLED'}
+        problem = chat_client.save_key(key)
+        if problem:
+            self.report({'WARNING'}, problem)
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatKeyPrompt(bpy.types.Operator):
+    """Show or hide the box for your own Claude API key"""
+
+    bl_idname = "blendermcp.chat_key_prompt"
+    bl_label = "Use my own key"
+    bl_description = "Paste your own Claude API key so chat keeps working after the free messages"
+
+    def execute(self, context):
+        chat_state.toggle_key_prompt()
+        chat_client.request_redraw()
         return {'FINISHED'}
 
 
@@ -300,6 +351,8 @@ CHAT_OPERATORS = (
     BLENDERMCP_OT_ChatBackendSettings,
     BLENDERMCP_OT_SetChatAdvisor,
     BLENDERMCP_MT_ChatAdvisor,
+    BLENDERMCP_OT_ChatSaveKey,
+    BLENDERMCP_OT_ChatKeyPrompt,
     BLENDERMCP_OT_ChatClear,
     BLENDERMCP_OT_ChatAllow,
     BLENDERMCP_OT_ChatDeny,
