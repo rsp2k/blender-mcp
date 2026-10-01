@@ -77,6 +77,7 @@ export default defineConfig({
           label: 'Start here',
           items: [
             { label: 'Overview', slug: 'index' },
+            { slug: 'tutorials/get-blender' },
             { slug: 'tutorials/quickstart' },
           ],
         },
