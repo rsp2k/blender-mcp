@@ -25,7 +25,12 @@ from .catalog import build_catalog
 from .config import ChatConfig, load_config
 from .executor import ChatExecutor
 from .providers import ProviderError
-from .routing import RoutingSamplingHandler, current_backend, current_turn
+from .routing import (
+    RoutingSamplingHandler,
+    current_backend,
+    current_trial,
+    current_turn,
+)
 from .turn import Turn
 
 logger = logging.getLogger(__name__)
@@ -75,8 +80,9 @@ class BlenderChatComponent(MCPMixin):
         tools arrive as elicitation requests starting "BlenderMCP approval:".
         Returns JSON with ``status`` ok / disabled / no_backend / busy /
         backend_error / timeout / trial_ended. From the backend lookup on,
-        results carry ``trial``: ``{limit, used, remaining}`` for an account
-        on the free trial (CHAT_TRIAL_TURNS), null otherwise.
+        results carry ``trial``: ``{unit, limit, used, remaining,
+        percent_left}`` (USD) for an account on the free trial
+        (CHAT_TRIAL_USD), null otherwise.
         """
         cfg = self.config_loader()
         if not cfg.enabled:
@@ -121,22 +127,20 @@ class BlenderChatComponent(MCPMixin):
             if backend is None:
                 return _dump({"status": "no_backend", "hint": NO_BACKEND_HINT,
                               "trial": await self._trial(cfg, row, user_sub)})
-            trial_view = None
+            meter = None
             if chat_settings.on_trial(row, cfg, user_sub):
-                # Spent here, before the turn's first model call: a turn that
-                # is cancelled or fails later still counts.
                 try:
-                    granted, trial_view = await trial.consume(self.handler.session_factory,
-                                                              cfg, user_sub)
+                    spent = await trial.used(self.handler.session_factory, user_sub)
                 except Exception as e:  # noqa: BLE001 - reported, never a crash
-                    logger.warning("chat trial count failed: %s", type(e).__name__)
+                    logger.warning("chat trial lookup failed: %s", type(e).__name__)
                     return _dump({"status": "backend_error", "trial": None,
-                                  "detail": "could not check this account's free messages"})
-                if not granted:
-                    return _dump({"status": "trial_ended", "trial": trial_view,
+                                  "detail": "could not check this account's free trial"})
+                if trial.ended(cfg, spent):
+                    return _dump({"status": "trial_ended", "trial": trial.view(cfg, spent),
                                   "hint": trial.ENDED_HINT})
+                meter = trial.Meter(self.handler.session_factory, user_sub)
             return await self._run(ctx, cfg, backend, user_sub, bus_id, blender_uuid,
-                                   message, history, t0, attachments, trial_view)
+                                   message, history, t0, attachments, meter)
         finally:
             if self._busy.get(key, (None, None))[1] is me:
                 self._busy.pop(key, None)
@@ -148,7 +152,7 @@ class BlenderChatComponent(MCPMixin):
         return await trial.status(self.handler.session_factory, cfg, user_sub)
 
     async def _run(self, ctx, cfg, backend, user_sub, bus_id, blender_uuid,
-                   message, history, t0, attachments=None, trial_view=None) -> str:
+                   message, history, t0, attachments=None, meter=None) -> str:
         catalog = await build_catalog(
             ctx.fastmcp, cfg.tools or None,
             vision=vision.available(cfg, user_sub, backend),
@@ -160,6 +164,7 @@ class BlenderChatComponent(MCPMixin):
         token = current_backend.set(backend)
         turn_id = f"{user_sub}:{uuid.uuid4().hex}"
         turn_token = current_turn.set(turn_id)
+        trial_token = current_trial.set(meter)
         turn = None
         base: dict[str, Any] = {}
         try:
@@ -177,6 +182,7 @@ class BlenderChatComponent(MCPMixin):
                 except ValueError as e:  # sampling not routable (no handler installed)
                     base = {"status": "backend_error", "detail": str(e)}
         finally:
+            current_trial.reset(trial_token)
             current_turn.reset(turn_token)
             current_backend.reset(token)
             self.handler.end_turn(turn_id)
@@ -184,9 +190,19 @@ class BlenderChatComponent(MCPMixin):
             "steps": turn.steps if turn else [],
             "elapsed_s": round(time.monotonic() - t0, 1),
             "backend": backend.public(),
-            "trial": trial_view,
+            "trial": await self._spent(cfg, meter),
         })
         return _dump(base)
+
+    async def _spent(self, cfg: ChatConfig, meter) -> dict | None:
+        """The trial view after a trial turn, its own calls included."""
+        if meter is None:
+            return None
+        try:
+            return await trial.status(meter.session_factory, cfg, meter.user_sub)
+        except Exception as e:  # noqa: BLE001 - the turn's result matters more
+            logger.warning("chat trial lookup failed: %s", type(e).__name__)
+            return None
 
     @mcp_tool()
     @require_role("addon")
@@ -259,7 +275,7 @@ class BlenderChatComponent(MCPMixin):
         """This account's chat backend: ``{status, backend: {provider, model,
         base_url, has_key, source}, trial}``. ``source`` is ``user`` for a
         backend the account saved, ``server`` for the server's default.
-        ``trial`` is ``{limit, used, remaining}`` for an account on the free
+        ``trial`` is ``{unit, limit, used, remaining, percent_left}`` for an account on the free
         trial, null otherwise. No key, the account's or the server's, is ever
         returned."""
         cfg = self.config_loader()

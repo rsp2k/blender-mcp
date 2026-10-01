@@ -74,7 +74,9 @@ async def test_complete_records_the_turn_and_its_tokens(fake_mw):
     assert rec["error"] is None and rec["duration_ms"] >= 0
     assert rec["attrs"] == {"advisor": "claude-opus-5", "cache_read_input_tokens": 3000,
                             "cache_creation_input_tokens": 500, "advisor_calls": 1,
-                            "advisor_input_tokens": 3400, "advisor_output_tokens": 90}
+                            "advisor_input_tokens": 3400, "advisor_output_tokens": 90,
+                            # Sonnet 5 tokens at its rates plus the advisor's at Opus 5 rates.
+                            "cost_usd": 0.02174}
     assert KEY not in repr(rec) and "api.anthropic.com" not in repr(rec)
 
 

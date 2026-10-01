@@ -22,7 +22,10 @@ ANTHROPIC_ONLY = ("replay", "fallbacks", "effort")
 
 
 class ProviderError(Exception):
-    """A model call failed; ``str(e)`` is the user-facing reason."""
+    """A model call failed; ``str(e)`` is the user-facing reason. ``usage``
+    is what the failed call was still billed for (retries, a refusal), or None."""
+
+    usage: Usage | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,9 @@ class Usage:
     output_tokens: int | None = None
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
+    # Anthropic's breakdown of cache writes by TTL, when it reports one.
+    cache_creation_5m_input_tokens: int | None = None
+    cache_creation_1h_input_tokens: int | None = None
     advisor_calls: int | None = None
     advisor_input_tokens: int | None = None
     advisor_output_tokens: int | None = None
