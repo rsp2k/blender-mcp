@@ -34,6 +34,14 @@ def _int(env, name: str, default: int, lo: int = 1, hi: int | None = None) -> in
     return min(v, hi) if hi is not None else v
 
 
+def _usd(env, name: str) -> float:
+    try:
+        v = float(_get(env, name) or 0)
+    except ValueError:
+        return 0.0
+    return v if v > 0 and v != float("inf") else 0.0
+
+
 def _choice(env, name: str, allowed: tuple[str, ...], default: str) -> str:
     v = _get(env, name).lower()
     return v if v in allowed else default
@@ -61,9 +69,9 @@ class ChatConfig:
     tools: frozenset[str] = frozenset()
     # Empty = every authenticated user may use the shared gateway.
     gateway_users: frozenset[str] = frozenset()
-    # Free turns on the server default for accounts with no backend of their
-    # own and not in gateway_users; 0 = no trial (gateway_users alone decides).
-    trial_turns: int = 0
+    # USD of server-default model use free for accounts with no backend of
+    # their own and not in gateway_users; 0 = no trial (gateway_users alone decides).
+    trial_usd: float = 0.0
     secret_key: str = field(default="", repr=False)
     # The server-wide backend for users with none of their own.
     default_provider: str = "gateway"
@@ -108,7 +116,7 @@ def load_config(env=None) -> ChatConfig:
         max_tools=_int(env, "CHAT_MAX_TOOLS", 40, hi=128),
         tools=_csv(env, "CHAT_TOOLS"),
         gateway_users=_csv(env, "CHAT_GATEWAY_USERS"),
-        trial_turns=_int(env, "CHAT_TRIAL_TURNS", 0, lo=0),
+        trial_usd=_usd(env, "CHAT_TRIAL_USD"),
         secret_key=_get(env, "CHAT_SECRET_KEY"),
         default_provider=_choice(env, "CHAT_DEFAULT_PROVIDER", DEFAULT_PROVIDERS, "gateway"),
         default_model=_get(env, "CHAT_DEFAULT_MODEL"),

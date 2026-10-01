@@ -23,6 +23,7 @@ import httpx2
 from mcp.types import CreateMessageResultWithTools, TextContent, ToolUseContent
 
 from .. import instrumentation as qa
+from . import pricing
 from . import settings as chat_settings
 from .config import ChatConfig, load_config
 from .providers import Backend, Completion, ProviderError, Usage, complete
@@ -36,6 +37,9 @@ current_turn: ContextVar[str | None] = ContextVar("chat_current_turn", default=N
 # Set by a chat turn: receives the reply's text as it streams. Only the
 # turn's own model calls use it (see __call__), not vision descriptions.
 current_text_sink: ContextVar[Any] = ContextVar("chat_current_text_sink", default=None)
+# Set by blender_chat for a free-trial turn (a trial.Meter): every model call
+# of the turn, vision included, is charged to the account's trial budget.
+current_trial: ContextVar[Any] = ContextVar("chat_current_trial", default=None)
 
 
 class ThinkingCache:
@@ -181,7 +185,7 @@ def prompt_text(messages: Any) -> str | None:
 
 def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
                     error: BaseException | None = None, messages: Any = None,
-                    completion: str | None = None) -> None:
+                    completion: str | None = None, cost_usd: float | None = None) -> None:
     """One ``llm.call`` event per completion when QA_LOG is on, keyed by the
     chat turn so a turn's model calls read back together. The event links to
     the enclosing tool call (blender_chat, a vision tool) by itself.
@@ -194,7 +198,8 @@ def record_llm_call(backend: Backend, t0: float, *, usage: Usage | None = None,
         mw = qa.middleware()
         if mw is None:
             return
-        attrs = {"advisor": backend.advisor or None}
+        attrs = {"advisor": backend.advisor or None,
+                 "cost_usd": round(cost_usd, 6) if cost_usd is not None else None}
         attrs.update({k: getattr(usage, k, None) for k in _USAGE_ATTRS})
         prompt = None
         if getattr(mw, "capture_llm_text", False):
@@ -258,8 +263,8 @@ class RoutingSamplingHandler:
                       trial_ok: bool = False) -> Backend | None:
         """The user's backend, None when they have none. ProviderError on bad state.
 
-        Trial accounts (CHAT_TRIAL_TURNS) get None unless ``trial_ok``: only
-        blender_chat counts their turns, so nothing else may spend them."""
+        Trial accounts (CHAT_TRIAL_USD) get None unless ``trial_ok``: only
+        blender_chat charges their trial, so nothing else may spend it."""
         cfg = cfg or self.config_loader()
         row = await self.load_settings(user_sub)
         return chat_settings.backend_for(row, cfg, user_sub, trial_ok=trial_ok)
@@ -296,12 +301,33 @@ class RoutingSamplingHandler:
                 **extra,
             )
         except Exception as e:
-            record_llm_call(backend, t0, error=e, messages=messages)
+            billed = getattr(e, "usage", None)
+            record_llm_call(backend, t0, error=e, messages=messages, usage=billed,
+                            cost_usd=await self._charge(backend, billed))
             raise
-        record_llm_call(backend, t0, usage=c.usage, messages=messages, completion=c.text)
+        record_llm_call(backend, t0, usage=c.usage, messages=messages, completion=c.text,
+                        cost_usd=await self._charge(backend, c.usage))
         if scope is not None and c.raw and c.tool_calls:
             self.thinking.put(scope, frozenset(t.id for t in c.tool_calls), c.raw)
         return c
+
+    @staticmethod
+    async def _charge(backend: Backend, usage: Usage | None) -> float | None:
+        """This call's list-price cost (pricing.cost_usd), charged to the trial
+        when the turn is a trial turn. Returns it for the llm.call record:
+        always for Claude, for other providers only when charged (their price
+        is the Haiku stand-in). None when the call reported no usage."""
+        if usage is None:
+            return None
+        cost = pricing.cost_usd(usage, backend.model, backend.advisor or None,
+                                provider=backend.provider)
+        meter = current_trial.get()
+        if meter is not None:
+            tin, tout = pricing.tokens(usage, provider=backend.provider)
+            await meter.charge(cost, tin, tout)
+        elif backend.provider != "anthropic":
+            return None
+        return cost
 
     def end_turn(self, turn: str) -> None:
         self.thinking.forget("turn:" + turn)

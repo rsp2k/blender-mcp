@@ -20,6 +20,7 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -27,7 +28,7 @@ from sqlalchemy import (
     JSON,
     ForeignKey,
     Index,
-    Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -455,14 +456,18 @@ class ChatSettings(Base):
 
 
 class ChatTrialUsage(Base):
-    """Free chat turns an account has spent on the server's default backend
-    (CHAT_TRIAL_TURNS). No row = none spent. Incremented in place, never
-    reset by the server."""
+    """What an account's free trial (CHAT_TRIAL_USD) has spent on the server's
+    default backend, in USD at list prices, plus running token totals. No row
+    = nothing spent. Added to in place, never reset by the server."""
 
     __tablename__ = "chat_trial_usage"
 
     user_sub: Mapped[str] = mapped_column(String(128), primary_key=True)
-    turns_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    used_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0.0, server_default="0"
+    )
+    tokens_in: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )

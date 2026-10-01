@@ -170,29 +170,35 @@ async def complete(
 
     last = f"{label} returned an empty response"
     spent: Usage | None = None  # an empty answer that gets retried is still billed
-    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
-        for _ in range(ATTEMPTS):
-            try:
-                r = await client.post(url, json=body, headers=headers)
-            except httpx.TimeoutException:
-                last = f"{label} timed out after {timeout_s:g}s"
-                continue
-            except httpx.HTTPError as e:
-                raise ProviderError(f"could not reach {label}: {type(e).__name__}") from e
-            if r.status_code in _RETRY_STATUS:
-                last = f"{label} returned HTTP {r.status_code}: {_error_detail(r)}"
-                continue
-            if r.status_code >= 400:
-                raise ProviderError(f"{label} returned HTTP {r.status_code}: {_error_detail(r)}")
-            try:
-                data = r.json()
-            except ValueError:
-                last = f"{label} returned a response that is not JSON"
-                continue
-            result = parse_response(data, allowed)
-            spent = result.usage if spent is None else spent + result.usage
-            result.usage = spent
-            if result.text or result.tool_calls:
-                return result
-            last = f"{label} returned an empty response"
-    raise ProviderError(last)
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+            for _ in range(ATTEMPTS):
+                try:
+                    r = await client.post(url, json=body, headers=headers)
+                except httpx.TimeoutException:
+                    last = f"{label} timed out after {timeout_s:g}s"
+                    continue
+                except httpx.HTTPError as e:
+                    raise ProviderError(f"could not reach {label}: {type(e).__name__}") from e
+                if r.status_code in _RETRY_STATUS:
+                    last = f"{label} returned HTTP {r.status_code}: {_error_detail(r)}"
+                    continue
+                if r.status_code >= 400:
+                    raise ProviderError(f"{label} returned HTTP {r.status_code}: {_error_detail(r)}")
+                try:
+                    data = r.json()
+                except ValueError:
+                    last = f"{label} returned a response that is not JSON"
+                    continue
+                result = parse_response(data, allowed)
+                spent = result.usage if spent is None else spent + result.usage
+                result.usage = spent
+                if result.text or result.tool_calls:
+                    return result
+                last = f"{label} returned an empty response"
+        raise ProviderError(last)
+    except ProviderError as e:
+        # Empty answers that were retried are billed too (trial spend).
+        if e.usage is None:
+            e.usage = spent
+        raise

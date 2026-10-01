@@ -242,11 +242,14 @@ def usage_of(message: Any) -> Usage | None:
         return None
     advice = [it for it in (_field(u, "iterations") or [])
               if _field(it, "type") == "advisor_message"]
+    by_ttl = _field(u, "cache_creation")
     return Usage(
         input_tokens=_field(u, "input_tokens"),
         output_tokens=_field(u, "output_tokens"),
         cache_read_input_tokens=_field(u, "cache_read_input_tokens"),
         cache_creation_input_tokens=_field(u, "cache_creation_input_tokens"),
+        cache_creation_5m_input_tokens=_field(by_ttl, "ephemeral_5m_input_tokens") if by_ttl else None,
+        cache_creation_1h_input_tokens=_field(by_ttl, "ephemeral_1h_input_tokens") if by_ttl else None,
         advisor_calls=len(advice) if advice else None,
         advisor_input_tokens=sum(_field(it, "input_tokens") or 0 for it in advice) if advice else None,
         advisor_output_tokens=sum(_field(it, "output_tokens") or 0 for it in advice) if advice else None,
@@ -429,34 +432,40 @@ async def complete(
         pauses = 0
         # Every request below is billed, including paused and empty ones.
         spent: Usage | None = None
-        while True:
-            attempts += 1
-            try:
-                message = await _send(client, request(wire), on_text)
-            except anthropic.BadRequestError as e:
-                # A replayed thinking block the API won't accept (history no
-                # longer matches it): answer this round without the thinking.
-                if not stripped and _is_thinking_binding_error(e):
-                    logger.info("anthropic: replayed thinking rejected; retrying without it")
-                    wire, stripped = strip_thinking(wire), True
+        try:
+            while True:
+                attempts += 1
+                try:
+                    message = await _send(client, request(wire), on_text)
+                except anthropic.BadRequestError as e:
+                    # A replayed thinking block the API won't accept (history no
+                    # longer matches it): answer this round without the thinking.
+                    if not stripped and _is_thinking_binding_error(e):
+                        logger.info("anthropic: replayed thinking rejected; retrying without it")
+                        wire, stripped = strip_thinking(wire), True
+                        continue
+                    raise _translate(e, backend, timeout_s) from e
+                except anthropic.AnthropicError as e:
+                    raise _translate(e, backend, timeout_s) from e
+                sent = request(wire)
+                usage = usage_of(message)
+                spent = usage if spent is None else spent + usage
+                _log_usage(backend, usage, next((t.get("model", "") for t in sent.get("tools", [])
+                                                 if t.get("type") == ADVISOR_TOOL), ""))
+                if getattr(message, "stop_reason", None) == "pause_turn" and pauses < PAUSE_LIMIT:
+                    # A server tool (the advisor) was still running: send the
+                    # partial turn back as-is and the API carries on from it.
+                    pauses += 1
+                    wire = [*wire, {"role": "assistant", "content": raw_content(message)}]
                     continue
-                raise _translate(e, backend, timeout_s) from e
-            except anthropic.AnthropicError as e:
-                raise _translate(e, backend, timeout_s) from e
-            sent = request(wire)
-            usage = usage_of(message)
-            spent = usage if spent is None else spent + usage
-            _log_usage(backend, usage, next((t.get("model", "") for t in sent.get("tools", [])
-                                             if t.get("type") == ADVISOR_TOOL), ""))
-            if getattr(message, "stop_reason", None) == "pause_turn" and pauses < PAUSE_LIMIT:
-                # A server tool (the advisor) was still running: send the
-                # partial turn back as-is and the API carries on from it.
-                pauses += 1
-                wire = [*wire, {"role": "assistant", "content": raw_content(message)}]
-                continue
-            result = parse_message(message, allowed)
-            result.usage = spent
-            if result.text or result.tool_calls:
-                return result
-            if attempts >= EMPTY_ATTEMPTS:
-                raise ProviderError("the Anthropic API returned an empty response")
+                result = parse_message(message, allowed)
+                result.usage = spent
+                if result.text or result.tool_calls:
+                    return result
+                if attempts >= EMPTY_ATTEMPTS:
+                    raise ProviderError("the Anthropic API returned an empty response")
+        except ProviderError as e:
+            # What was billed before the failure still counts (trial spend).
+            if e.usage is None:
+                e.usage = spent
+            raise

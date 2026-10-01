@@ -1,7 +1,8 @@
-"""Add chat_trial_usage: free chat turns spent on the server's default backend.
+"""Add chat_trial_usage: what each account's free chat trial has spent.
 
-One row per account that has used the trial (CHAT_TRIAL_TURNS); the turn
-counter is incremented in place with a guarded UPDATE.
+One row per account that has used the trial (CHAT_TRIAL_USD): USD at list
+prices on the server's default backend, plus running token totals. Each
+model call adds its cost in place with ``used_usd = used_usd + :cost``.
 
 Revision ID: 20261001_0013
 Revises: 20260930_0012
@@ -25,7 +26,9 @@ def upgrade() -> None:
     op.create_table(
         "chat_trial_usage",
         sa.Column("user_sub", sa.String(length=128), primary_key=True),
-        sa.Column("turns_used", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("used_usd", sa.Numeric(12, 6), nullable=False, server_default="0"),
+        sa.Column("tokens_in", sa.BigInteger(), nullable=False, server_default="0"),
+        sa.Column("tokens_out", sa.BigInteger(), nullable=False, server_default="0"),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
 

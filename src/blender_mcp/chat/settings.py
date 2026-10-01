@@ -83,10 +83,10 @@ def _own(row: ChatSettings | None) -> bool:
 
 
 def on_trial(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None) -> bool:
-    """Is this account limited to CHAT_TRIAL_TURNS free turns on the server
+    """Is this account limited to the CHAT_TRIAL_USD free budget on the server
     default? Never when no trial is configured, when the account has its own
     backend, or when CHAT_GATEWAY_USERS lists it."""
-    return (cfg.trial_turns > 0 and bool(user_sub) and not _own(row)
+    return (cfg.trial_usd > 0 and bool(user_sub) and not _own(row)
             and user_sub not in cfg.gateway_users)
 
 
@@ -167,9 +167,9 @@ def _backend_for(row: ChatSettings | None, cfg: ChatConfig, user_sub: str | None
 
     Precedence: the user's own saved backend, then the server default
     (CHAT_DEFAULT_PROVIDER, gated by CHAT_GATEWAY_USERS like the gateway
-    always was). With CHAT_TRIAL_TURNS set, accounts outside that list get
+    always was). With CHAT_TRIAL_USD set, accounts outside that list get
     the server default as a trial; ``trial_ok=False`` refuses them (for
-    callers that don't count trial turns). Raises ProviderError when a stored
+    callers that don't charge the trial). Raises ProviderError when a stored
     key can't be decrypted.
     """
     if row is not None and row.provider == "anthropic":
