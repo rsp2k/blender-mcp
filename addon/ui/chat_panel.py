@@ -15,6 +15,7 @@ import bpy
 
 from .. import connection, state
 from ..chat import reader
+from ..chat.starters import B_CLIP_OBJECTS, pick_starters
 from ..chat.state import (
     CLIENTS_URL,
     KEY_URL,
@@ -275,6 +276,27 @@ def _draw_turn(layout, context, snap, wrap) -> None:
                      icon='TEXT')
 
 
+def _scene_has_b() -> bool:
+    objects = bpy.data.objects
+    return any(name in objects for name in B_CLIP_OBJECTS)
+
+
+def _draw_starters(layout, context, snap) -> None:
+    """One-click starters under the hint, in a new chat only. A click fills
+    the message box; nothing is sent until the user presses Enter."""
+    if snap["messages"] or not snap["starters"]:
+        return
+    app_template = getattr(context.preferences, "app_template", "") or ""
+    picks = pick_starters(snap["starters"], app_template, _scene_has_b())
+    if not picks:
+        return
+    layout.separator(factor=0.3)
+    col = layout.column(align=True)
+    for starter in picks:
+        col.operator("blendermcp.chat_starter", text=starter["title"],
+                     icon='GREASEPENCIL').name = starter["name"]
+
+
 def _draw_undo(layout, snap) -> None:
     started = snap["turn_started_at"]
     if snap["busy"] or not started:
@@ -362,8 +384,13 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
             _draw_model_chip(layout, snap)
             _draw_trial(layout, context, snap)
 
+        # The server refuses every turn until a key is saved, so don't offer one.
+        can_send = notice is None and not snap["busy"] and not snap["needs_key"]
+
         _draw_approval(layout, snap, wrap)
         _draw_turn(layout, context, snap, wrap)
+        if can_send:
+            _draw_starters(layout, context, snap)
         _draw_undo(layout, snap)
 
         if snap["last_error"] and not snap["busy"] and not any(
@@ -375,8 +402,6 @@ class BLENDERMCP_PT_Chat(bpy.types.Panel):
         layout.separator(factor=0.5)
         if not notice:
             _draw_key_prompt(layout, context, snap, wrap)
-        # The server refuses every turn until a key is saved, so don't offer one.
-        can_send = notice is None and not snap["busy"] and not snap["needs_key"]
         row = layout.row(align=True)
         row.scale_y = 1.25
         if not notice:
