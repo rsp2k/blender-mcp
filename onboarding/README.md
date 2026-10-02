@@ -129,3 +129,28 @@ ssh -A dell01 'cd ~/warehack-ing/blender-mcp && git pull --ff-only && cd web && 
 When you're done, `make -C onboarding/blender down` frees the instance's
 memory. The config volume is kept, so the next pass can reuse it or
 remove it for a clean start.
+
+## B for the web (blender.bet/b)
+
+The "Meet B" page poses B in the browser and offers him as a rigged
+.blend. Both files come from the committed template scene
+(`app_template/B_Clip/startup.blend`), so this needs neither the STL nor
+Docker, only a local Blender 5.2:
+
+```bash
+blender -b --factory-startup --python onboarding/export_b_assets.py
+```
+
+It writes three files:
+
+| File | What it is |
+|---|---|
+| `web/public/b/b-clip.glb` | B for three.js: each mesh is a child node of the joint it rides on, joints in rest pose, no camera or lights |
+| `web/public/b/b-clip.blend` | standalone B: rig, camera, lights, the "B hello" and "B thinking" actions, and two text blocks (how to pose him, credits) |
+| `web/src/data/b-clip.json` | both loops sampled every half frame from the ANIM and THINK tracks in `build_clip_mascot.py`, plus the two files' sizes |
+
+The script fails if a joint goes missing from the glb or stops carrying
+its mesh, since the page poses B by writing Blender pose values straight
+onto those joint nodes. Rerun it whenever the template or the loops
+change, then rebuild the site. The sliders' ranges live in one place,
+`web/src/scripts/b-poser/limits.ts`.

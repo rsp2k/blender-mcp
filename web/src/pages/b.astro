@@ -1,0 +1,85 @@
+---
+/**
+ * blender.bet/b, "Meet B": the mascot in 3D, with sliders and loops to pose
+ * him, a PNG of the current view, and his rigged .blend to take home.
+ * Prerendered. Assets come from onboarding/export_b_assets.py.
+ */
+import BChat from '../components/BChat.astro';
+import BCredits from '../components/BCredits.astro';
+import BIcon from '../components/BIcon.astro';
+import BPoser from '../components/BPoser.astro';
+import JointBadge from '../components/JointBadge.astro';
+import assets from '../data/b-clip.json';
+import '../styles/b-page.css';
+
+export const prerender = true;
+
+const title = 'Meet B, the BlenderMCP mascot';
+const description =
+  'B. Clip is a binder clip with a face, and the mascot of BlenderMCP. Turn him around, pose him with sliders, save a picture, or download him rigged for Blender.';
+const site = Astro.site ?? new URL('https://blender.bet');
+const canonical = new URL('/b', site).href;
+const image = new URL('/img/mascot/clip-512.png', site).href;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BlenderMCP" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={image} />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="B. Clip, a dark blue steel binder clip with big eyes and a small smile." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="preload" as="image" href="/img/mascot/clip-512.png" />
+    <link rel="preload" as="fetch" href="/b/b-clip.glb" crossorigin="anonymous" />
+    <script is:inline>document.documentElement.classList.add('js');</script>
+  </head>
+  <body>
+    <div class="b-page">
+      <header class="b-top">
+        <a class="b-back" href="/">
+          <BIcon name="arrow-left" size={16} />
+          BlenderMCP
+        </a>
+      </header>
+
+      <main class="b-main">
+        <section class="b-intro" aria-labelledby="b-title">
+          <p class="b-kicker">The BlenderMCP mascot</p>
+          <h1 id="b-title">Meet <span>B</span></h1>
+          <p class="b-lede">
+            B. Clip, or B for short, is a real binder clip with a face. He lives
+            in BlenderMCP's Chat panel, where he waves hello and drums a handle
+            while Claude works. Turn him around, pose him, and take him home.
+          </p>
+        </section>
+
+        <BPoser blendBytes={assets.files.blend} />
+
+        <BChat />
+
+        <BCredits />
+      </main>
+
+      <p class="b-foot">
+        <a href="/">blender.bet</a> &middot;
+        <a href="https://docs.blender.bet/">Docs</a> &middot;
+        <a href="https://github.com/rsp2k/blender-mcp">Source on GitHub</a>
+      </p>
+    </div>
+    <JointBadge />
+  </body>
+</html>

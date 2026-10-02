@@ -1,0 +1,88 @@
+---
+// Loops, sliders and the two take-aways (a PNG of this view, the .blend).
+// Slider markup comes from the same list the client maps values through.
+import { SLIDERS, type SliderDef } from "../scripts/b-poser/controls";
+import { restOf } from "../scripts/b-poser/rig";
+import BIcon from "./BIcon.astro";
+import "./b-controls.css";
+
+interface Props {
+  /** Size of /b/b-clip.blend in bytes, shown on the download link. */
+  blendBytes: number;
+}
+const { blendBytes } = Astro.props;
+
+const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+
+const groups = [...new Set(SLIDERS.map((s) => s.group))].map((g) => ({
+  name: g,
+  sliders: SLIDERS.filter((s) => s.group === g),
+}));
+
+// The track fills from zero (or the low end) to the value, so two-way
+// sliders read as "how far, which way".
+function fill(def: SliderDef, v: number) {
+  const pct = (x: number) => ((x - def.min) / (def.max - def.min)) * 100;
+  const zero = Math.min(100, Math.max(0, pct(Math.min(def.max, Math.max(def.min, 0)))));
+  const at = pct(v);
+  return `--b-from:${Math.min(zero, at)}%;--b-to:${Math.max(zero, at)}%`;
+}
+const restValue = (def: SliderDef) => def.fromChannel(restOf(def.channels[0]));
+---
+
+<div class="b-controls">
+  <div class="b-panel" role="group" aria-labelledby="b-loops-title">
+    <h2 class="b-kicker" id="b-loops-title">Play a loop</h2>
+    <div class="b-presets">
+      <button type="button" class="b-preset" data-b-preset="hello" aria-pressed="false" data-b-needs-3d disabled>
+        <BIcon name="hand" />
+        <span>Hello</span>
+      </button>
+      <button type="button" class="b-preset" data-b-preset="thinking" aria-pressed="false" data-b-needs-3d disabled>
+        <BIcon name="lightbulb" />
+        <span>Thinking</span>
+      </button>
+      <button type="button" class="b-preset" data-b-preset="rest" data-b-needs-3d disabled>
+        <BIcon name="rotate-ccw" />
+        <span>Rest</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="b-panel">
+    {groups.map((g) => (
+      <fieldset class="b-group">
+        <legend class="b-kicker">{g.name}</legend>
+        {g.sliders.map((def) => (
+          <div class="b-slider">
+            <div class="b-slider__head">
+              <label for={`b-${def.id}`}>{def.label}</label>
+              <output for={`b-${def.id}`} data-b-readout={def.id}>{def.format(restValue(def))}</output>
+            </div>
+            <input class="b-range" type="range" id={`b-${def.id}`} data-b-slider={def.id}
+                   min={def.min} max={def.max} step={def.step} value={restValue(def)}
+                   style={fill(def, restValue(def))} data-b-needs-3d disabled />
+          </div>
+        ))}
+      </fieldset>
+    ))}
+    <noscript><p class="b-note">Posing B needs JavaScript. The download below works without it.</p></noscript>
+  </div>
+
+  <div class="b-actions">
+    <button type="button" class="b-btn b-btn--primary" data-b-save data-b-needs-3d disabled>
+      <BIcon name="image-down" />
+      <span>Save as PNG</span>
+    </button>
+    <a class="b-btn" href="/b/b-clip.blend" download="b-clip.blend">
+      <BIcon name="download" />
+      <span>Download B (.blend)</span>
+      <span class="b-btn__meta">{kb(blendBytes)}</span>
+    </a>
+  </div>
+  <p class="b-note">
+    The .blend has B on his rig, a camera and lights, both loops, and a short
+    how-to inside. Made in Blender 5.2.
+  </p>
+  <p class="b-status" data-b-status role="status" aria-live="polite"></p>
+</div>

@@ -1,0 +1,31 @@
+---
+// B in 3D beside his controls. The page is whole without scripts (still
+// image, download link); three.js loads after first paint, in its own chunk.
+import BControls from "./BControls.astro";
+import BStage from "./BStage.astro";
+import "./b-poser.css";
+
+interface Props {
+  blendBytes: number;
+}
+const { blendBytes } = Astro.props;
+---
+
+<section class="b-poser" data-b-poser aria-label="Pose B">
+  <BStage />
+  <BControls blendBytes={blendBytes} />
+</section>
+
+<script>
+  const root = document.querySelector<HTMLElement>("[data-b-poser]");
+  if (root) {
+    import("../scripts/b-poser/main")
+      .then((m) => m.startPoser(root))
+      .catch((err) => {
+        console.warn("[b] poser failed to start:", err);
+        const text = root.querySelector("[data-b-loading-text]");
+        root.querySelector("[data-b-loading]")?.classList.add("is-failed");
+        if (text) text.textContent = "B couldn't load in 3D here, so this is his still. The .blend download works either way.";
+      });
+  }
+</script>
