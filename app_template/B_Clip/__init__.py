@@ -1,10 +1,12 @@
 """B. Clip, a starter template for people new to Blender.
 
 Opens on B, the BlenderMCP mascot, with the 3D Viewport sidebar on the
-BlenderMCP tab so the Chat panel is the first thing you see. This module
-adds one small panel to that tab: starter prompts when BlenderMCP is
-ready, or how to get it when it isn't. If BlenderMCP is installed but
-turned off, it is turned on shortly after startup.
+BlenderMCP tab so the Chat panel is the first thing you see. Starter
+prompts come from BlenderMCP itself: its Chat panel shows the server's
+B. Clip starters in a new chat while this template is active. This module
+adds one small panel to that tab for when BlenderMCP isn't ready: how to
+get it, or a button to turn it on. If BlenderMCP is installed but turned
+off, it is turned on shortly after startup.
 
 register() and unregister() are symmetric: File > New > General runs
 unregister() in the same session.
@@ -18,7 +20,9 @@ import bpy
 PACKAGE = "blender_mcp"  # the extension's module, under bl_ext.<repo>.
 INSTALL_URL = "https://mcp.blender.bet/install"
 GUIDE_URL = "https://docs.blender.bet/tutorials/quickstart/"
-STARTERS = ("Make B wave", "Give B a top hat", "Put B on a desk")
+# Plain-text examples for the install hint; the clickable starters are
+# BlenderMCP's (served as MCP prompts).
+EXAMPLES = ("Make B wave", "Give B a top hat", "Put B on a desk")
 
 
 def _is_blender_mcp(name: str) -> bool:
@@ -71,26 +75,6 @@ def _wrapped(layout, context, text, icon='NONE'):
         col.label(text=line, icon=icon if i == 0 else indent)
 
 
-class BCLIP_OT_starter(bpy.types.Operator):
-    """Send this prompt to Claude in the Chat panel"""
-    bl_idname = "bclip.starter"
-    bl_label = "Starter prompt"
-    bl_options = {'INTERNAL'}
-
-    prompt: bpy.props.StringProperty()
-
-    def execute(self, context):
-        wm = context.window_manager
-        if hasattr(wm, "blendermcp_chat_input"):
-            # The chat field sends on change; if it can't send, the text stays
-            # in the field for the Send button.
-            wm.blendermcp_chat_input = self.prompt
-        else:
-            wm.clipboard = self.prompt
-            self.report({'INFO'}, "Copied. Paste it into the BlenderMCP chat.")
-        return {'FINISHED'}
-
-
 class BCLIP_OT_enable(bpy.types.Operator):
     """Turn on the BlenderMCP add-on"""
     bl_idname = "bclip.enable_blender_mcp"
@@ -111,16 +95,14 @@ class BCLIP_PT_start(bpy.types.Panel):
     bl_category = 'BlenderMCP'  # same tab as the Chat, so it exists without it
     bl_order = 2  # below the Chat panel
 
+    @classmethod
+    def poll(cls, context):
+        # With BlenderMCP running its Chat panel has the starters; stay out of the way.
+        return blender_mcp_status()[0] != "ready"
+
     def draw(self, context):
         layout = self.layout
         status, _ = blender_mcp_status()
-        if status == "ready":
-            layout.label(text="Try one of these:")
-            col = layout.column(align=True)
-            for text in STARTERS:
-                col.operator(BCLIP_OT_starter.bl_idname, text=text,
-                             icon='PLAY').prompt = text
-            return
         if status == "off":
             _wrapped(layout, context, "BlenderMCP is installed but turned off.", 'INFO')
             layout.operator(BCLIP_OT_enable.bl_idname, icon='CHECKMARK')
@@ -133,10 +115,10 @@ class BCLIP_PT_start(bpy.types.Panel):
         col.operator("wm.url_open", text="Install BlenderMCP", icon='URL').url = INSTALL_URL
         layout.operator("wm.url_open", text="Quickstart guide", icon='HELP').url = GUIDE_URL
         _wrapped(layout.box(), context, "Then ask things like: " + ", ".join(
-            f'"{s}"' for s in STARTERS) + ".")
+            f'"{s}"' for s in EXAMPLES) + ".")
 
 
-CLASSES = (BCLIP_OT_starter, BCLIP_OT_enable, BCLIP_PT_start)
+CLASSES = (BCLIP_OT_enable, BCLIP_PT_start)
 
 
 def register():

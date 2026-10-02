@@ -12,11 +12,19 @@ changes straight away.
 | File | What it does |
 |---|---|
 | `startup.blend` | The scene: B at the origin on the floor grid, a camera framing him, his lights. One 3D Viewport (light and camera overlays off, so nothing is drawn across B) with the sidebar open and wide on the BlenderMCP tab, a small Outliner, no timeline or Properties editor, and only the Layout workspace. |
-| `__init__.py` | Adds a small "B. Clip" panel under the Chat. With BlenderMCP running it offers starter prompts ("Make B wave", "Give B a top hat", "Put B on a desk") that go straight into the chat. Without BlenderMCP it says how to get it. If BlenderMCP is installed but turned off, it is turned on a moment after startup. |
+| `__init__.py` | Adds a small "B. Clip" panel to the BlenderMCP tab for when BlenderMCP isn't running: without it, the panel says how to get it (with a few example requests as plain text); if it is installed but turned off, there's a button to turn it on, and it is turned on a moment after startup anyway. Once BlenderMCP runs, the panel steps aside. |
 | `userpref.blend` | Factory preferences with no extensions listed. Required, see below. |
 | `splash.png` | The 1000x500 splash: B and "Tell Claude what to make". |
 
 Everything the template needs at runtime is in this folder.
+
+**Starter prompts come from BlenderMCP, not from this folder.** The server
+serves them as MCP prompts, and BlenderMCP's Chat panel shows them as
+buttons in a new chat ("Make B wave", "Give B a top hat", "Put B on a
+desk" while this template is active or B is in the scene, scene-agnostic
+ones otherwise). Clicking one fills the message box without sending, so
+you can edit it and press Enter. Changing them is a server change; see
+`src/blender_mcp/starter_prompts.py` and the Prompts reference in the docs.
 
 ## Install it by hand
 
