@@ -2,21 +2,36 @@
 // Clip, the hero mascot: a still for everyone, and an animated canvas whose
 // pupils follow the pointer for anyone who hasn't asked for less motion.
 import "./clip-hero.css";
+
+interface Props {
+  /** Line shown above the model credit. */
+  caption?: string;
+  /** What the alt text calls him. */
+  name?: string;
+  /** Extra class on the figure, for page-specific layout. */
+  class?: string;
+}
+
+const {
+  caption = "Meet Clip, the assistant inside your Blender.",
+  name = "Clip",
+  class: className,
+} = Astro.props;
 ---
 
-<figure class="mascot" data-clip-hero>
+<figure class:list={["mascot", className]} data-clip-hero>
   <div class="clip-stage">
     <!-- The still: without JavaScript, with reduced motion, and until the
          sprite sheet has loaded. -->
     <picture>
       <img src="/img/mascot/clip-512.png" width="512" height="512"
-           alt="Clip, a dark blue steel binder clip with big eyes and a small smile, its wire handles raised." />
+           alt={`${name}, a dark blue steel binder clip with big eyes and a small smile, its wire handles raised.`} />
     </picture>
     <canvas hidden width="360" height="360" role="img"
-            aria-label="Clip, a dark blue steel binder clip with big eyes and a small smile, waving one of its wire handles and watching your pointer."></canvas>
+            aria-label={`${name}, a dark blue steel binder clip with big eyes and a small smile, waving one of its wire handles and watching your pointer.`}></canvas>
   </div>
   <figcaption>
-    Meet Clip, the assistant inside your Blender.
+    <span class="clip-caption">{caption}</span>
     <small>Binder clip model by
       <a href="https://www.cgtrader.com/designers/teen-wolf">teen-wolf</a> on CGTrader.</small>
   </figcaption>
