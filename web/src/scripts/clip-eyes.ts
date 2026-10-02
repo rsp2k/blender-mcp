@@ -1,4 +1,4 @@
-// Clip on a canvas, with pupils that look at the pointer.
+// B. Clip on a canvas, with pupils that look at the pointer.
 //
 // The body loop comes from a sprite sheet rendered in Blender without pupils
 // (onboarding/build_clip_mascot.py --eyes-web). For every frame, eyes.json
@@ -21,7 +21,7 @@ interface EyeData {
 }
 
 const COLS = 12;
-const IDLE_MS = 2500; // after this long without pointer movement, Clip looks on its own
+const IDLE_MS = 2500; // after this long without pointer movement, B looks on his own
 const REACH_PX = 220; // pointer distance (CSS px) at which the pupils reach the edge
 const EASE = 0.18; // per-frame easing toward the target look
 
