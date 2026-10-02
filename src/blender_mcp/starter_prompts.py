@@ -39,7 +39,8 @@ STARTERS: tuple[Starter, ...] = (
         "starter_b_wave", "Make B wave", "b_clip",
         "Animate B. Clip waving hello with his front handle.",
         "Make B. Clip wave hello by swinging his front handle back and forth "
-        "a few times, then play the animation.",
+        "a few times over about two seconds, hinged where it meets his jaw. "
+        "I'll press Space to play it.",
     ),
     Starter(
         "starter_b_top_hat", "Give B a top hat", "b_clip",
