@@ -5,10 +5,12 @@
 // handles and lean in degrees, pupil travel in scene metres along the plate,
 // blink as the eye's Y scale. The hero loop uses front -5..12, back -5..5,
 // lean +-2.5, pupils 0..0.085 across and 0..0.06 up; these add a margin.
-// TODO: replace the handle ranges with the measured ones once they land.
+// Handles stay inside the measured no-clipping range from
+// onboarding/check_b_wave.py (front -87..98, back -92..105), trimmed to
+// where the pose still reads as B.
 export const POSE_LIMITS = {
-  frontHandle: { min: -10, max: 20 }, // + swings forward and down
-  backHandle: { min: -12, max: 12 },
+  frontHandle: { min: -45, max: 90 }, // + swings forward and down
+  backHandle: { min: -45, max: 90 },
   lean: { min: -8, max: 8 }, // + leans to the viewer's right
   lookX: { min: -0.06, max: 0.1 }, // + toward the viewer's right
   lookY: { min: -0.06, max: 0.07 }, // + up the plate
