@@ -2,7 +2,7 @@
 # Pulls the published image, so nothing here builds. Values come from .env.
 services:
   blender-onboarding:
-    image: ${BLENDER_IMAGE:-git.supported.systems/rsp2k/blender-desktop}:${BLENDER_VERSION:-5.2.2}
+    image: ${BLENDER_IMAGE:-git.supported.systems/rsp2k/blender-desktop}:${BLENDER_VERSION:-5.2.2}${BLENDER_FLAVOR:+-${BLENDER_FLAVOR}}
     container_name: ${COMPOSE_PROJECT_NAME}
     # Stable hostname: identity leases written into the config volume record
     # pid@hostname, and the default hostname (the container id) changes on
@@ -15,6 +15,9 @@ services:
       VNC_WATCH_ENABLED: ${VNC_WATCH_ENABLED:-1}
       VNC_ALLOW_RESIZE: ${VNC_ALLOW_RESIZE:-0}
       BLENDER_MAX_FPS: ${BLENDER_MAX_FPS:-24}
+      # No colon: an empty value means stock Blender, not the default template.
+      BLENDER_APP_TEMPLATE: ${BLENDER_APP_TEMPLATE-supported}
+      BLENDER_STARTUP_SCENE: ${BLENDER_STARTUP_SCENE:-}
       WATCH_MAX_CPU: ${WATCH_MAX_CPU:-15}
       VNC_GEOMETRY: ${VNC_GEOMETRY:-1920x1080}
       VNC_DEPTH: ${VNC_DEPTH:-24}
@@ -38,6 +41,8 @@ services:
               count: all
               capabilities: [gpu]
     shm_size: ${SHM_SIZE:-2g}
+    # Time for Blender to save preferences and quit on stop/restart.
+    stop_grace_period: 30s
     # CPU ceiling: a busy viewport or agent can otherwise take several cores.
     cpus: ${BLENDER_CPUS:-4}
     ports:

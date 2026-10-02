@@ -10,8 +10,8 @@ help: ## list targets
 pull: ## pull the image version pinned in .env
 	$(COMPOSE) pull
 
-up: ## start in the background and tail the boot log
-	$(COMPOSE) up -d
+up: ## start (re-picking VNC ports if another instance took them) and tail the boot log
+	@if command -v blender-instance >/dev/null; then blender-instance up .; else $(COMPOSE) up -d; fi
 	@sleep 3; $(COMPOSE) logs --tail=40 $(SVC)
 
 down: ## stop and remove the container (config volume is kept)
