@@ -51,6 +51,14 @@ def test_starters_are_stable_and_grouped():
         assert "—" not in s.text + s.title + s.description
 
 
+def test_prompts_reference_lists_every_starter_verbatim():
+    from pathlib import Path
+    doc = (Path(__file__).parents[1]
+           / "docs-site/src/content/docs/reference/prompts.mdx").read_text()
+    for s in STARTERS:
+        assert f"| `blender_{s.name}` | {s.title} | `{s.group}` | {s.text} |" in doc, s.name
+
+
 async def test_registers_beside_the_prompts_component():
     from blender_mcp.prompts_component import BlenderPromptsComponent
     mcp = FastMCP("t")
