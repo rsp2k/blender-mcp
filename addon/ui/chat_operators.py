@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import bpy
 
-from ..chat import clip, reader
 from ..chat import client as chat_client
+from ..chat import clip, compose, reader
 from ..chat.elicitation import resolve_approval
 from ..chat.state import chat_state
 
@@ -20,15 +20,9 @@ def _send(context, text: str) -> tuple[bool, str | None]:
 
 
 def on_chat_input_update(wm, context):
-    """Enter in the message field sends it. Clearing the field re-fires this
-    with an empty value, which is a no-op. A message that couldn't be sent
-    stays in the field for the Send button."""
-    text = (wm.blendermcp_chat_input or "").strip()
-    if not text:
-        return
-    started, _problem = _send(context or bpy.context, text)
-    if started:
-        wm.blendermcp_chat_input = ""
+    """Enter in the message field sends it; text a starter filled in waits
+    for the user (compose.py)."""
+    compose.on_input_changed(wm, lambda text: _send(context or bpy.context, text))
 
 
 def _take_key(wm) -> str:
@@ -65,6 +59,30 @@ class BLENDERMCP_OT_ChatSend(bpy.types.Operator):
                 self.report({'WARNING'}, problem)
             return {'CANCELLED'}
         wm.blendermcp_chat_input = ""
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatStarter(bpy.types.Operator):
+    """Put this starter in the message box"""
+
+    bl_idname = "blendermcp.chat_starter"
+    bl_label = "Starter prompt"
+    bl_options = {'INTERNAL'}
+
+    name: bpy.props.StringProperty(options={'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, context, properties):
+        about = next((s.get("description") for s in chat_state.starters
+                      if s.get("name") == properties.name), "")
+        tail = "Fills the message box so you can edit it, then press Enter to send"
+        return f"{about.rstrip('.')}.\n{tail}" if about else tail
+
+    def execute(self, context):
+        problem = chat_client.use_starter(self.name)
+        if problem:
+            self.report({'WARNING'}, problem)
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -345,6 +363,7 @@ class BLENDERMCP_OT_RefreshChatBackend(bpy.types.Operator):
 CHAT_OPERATORS = (
     BLENDERMCP_OT_ChatNew,
     BLENDERMCP_OT_ChatSend,
+    BLENDERMCP_OT_ChatStarter,
     BLENDERMCP_OT_ChatStop,
     BLENDERMCP_OT_ChatReader,
     BLENDERMCP_OT_ChatUndoTurn,

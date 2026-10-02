@@ -114,8 +114,23 @@ def template_module():
     return bl_app_template_utils._modules.get(TEMPLATE)
 
 
+def addon_starters():
+    """BlenderMCP's starter picking (pure Python), loaded straight from the repo."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bmcp_starters", "/work/addon/chat/starters.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def b_starters_here():
+    st = addon_starters()
+    has_b = any(n in bpy.data.objects for n in st.B_CLIP_OBJECTS)
+    return st.wants_b_clip(bpy.context.preferences.app_template, has_b), has_b
+
+
 def our_classes_registered():
-    return [hasattr(bpy.types, n) for n in ("BCLIP_PT_start", "BCLIP_OT_starter")]
+    return [hasattr(bpy.types, n) for n in ("BCLIP_PT_start", "BCLIP_OT_enable_blender_mcp")]
 
 
 def check_scene():
@@ -168,17 +183,23 @@ def template_checks():
     check(mod is not None, "template module imported")
     check(bpy.app.timers.is_registered(mod._after_startup), "startup timer queued")
     check(mod.blender_mcp_status() == ("missing", None), "BlenderMCP reported missing")
+    check(bpy.types.BCLIP_PT_start.poll(bpy.context), "the install hint shows without BlenderMCP")
+    check(not hasattr(mod, "BCLIP_OT_starter") and not hasattr(bpy.types, "BCLIP_OT_starter"),
+          "no starter operator of its own (BlenderMCP serves the starters)")
     check(not [k for k in prefs.addons.keys() if k.startswith("bl_ext.")],
           "template prefs list no extensions")
     check_scene()
     check_layout()
     check_menu_placement()
+    wants, has_b = b_starters_here()
+    check(wants and has_b, "BlenderMCP's Chat panel would offer the B. Clip starters here")
 
     # File > New > General: unregister() must undo everything.
     bpy.ops.wm.read_homefile(app_template="")
     check(prefs.app_template == "", "File > New > General left the template")
     check(not any(our_classes_registered()), "unregister() removed the panel and operator")
     check(not bpy.app.timers.is_registered(mod._after_startup), "unregister() dropped the timer")
+    check(not b_starters_here()[0], "and the general starters in File > New > General")
     ws_factory = len(bpy.data.workspaces)
     check(ws_factory > 1, f"General has its usual workspaces ({ws_factory})")
 
@@ -229,9 +250,10 @@ def stub_checks():
     mod._after_startup()  # what the startup timer does
     status, name = mod.blender_mcp_status()
     check(status == "ready", f"the template turned BlenderMCP on ({name})")
-    bpy.ops.bclip.starter(prompt="Make B wave")
-    check(bpy.context.window_manager.blendermcp_chat_input == "Make B wave",
-          "a starter prompt lands in the chat field")
+    check(not bpy.types.BCLIP_PT_start.poll(bpy.context),
+          "the template's panel steps aside once BlenderMCP is on")
+    check(bpy.context.window_manager.blendermcp_chat_input == "",
+          "the template leaves the chat field alone")
     bpy.ops.wm.save_userpref()
     check(os.path.exists(os.path.join(cfg, TEMPLATE, "userpref.blend")),
           "saving inside the template writes config/B_Clip/userpref.blend")

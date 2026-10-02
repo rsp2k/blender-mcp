@@ -1,13 +1,55 @@
 ---
 title: "Prompts"
-description: "Nine MCP prompts: dispatch helpers, workflow assistants, troubleshooting, and asset pipeline guidance."
+description: "Fifteen MCP prompts: Chat panel starters, dispatch helpers, workflow assistants, troubleshooting, and asset pipeline guidance."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Nine prompts. Two are dispatch helpers (encode the message conventions so LLMs don't have to remember them); seven are skeletal workflow guides (return reusable template text — entry points, not full bpy reference). All `blender_`-prefixed via MCPMixin.
+Fifteen prompts. Six are starters for the Chat panel (one-click suggestions for a new chat). Two are dispatch helpers (encode the message conventions so LLMs don't have to remember them). Seven are skeletal workflow guides (return reusable template text: entry points, not full bpy reference). All are `blender_`-prefixed.
 
-Prompts are pure templates. None of them call the bus or dispatch anything — the LLM consumes the returned text and decides what to do.
+Prompts are pure templates. None of them call the bus or dispatch anything; the LLM consumes the returned text and decides what to do.
+
+## Starter prompts
+
+Short requests a new user can try with one click. The add-on's [Chat panel](/how-to/chat-in-blender/) lists them in a new, empty chat; clicking one fills the message box without sending it. Any other MCP client sees them as ordinary prompts, for example in a slash-command picker.
+
+None take arguments. `prompts/get` returns one user message whose text is exactly what goes into the message box. The `title` is the button label.
+
+| Name | Title | Group | Text |
+|---|---|---|---|
+| `blender_starter_b_wave` | Make B wave | `b_clip` | Make B. Clip wave hello by swinging his front handle back and forth a few times, then play the animation. |
+| `blender_starter_b_top_hat` | Give B a top hat | `b_clip` | Give B. Clip a black top hat that sits on his head and moves with him. |
+| `blender_starter_b_desk` | Put B on a desk | `b_clip` | Build a simple wooden desk and stand B. Clip on top of it, near the front edge, still facing the camera. |
+| `blender_starter_describe_scene` | Describe this scene | `general` | Describe what's in this scene: the objects, how they're arranged, and how it's lit. |
+| `blender_starter_table_chair` | Add a table and chair | `general` | Add a simple wooden table with a chair tucked under it, both real-world size and resting on the floor. |
+| `blender_starter_light_scene` | Light this scene nicely | `general` | Light this scene nicely with a soft three-point setup aimed at the main subject, as seen from the camera. |
+
+### The `_meta` convention
+
+Clients find starters by metadata, not by name. Each starter's entry in `prompts/list` carries:
+
+```json
+{
+  "name": "blender_starter_b_wave",
+  "title": "Make B wave",
+  "description": "Animate B. Clip waving hello with his front handle.",
+  "arguments": [],
+  "_meta": {
+    "blender_mcp": {"starter": true, "group": "b_clip", "order": 1},
+    "fastmcp": {"tags": []}
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `starter` | `true` marks a starter. Anything else, or no `blender_mcp` key, is an ordinary prompt. |
+| `group` | When it fits. `b_clip` for the B. Clip template or a scene with B in it; `general` for any scene. |
+| `order` | Sort key for the buttons, lowest first. |
+
+FastMCP adds its own `fastmcp` key beside ours; clients should ignore keys they don't know. The add-on shows the `b_clip` group when the active application template is `B_Clip` or the scene has an object named `B. Clip` (or `Clip_Rig`), and `general` otherwise, falling back to `general` if a server has no `b_clip` starters. A server without starters gets no buttons and no error.
+
+Names are stable. To change the set, add or edit entries in `src/blender_mcp/starter_prompts.py`; keep titles short enough for a sidebar button.
 
 ## Dispatch helpers
 
@@ -53,7 +95,7 @@ Both dispatch helpers **build templates**, they don't dispatch. The LLM still ca
 
 ## Workflow assistants (skeletal)
 
-These return short reusable templates — patterns and decision trees, not exhaustive bpy reference. Use them as entry points for the LLM to plan an approach before committing to specific tool calls.
+These return short reusable templates: patterns and decision trees, not exhaustive bpy reference. Use them as entry points for the LLM to plan an approach before committing to specific tool calls.
 
 ### `blender_script_writing_assistant`
 
@@ -113,7 +155,7 @@ Diagnose a Blender traceback. Covers common patterns: context errors, `KeyError`
 blender_asset_creation_strategy(asset_kind: str) -> list[PromptMessage]
 ```
 
-Pipeline picker: Hyper3D vs PolyHaven vs Sketchfab vs manual modeling — when each is appropriate based on the asset kind requested.
+Pipeline picker: Hyper3D vs PolyHaven vs Sketchfab vs manual modeling, and when each is appropriate based on the asset kind requested.
 
 ## Why prompts, not tools
 
@@ -121,8 +163,9 @@ Tools force the LLM through a wrapper that hides the underlying convention. Prom
 
 ## Related
 
-- [Bus tools](/reference/bus-tools/) — `blender_send_message`, the call `dispatch_script` templates
-- [Dispatch tools](/reference/dispatch-tools/) — the 24 named tools `dispatch_recipe` emits recipes for
-- [Routing modes](https://github.com/rsp2k/blender-mcp/blob/main/docs/routing-modes.md) — direct / group / type_filter / broadcast
-- [Priority levels](https://github.com/rsp2k/blender-mcp/blob/main/docs/priorities.md) — what to pass for `priority`
-- [Use cases](/explanation/use-cases/) — concrete dispatch patterns these prompts accelerate
+- [Chat inside Blender](/how-to/chat-in-blender/): where the starter prompts show up
+- [Bus tools](/reference/bus-tools/): `blender_send_message`, the call `dispatch_script` templates
+- [Dispatch tools](/reference/dispatch-tools/): the 24 named tools `dispatch_recipe` emits recipes for
+- [Routing modes](https://github.com/rsp2k/blender-mcp/blob/main/docs/routing-modes.md): direct / group / type_filter / broadcast
+- [Priority levels](https://github.com/rsp2k/blender-mcp/blob/main/docs/priorities.md): what to pass for `priority`
+- [Use cases](/explanation/use-cases/): concrete dispatch patterns these prompts accelerate

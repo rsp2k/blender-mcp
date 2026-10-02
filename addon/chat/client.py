@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from . import compose
+from .starters import first_user_text, parse_starters
 from .state import (
     chat_state,
     decode_tool_result,
@@ -31,6 +33,7 @@ GET_BACKEND_TOOL = "blender_get_chat_backend"
 # count toward it; this only catches a server that never answers.
 CALL_TIMEOUT_S = 600.0
 BACKEND_TIMEOUT_S = 30.0
+PROMPT_TIMEOUT_S = 15.0
 CANCEL_TIMEOUT_S = 5.0
 
 
@@ -405,11 +408,97 @@ def clear_backend(provider: str) -> str | None:
     return _call_backend_tool(SET_BACKEND_TOOL, {"provider": provider, "clear": True})
 
 
+# --- starter prompts ----------------------------------------------------------
+
+def _on_starters_listed(fut: Any) -> None:
+    """Done callback for prompts/list (loop thread). Any failure, an old
+    server included, means no starters rather than an error."""
+    try:
+        found = parse_starters(fut.result())
+    except Exception as e:  # noqa: BLE001
+        print(f"[BlenderMCP] No starter prompts: {str(e) or type(e).__name__}")
+        found = []
+    chat_state.set_starters(found)
+    request_redraw()
+
+
+def refresh_starters() -> str | None:
+    """Fetch the server's starter prompts. Any thread; never waits."""
+    client = _live_client()
+    if client is None:
+        return "Not connected."
+    try:
+        fut = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(client.client.list_prompts(), PROMPT_TIMEOUT_S), client.loop,
+        )
+    except Exception as e:  # noqa: BLE001
+        return str(e)
+    fut.add_done_callback(_on_starters_listed)
+    return None
+
+
+def _fill_input(text: str, click: int) -> None:
+    """Main thread: put a starter's text in the message field, unless a later
+    click has superseded it."""
+    if click != chat_state.starter_click:
+        return
+    try:
+        import bpy
+        compose.fill(bpy.context.window_manager, text)
+    except Exception as e:  # noqa: BLE001
+        print(f"[BlenderMCP] Couldn't fill the message field: {e}")
+    request_redraw()
+
+
+def _schedule_fill(text: str, click: int) -> None:
+    try:
+        import bpy
+        bpy.app.timers.register(lambda: _fill_input(text, click), first_interval=0.0)
+    except Exception:  # noqa: BLE001, S110 - outside Blender (tests)
+        pass
+
+
+def _on_starter_prompt(fut: Any, click: int) -> None:
+    """Done callback for prompts/get (loop thread)."""
+    try:
+        text = first_user_text(fut.result())
+    except Exception as e:  # noqa: BLE001
+        chat_state.last_error = f"Couldn't load that starter: {str(e) or type(e).__name__}"
+        request_redraw()
+        return
+    if not text:
+        chat_state.last_error = "That starter came back empty."
+        request_redraw()
+        return
+    _schedule_fill(text, click)
+
+
+def use_starter(name: str) -> str | None:
+    """Ask the server for a starter's text and put it in the message field,
+    without sending. Main thread; never waits."""
+    if not name:
+        return "No starter chosen."
+    client = _live_client()
+    if client is None:
+        return "Not connected. Turn on Connect in the BlenderMCP tab."
+    click = chat_state.next_starter_click()
+    try:
+        fut = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(client.client.get_prompt(name), PROMPT_TIMEOUT_S), client.loop,
+        )
+    except Exception as e:  # noqa: BLE001
+        return str(e)
+    fut.add_done_callback(lambda f: _on_starter_prompt(f, click))
+    return None
+
+
 def on_registered(payload: dict | None) -> None:
-    """Registration answered (loop thread): read features, fetch the backend."""
+    """Registration answered (loop thread): read features, fetch the backend
+    and the starter prompts."""
     features = payload.get("features") if isinstance(payload, dict) else None
     chat_state.set_features(features)
     chat_state.reset_account()
     if chat_state.available:
         refresh_backend()
+        refresh_starters()
     request_redraw()

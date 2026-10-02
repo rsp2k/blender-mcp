@@ -346,6 +346,41 @@ class ChatState:
         self.key_prompt_requested = False
         self.key_checking = False
         self.key_error: str | None = None
+        # Starter prompts from the server's prompts/list (starters.py), [] if
+        # it has none. The last starter clicked, so a slow answer for an
+        # earlier click can't overwrite a later one.
+        self.starters: list[dict] = []
+        self.starter_click = 0
+        # Text being put in the message field by a starter: the field's
+        # update hook sees it and doesn't send (see compose.py).
+        self._prefill: str | None = None
+
+    # --- starters and the message field --------------------------------------
+
+    def set_starters(self, starters: list[dict]) -> None:
+        with self.lock:
+            self.starters = [dict(s) for s in starters or []]
+
+    def next_starter_click(self) -> int:
+        with self.lock:
+            self.starter_click += 1
+            return self.starter_click
+
+    def arm_prefill(self, text: str) -> None:
+        with self.lock:
+            self._prefill = text
+
+    def disarm_prefill(self) -> None:
+        with self.lock:
+            self._prefill = None
+
+    def take_prefill(self, text: str) -> bool:
+        """True (once) if ``text`` is what a starter is filling in."""
+        with self.lock:
+            if self._prefill is not None and text == self._prefill:
+                self._prefill = None
+                return True
+            return False
 
     # --- transcript -------------------------------------------------------
 
@@ -662,6 +697,7 @@ class ChatState:
                 "key_prompt_requested": self.key_prompt_requested,
                 "key_checking": self.key_checking,
                 "key_error": self.key_error,
+                "starters": [dict(s) for s in self.starters],
             }
 
 
