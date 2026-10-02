@@ -60,6 +60,8 @@ blender_get_scene_info(scene: str | None = None, target_uuid: str | None = None,
 
 Snapshot of the active scene: name, object count, first ~10 objects, materials count, type counts and the user's selection. `scenes` lists every scene in the file with its object count and which one is active. Pass `scene` to summarise another scene without switching the user to it; an unknown name comes back as an error listing the scenes. `blender_list_scene_objects` takes the same `scene` argument for the full object list.
 
+A listed object parented to an armature bone carries `parent_bone` (its `location` is then relative to that bone). `rigs` names up to three armatures with up to 16 of their bones each, plus the armature's `how_to_pose` text when it has one, so a request to pose or animate a character finds the bones instead of moving the parts.
+
 ### `blender_get_object_info`
 
 ```python
@@ -67,6 +69,8 @@ blender_get_object_info(name: str, target_uuid: str | None = None, _timeout: flo
 ```
 
 Detailed descriptor for a specific object by name: transform, mesh stats, material slots. Returns `failed` if `name` doesn't exist.
+
+A parented object also gets `parent`; parented to a bone, it gets `parent_type: "BONE"`, `parent_bone` and a `pose_note` saying to pose that bone rather than the object. An armature gets `bone_count`, `bones` (up to 40 names), `bone_rotation_mode` and the `pose_path` to key them, such as `pose.bones["<bone>"].rotation_euler`. Any object with a string custom property `how_to_pose` gets that text back (up to 1200 characters); scene authors can use it to say how their rig is meant to be posed, as the B. Clip template does.
 
 ### `blender_browse_data`
 

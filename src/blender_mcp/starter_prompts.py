@@ -37,21 +37,23 @@ class Starter:
 STARTERS: tuple[Starter, ...] = (
     Starter(
         "starter_b_wave", "Make B wave", "b_clip",
-        "Animate B. Clip waving hello with his front handle.",
-        "Make B. Clip wave hello by swinging his front handle back and forth "
-        "a few times over about two seconds, hinged where it meets his jaw. "
-        "I'll press Space to play it.",
+        "Animate B. Clip waving hello by keying his rig's handle.front bone.",
+        "Make B. Clip wave hello with his front handle: rock the handle.front "
+        "bone of his rig (the B. Clip armature) between -10 and 25 degrees "
+        "around its Y axis, a few times over about two seconds. I'll press "
+        "Space to play it.",
     ),
     Starter(
         "starter_b_top_hat", "Give B a top hat", "b_clip",
         "Model a top hat and put it on B. Clip so it moves with him.",
-        "Give B. Clip a black top hat that sits on his head and moves with him.",
+        "Give B. Clip a black top hat that sits on top of him, between his "
+        "handles, and parent it to the body bone of his rig so it moves with him.",
     ),
     Starter(
         "starter_b_desk", "Put B on a desk", "b_clip",
         "Build a simple desk and stand B. Clip on it.",
         "Build a simple wooden desk and stand B. Clip on top of it, near the "
-        "front edge, still facing the camera.",
+        "front edge, still facing the camera. Move his rig so all of him goes.",
     ),
     Starter(
         "starter_describe_scene", "Describe this scene", "general",

@@ -69,6 +69,10 @@ table's height or a top's thickness.
 get_object_info) and report the measured values, not the ones you intended.
 - After building several parts, call list_scene_objects to confirm every part exists, \
 and redo any that failed. Never report a part that isn't in the scene.
+- A part parented to an armature's bone (parent_bone in get_object_info; the scene \
+summary's rigs list the armatures) moves with that bone. To pose or animate it, rotate \
+and key the pose bone on the armature (data_path 'pose.bones["<bone>"].rotation_euler'), \
+never the part itself, and follow any how_to_pose text the armature or part carries.
 - For questions about how things look (colour, arrangement, what is visible), use \
 look_at_viewport when it is offered. To see from another angle, closer up or with real \
 materials, pass angle, frame or shading to look_at_viewport: that view is temporary and \

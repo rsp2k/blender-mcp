@@ -363,6 +363,50 @@ THINK = [
 ]
 
 
+# Each handle bone's rotation Y (degrees) that keeps its wire clear of B's
+# body, face and the other handle, measured by onboarding/check_b_wave.py.
+# Past the front's +98 it reaches his eyes, past its -87 it lies across the
+# top of his jaws; the back lies on his back plate past -92.
+HANDLE_CLEAR = {"front": (-87, 98), "back": (-92, 105)}
+# The wave the "Make B wave" starter asks for: about twice the hero loop's
+# swing, and the raised handle stays in the template camera's frame (it
+# leaves the top of the frame past about -15).
+WAVE = (-10, 25)
+
+# A custom property on the rig and on both handles. Chat models read it
+# through get_object_info and get_scene_info; it stops them animating the
+# bone-parented meshes, which swing about the wrong pivot and through B.
+HOW_TO_POSE_KEY = "how_to_pose"
+
+
+def rig_how_to_pose() -> str:
+    lo, hi = WAVE
+    (flo, fhi), (blo, bhi) = HANDLE_CLEAR["front"], HANDLE_CLEAR["back"]
+    return (
+        "Pose and animate B. Clip with this armature's pose bones, and move or turn "
+        "all of him by moving this armature object. His meshes are parented to the "
+        "bones, so never move, rotate or key those objects. Bones: "
+        "body (bobs and leans all of him; Y runs up the clip, Z faces the viewer), "
+        "handle.front and handle.back (each turns on its hinge with rotation_euler[1]; "
+        "positive swings the front handle forward and down), face, eye.L and eye.R "
+        "(scale[1] 0.1 is a blink), pupil.L and pupil.R (location[0] about 0.08 is a "
+        f"glance). To wave, key handle.front between {lo} and {hi} degrees "
+        f"({math.radians(lo):.2f} to {math.radians(hi):.2f} rad) on this armature: data_path "
+        "'pose.bones[\"handle.front\"].rotation_euler', index 1 (keyframe_insert in "
+        "Python, or the insert_keyframe tool). "
+        f"Keep handle.front within {flo}..{fhi} degrees and handle.back within "
+        f"{blo}..{bhi}, or the wire passes through him. Parent a hat or prop to the body "
+        "bone so it moves with him. Each hook sits inside its jaw roll, so interference "
+        "checks report that contact even at rest."
+    )
+
+
+def handle_how_to_pose(tag: str) -> str:
+    lo, hi = HANDLE_CLEAR[tag]
+    return (f"Posed by the handle.{tag} bone of its parent armature. Rotate that pose "
+            f"bone (rotation_euler[1], {lo}..{hi} degrees clear of B), not this object.")
+
+
 def add_bone(arm, name, head, tail, z_axis, parent=None, inherit_scale="FULL"):
     eb = arm.data.edit_bones.new(name)
     eb.head, eb.tail = head, tail
@@ -429,6 +473,9 @@ def rig(coll):
         obj.matrix_world = keep  # rest pose stays exactly the still
     for pb in arm.pose.bones:
         pb.rotation_mode = "XYZ"
+    arm[HOW_TO_POSE_KEY] = rig_how_to_pose()
+    for tag in ("front", "back"):
+        objs[f"Handle {tag}"][HOW_TO_POSE_KEY] = handle_how_to_pose(tag)
     bpy.context.view_layer.update()
     return arm
 
