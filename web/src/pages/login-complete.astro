@@ -1,6 +1,6 @@
 ---
 /**
- * /login-complete — landing page the Blender addon redirects to after a
+ * /login-complete: landing page the Blender addon redirects to after a
  * successful OAuth flow against the MCP server.
  *
  * Not gated by forward_auth (see the @protected matcher in
@@ -8,9 +8,12 @@
  * an ungated route those come from the client, not from Authentik.
  *
  * Addon-side context (server URL, client_id, addon version, timestamp)
- * arrives via query string — non-secret values, OK to render directly.
- * No tokens or auth codes are passed through URLs anywhere.
+ * arrives via query string: non-secret values, OK to render directly.
+ * No tokens or auth codes are passed through URLs anywhere. Every value
+ * is optional; without any, the details disclosure is left out.
  */
+import ClipHero from '../components/ClipHero.astro';
+import '../styles/login-complete.css';
 
 const params = Astro.url.searchParams;
 const ctx = {
@@ -19,6 +22,7 @@ const ctx = {
   ver: params.get('ver') ?? '',
   ts: params.get('ts') ?? '',
 };
+const hasDetails = Object.values(ctx).some(Boolean);
 ---
 
 <!DOCTYPE html>
@@ -26,148 +30,111 @@ const ctx = {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BlenderMCP login complete</title>
+    <title>Signed in to BlenderMCP</title>
     <meta name="robots" content="noindex" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
-    <style>
-      :root {
-        --bg: #0e1116; --surface: #161b22; --border: #2a313a;
-        --text: #d4d4d4; --muted: #8b949e; --dim: #6e7681;
-        --accent: #2bb3a4; --accent-glow: rgba(43, 179, 164, .15);
-        --success: #5fb878;
-        --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0; min-height: 100vh;
-        font-family: system-ui, -apple-system, sans-serif;
-        background:
-          radial-gradient(circle at 20% 0%, var(--accent-glow), transparent 50%),
-          radial-gradient(circle at 80% 100%, var(--accent-glow), transparent 50%),
-          var(--bg);
-        color: var(--text);
-        display: grid; place-items: center; padding: 2em 1em;
-      }
-      main {
-        background: var(--surface); border: 1px solid var(--border);
-        border-radius: 14px; padding: 2.5em; max-width: 640px; width: 100%;
-        box-shadow: 0 20px 60px rgba(0,0,0,.4);
-      }
-      .check {
-        width: 64px; height: 64px; margin: 0 auto 1em;
-        display: grid; place-items: center;
-        background: var(--accent-glow); border: 2px solid var(--success);
-        border-radius: 50%; color: var(--success);
-      }
-      h1 {
-        margin: 0 0 .4em; font-size: 1.8em; font-weight: 600;
-        text-align: center; color: var(--success);
-      }
-      .lede {
-        text-align: center; margin: 0 0 2em; color: var(--muted);
-        font-size: 1.05em; line-height: 1.5;
-      }
-      dl.context {
-        margin: 0 0 2em; padding: 1.2em 1.5em;
-        background: var(--bg); border: 1px solid var(--border);
-        border-radius: 8px; font-family: var(--mono); font-size: .88em;
-        display: grid; grid-template-columns: max-content 1fr;
-        column-gap: 1.5em; row-gap: .5em; align-items: baseline;
-      }
-      dl.context dt { color: var(--muted); font-weight: 400; white-space: nowrap; }
-      dl.context dd { margin: 0; color: var(--text); word-break: break-all; }
-      .next-h {
-        margin: 0 0 .8em; font-size: 1em; font-weight: 600; color: var(--text);
-      }
-      .next-list {
-        list-style: none; padding: 0; margin: 0;
-        display: grid; gap: .6em;
-      }
-      .next-list a {
-        display: flex; align-items: center; gap: .8em;
-        padding: .9em 1.1em; background: var(--bg);
-        border: 1px solid var(--border); border-radius: 8px;
-        color: var(--text); text-decoration: none;
-        transition: border-color .15s, transform .1s;
-      }
-      .next-list a:hover { border-color: var(--accent); transform: translateX(2px); }
-      .next-list a svg { width: 20px; height: 20px; color: var(--accent); flex-shrink: 0; }
-      .next-list small { display: block; color: var(--muted); font-size: .85em; margin-top: .1em; }
-      footer {
-        margin-top: 2em; padding-top: 1.2em; border-top: 1px solid var(--border);
-        text-align: center; font-size: .8em; color: var(--dim); line-height: 1.6;
-      }
-      footer code {
-        background: var(--bg); color: var(--muted); padding: 1px 6px;
-        border-radius: 3px; font-family: var(--mono); font-size: .85em;
-      }
-      footer a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
-    </style>
+    <link rel="preload" as="image" href="/img/mascot/clip-512.png" />
+    <link rel="prefetch" href="/img/mascot/clip-sheet.webp" />
   </head>
   <body>
-    <main>
-      <div class="check">
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
+    <main class="lc">
+      <ClipHero
+        class="lc-clip"
+        name="B. Clip"
+        caption={"B. Clip says hi.\nSee you in Blender!"}
+      />
+
+      <div class="lc-body">
+        <p class="lc-status">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+          Login complete
+        </p>
+        <h1>You're signed in. Go back to Blender.</h1>
+        <p class="lede">
+          Everything else happens in Blender now, so you can close this tab.
+        </p>
+
+        <div
+          class="bpanel"
+          role="img"
+          aria-label="What the BlenderMCP tab in Blender's sidebar looks like now: the Blender MCP panel reads Connected, Personal, and the Chat panel below it has a box for typing a request."
+        >
+          <div class="bpanel-head" aria-hidden="true">
+            <svg class="bpanel-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+            <span>Blender MCP</span>
+            {ctx.ver && <span class="bpanel-ver">{ctx.ver}</span>}
+          </div>
+          <div class="bpanel-row bpanel-connected" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
+            <span>Connected &middot; Personal</span>
+            <span class="bpanel-badge">1</span>
+          </div>
+          <div class="bpanel-head bpanel-sub" aria-hidden="true">
+            <svg class="bpanel-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+            <span>Chat</span>
+          </div>
+          <div class="bpanel-row bpanel-hint" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
+            <span>Ask for something in this scene.</span>
+          </div>
+          <div class="bpanel-row bpanel-input" aria-hidden="true">
+            <span class="bpanel-field">Put a 2 m cube on the table<span class="bpanel-caret"></span></span>
+            <span class="bpanel-badge">2</span>
+          </div>
+        </div>
+
+        <ol class="lc-steps">
+          <li>
+            <strong>Check that it reads Connected.</strong>
+            Look at the top of the BlenderMCP tab in the 3D Viewport sidebar.
+            Press <kbd>N</kbd> over the viewport if the sidebar is hidden.
+          </li>
+          <li>
+            <strong>Ask for something.</strong>
+            Type a request in the Chat panel just below and press
+            <kbd>Enter</kbd>. New accounts start with a free trial.
+          </li>
+        </ol>
+
+        <ul class="lc-links">
+          <li>
+            <a href="https://docs.blender.bet/tutorials/quickstart/">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></svg>
+              Quickstart
+            </a>
+          </li>
+          <li>
+            <a href="https://docs.blender.bet/how-to/chat-in-blender/">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /></svg>
+              Chat inside Blender
+            </a>
+          </li>
+        </ul>
+
+        {hasDetails && (
+          <details class="lc-details">
+            <summary>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+              Connection details
+            </summary>
+            <p class="lc-details-note">
+              For troubleshooting. Nothing here is secret, so it is fine to
+              paste into a support request.
+            </p>
+            <dl>
+              {ctx.server && (<><dt>Server</dt><dd>{ctx.server}</dd></>)}
+              {ctx.ver && (<><dt>Add-on</dt><dd>BlenderMCP {ctx.ver}</dd></>)}
+              {ctx.client_id && (<><dt>Client ID</dt><dd>{ctx.client_id}</dd></>)}
+              {ctx.ts && (<><dt>Time</dt><dd><time datetime={ctx.ts}>{ctx.ts}</time></dd></>)}
+            </dl>
+            <p class="lc-details-proto">
+              OAuth 2.1 with PKCE, native-app flow (RFC 8252), signed in through
+              <a href="https://auth.supported.systems">Authentik</a>.
+            </p>
+          </details>
+        )}
       </div>
-      <h1>You're signed in</h1>
-      <p class="lede">
-        Your BlenderMCP addon is authorized. You can close this tab and return to Blender.
-      </p>
-
-      <dl class="context">
-        {ctx.server && (<><dt>Server</dt><dd>{ctx.server}</dd></>)}
-        {ctx.ver && (<><dt>Addon</dt><dd>BlenderMCP v{ctx.ver}</dd></>)}
-        {ctx.client_id && (<><dt>Client&nbsp;ID</dt><dd>{ctx.client_id}</dd></>)}
-        {ctx.ts && (<><dt>Issued at</dt><dd>{ctx.ts}</dd></>)}
-      </dl>
-
-      <p class="next-h">What's next?</p>
-      <ul class="next-list">
-        <li>
-          <a href="https://docs.blender.bet/explanation/use-cases/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9 11H3v10h6V11z" />
-              <path d="M15 3h6v18h-6V3z" />
-              <path d="M9 3H3v6h6V3z" />
-              <path d="M15 17h6v4h-6v-4z" />
-            </svg>
-            <div>Use cases<small>What people are building with BlenderMCP</small></div>
-          </a>
-        </li>
-        <li>
-          <a href="https://docs.blender.bet/reference/dispatch-tools/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 7v14" />
-              <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
-            </svg>
-            <div>Tool reference<small>Every blender_* tool, with examples</small></div>
-          </a>
-        </li>
-        <li>
-          <a href="https://docs.blender.bet/explanation/architecture/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect width="8" height="8" x="3" y="3" rx="2" />
-              <path d="M7 11v4a2 2 0 0 0 2 2h4" />
-              <rect width="8" height="8" x="13" y="13" rx="2" />
-            </svg>
-            <div>How it works<small>The bus, role attribution, OAuth flow</small></div>
-          </a>
-        </li>
-      </ul>
-
-      <footer>
-        MCP-spec OAuth 2.1 + PKCE &middot; RFC 8252 native-app flow<br />
-        Authenticated via <a href="https://auth.supported.systems">Authentik</a>
-        through FastMCP <code>OIDCProxy</code>
-      </footer>
     </main>
   </body>
 </html>
