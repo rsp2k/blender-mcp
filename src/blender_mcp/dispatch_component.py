@@ -470,6 +470,7 @@ class BlenderDispatchComponent(MCPMixin):
         """Snapshot of the active Blender scene: name, object count, first N objects,
         and what the user has picked: active_object, selected_objects, selected_count.
         ``scenes`` lists every scene in the file with its object count.
+        ``rigs`` names the armatures with their bones (and how_to_pose text).
         ``scene``: summarise that scene instead, without switching to it."""
         from .modelling_tools import scene_param
 
@@ -489,7 +490,12 @@ class BlenderDispatchComponent(MCPMixin):
         bus_id: Optional[str] = None,
         ctx: Context = None,
     ) -> str:
-        """Detailed info for a specific Blender object by name."""
+        """Detailed info for a specific Blender object by name.
+
+        A parented object also gets ``parent`` (and ``parent_bone`` when it
+        rides on an armature bone: pose that bone, not the object). An
+        armature gets its ``bones`` and the ``pose_path`` to key them. Any
+        object's ``how_to_pose`` custom property comes back as text."""
         return await self._call(
             ctx, "get_object_info", {"name": name}, target_uuid, _timeout, bus_id=bus_id
         )

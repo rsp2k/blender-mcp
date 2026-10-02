@@ -83,6 +83,11 @@ inside_verify() {
   run $b --app-template $TEMPLATE --python "$v" -- stub
   run $b --python "$v" -- check-stub-off
 
+  step "wave: the handle.front bone swings clear of B, the rig explains itself"
+  fresh
+  run $b --factory-startup /work/app_template/$TEMPLATE/startup.blend \
+    --python /work/onboarding/check_b_wave.py
+
   step "GUI: first look (BlenderMCP missing, then installed)"
   Xvnc :7 -geometry 1920x1080 -depth 24 -SecurityTypes None -localhost >/tmp/xvnc.log 2>&1 &
   sleep 1

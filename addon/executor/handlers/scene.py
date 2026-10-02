@@ -6,7 +6,18 @@ import traceback
 
 import bpy
 
+from ... import rig_info
 from ..registry import command
+
+
+def _rig_rows(objects) -> list[dict]:
+    """Plain rows for rig_info.scene_rigs: each armature's name, bone names
+    and how_to_pose property."""
+    return [
+        {"name": o.name, "bones": [b.name for b in o.data.bones],
+         "how_to_pose": o.get(rig_info.HOW_TO_POSE_KEY)}
+        for o in objects if o.type == "ARMATURE" and o.data is not None
+    ]
 
 
 def scene_named(name=None):
@@ -50,13 +61,24 @@ class SceneHandlersMixin:
                 "materials_count": len(bpy.data.materials),
             }
             for obj in objects[:10]:
-                scene_info["objects"].append({
+                row = {
                     "name": obj.name,
                     "type": obj.type,
                     "location": [round(float(obj.location.x), 2),
                                  round(float(obj.location.y), 2),
                                  round(float(obj.location.z), 2)],
-                })
+                }
+                # A bone-parented object's location is relative to its bone.
+                if obj.parent is not None and obj.parent_type == "BONE" and obj.parent_bone:
+                    row["parent_bone"] = obj.parent_bone
+                scene_info["objects"].append(row)
+
+            # Armatures, so a request to pose or animate a character finds
+            # the bones instead of moving the meshes parented to them. Ahead
+            # of the selection, which a prompt-sized cut drops first.
+            rigs = rig_info.scene_rigs(_rig_rows(objects))
+            if rigs:
+                scene_info["rigs"] = rigs
 
             # What the user has picked in the GUI, so "this one" needs no
             # execute_code round trip. Capped like the object list.
@@ -113,6 +135,17 @@ class SceneHandlersMixin:
             "visible": obj.visible_get(),
             "materials": [],
         }
+        # Parenting and rig details, only when present, so other objects'
+        # output is unchanged.
+        obj_info.update(rig_info.parent_fields(
+            obj.parent.name if obj.parent else None, obj.parent_type, obj.parent_bone))
+        if obj.type == "ARMATURE" and obj.data is not None:
+            pose_bones = obj.pose.bones if obj.pose else []
+            obj_info.update(rig_info.armature_fields(
+                [b.name for b in obj.data.bones], [pb.rotation_mode for pb in pose_bones]))
+        text = rig_info.how_to_pose(obj.get(rig_info.HOW_TO_POSE_KEY))
+        if text:
+            obj_info["how_to_pose"] = text
 
         if obj.type == "MESH":
             bounding_box = self._get_aabb(obj)
