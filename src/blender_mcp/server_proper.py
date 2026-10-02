@@ -43,6 +43,7 @@ from .job_tools import BlenderJobComponent
 from .worker_tools import BlenderWorkerComponent
 from .feedback_tools import BlenderFeedbackComponent
 from .prompts_component import BlenderPromptsComponent
+from .starter_prompts import register_starter_prompts
 from .texture_tools import BlenderTextureComponent
 
 logger = logging.getLogger(__name__)
@@ -279,6 +280,7 @@ def build_stdio_mcp() -> FastMCP:
     # Prompts are pure templates — no bus, no user_id, no Blender peer needed.
     # Safe + useful in stdio (prototyping scripts before connecting Blender).
     BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+    register_starter_prompts(server, prefix="blender")
     logger.info("FastMCP server built (stdio): diagnostics + prompts")
     return server
 
@@ -414,6 +416,7 @@ def build_http_mcp() -> FastMCP:
     # Skeletal prompts — same registration as stdio (templates only,
     # no per-request state).
     BlenderPromptsComponent().register_prompts(mcp_server=server, prefix="blender")
+    register_starter_prompts(server, prefix="blender")
 
     logger.info("FastMCP server built (HTTP): diagnostics + bus + dispatch + control + feedback + extension + prompts")
     return server
