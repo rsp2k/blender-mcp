@@ -55,7 +55,10 @@ export default defineConfig({
       },
       favicon: '/favicon-32.png',
       // Clip's pupils follow the pointer in the header logo.
-      components: { SiteTitle: './src/components/SiteTitle.astro' },
+      components: {
+        SiteTitle: './src/components/SiteTitle.astro',
+        Footer: './src/components/Footer.astro',
+      },
       customCss: ['./src/styles/custom.css'],
       social: [
         {

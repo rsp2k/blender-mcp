@@ -17,6 +17,7 @@ export const prerender = false;
 
 import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
 import { serializeSession } from '../../lib/session';
+import JointBadge from '../../components/JointBadge.astro';
 
 interface BusListItem {
   bus_id: string;
@@ -265,5 +266,6 @@ try {
         )}
       </div>
     </main>
+    <JointBadge />
   </body>
 </html>

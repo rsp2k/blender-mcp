@@ -13,6 +13,7 @@ export const prerender = false;
 
 import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
 import { serializeSession } from '../../lib/session';
+import JointBadge from '../../components/JointBadge.astro';
 
 interface TokenItem {
   id: string;
@@ -152,5 +153,6 @@ const fmt = (iso: string | null) => (iso ? iso.slice(0, 16).replace('T', ' ') + 
 
       <p class="help">Setup for Claude Code and CI: <a href="https://docs.blender.bet/how-to/ci-and-scripts/">Use Blender MCP from CI or scripts</a>.</p>
     </main>
+    <JointBadge />
   </body>
 </html>

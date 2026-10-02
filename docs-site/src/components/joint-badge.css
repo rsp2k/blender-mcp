@@ -1,0 +1,88 @@
+/* "A Supported Systems Joint" badge for the docs footer. Uses Starlight's
+   theme variables, so it follows the light and dark themes. Prefixed joint-
+   because Astro bundles component CSS globally. */
+.joint {
+  display: flex;
+  justify-content: center;
+  margin: 2.5rem 0 1rem;
+}
+
+.joint__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.35rem;
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-gray-2);
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.joint__badge:hover { border-color: var(--sl-color-accent); color: var(--sl-color-white); }
+.joint__badge:focus-visible,
+.joint__close:focus-visible,
+.joint__link:focus-visible { outline: 2px solid var(--sl-color-accent); outline-offset: 3px; }
+.joint__badge img { display: block; }
+
+.joint__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(3px);
+}
+.joint__backdrop[hidden] { display: none; }
+
+.joint__card {
+  position: relative;
+  max-width: 26rem;
+  padding: 2rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.8rem;
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-white);
+  text-align: center;
+  box-shadow: 0 1.5rem 4rem -1rem rgb(0 0 0 / 0.6);
+}
+
+.joint__close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: grid;
+  place-items: center;
+  padding: 0.4rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+}
+.joint__close:hover { background: var(--sl-color-gray-5); color: var(--sl-color-white); }
+
+.joint__mark { display: block; margin: 0 auto 1rem; }
+.joint__title { margin: 0 0 0.6rem; font-size: 1.15rem; color: var(--sl-color-white); }
+.joint__text { margin: 0 0 1.4rem; color: var(--sl-color-gray-3); font-size: 0.9rem; line-height: 1.6; }
+
+.joint__link {
+  display: inline-block;
+  padding: 0.55rem 1.1rem;
+  border-radius: 0.4rem;
+  background: var(--sl-color-accent);
+  color: var(--sl-color-black);
+  font-weight: 600;
+  text-decoration: none;
+}
+.joint__link:hover { background: var(--sl-color-accent-high); color: var(--sl-color-black); }
+
+@media (prefers-reduced-motion: reduce) {
+  .joint__badge { transition: none; }
+}

@@ -1,0 +1,58 @@
+---
+// "A Supported Systems Joint" badge, in the spirit of a 90s webring button,
+// as on homestar.ink: a small badge that opens a short note on who built it.
+// The website has its own copy (web/src/components/JointBadge.astro).
+import './joint-badge.css';
+---
+
+<div class="joint">
+  <button type="button" class="joint__badge" aria-haspopup="dialog" aria-controls="joint-modal">
+    <img src="/supported-systems-logo.svg" alt="" width="28" height="21" />
+    <span>A Supported Systems Joint</span>
+  </button>
+</div>
+
+<div class="joint__backdrop" id="joint-modal" role="dialog" aria-modal="true" aria-labelledby="joint-modal-title" hidden>
+  <div class="joint__card">
+    <button type="button" class="joint__close" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      </svg>
+    </button>
+    <img class="joint__mark" src="/supported-systems-logo.svg" alt="Supported Systems" width="72" height="54" />
+    <h2 class="joint__title" id="joint-modal-title">A Supported Systems Joint</h2>
+    <p class="joint__text">
+      BlenderMCP is built and maintained by Supported Systems, a small studio
+      that writes software for people who have to keep it running afterwards.
+    </p>
+    <a class="joint__link" href="https://supported.systems" target="_blank" rel="noopener noreferrer">
+      Visit supported.systems
+    </a>
+  </div>
+</div>
+
+<script>
+  const modal = document.getElementById('joint-modal');
+  const closer = modal?.querySelector<HTMLButtonElement>('.joint__close');
+  let lastFocused: HTMLElement | null = null;
+
+  const open = (trigger: HTMLElement) => {
+    lastFocused = trigger;
+    modal?.removeAttribute('hidden');
+    closer?.focus();
+  };
+  const close = () => {
+    modal?.setAttribute('hidden', '');
+    lastFocused?.focus();
+  };
+
+  document.querySelectorAll<HTMLButtonElement>('.joint__badge')
+    .forEach((button) => button.addEventListener('click', () => open(button)));
+  closer?.addEventListener('click', close);
+  modal?.addEventListener('click', (event) => {
+    if (event.target === modal) close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !modal?.hasAttribute('hidden')) close();
+  });
+</script>

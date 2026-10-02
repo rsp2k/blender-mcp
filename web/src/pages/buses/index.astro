@@ -24,6 +24,7 @@ export const prerender = false;
 
 import { mcpFetch, NeedsAuthError } from '../../lib/mcp-api';
 import { serializeSession } from '../../lib/session';
+import JointBadge from '../../components/JointBadge.astro';
 
 interface BusListItem {
   bus_id: string;
@@ -208,5 +209,6 @@ if (refreshedCookie) Astro.response.headers.append('Set-Cookie', refreshedCookie
         out-of-band with the user you want to add.
       </div>
     </main>
+    <JointBadge />
   </body>
 </html>

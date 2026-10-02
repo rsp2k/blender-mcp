@@ -1,0 +1,9 @@
+---
+// Starlight footer override: everything the default footer does (pagination,
+// edit link, last updated), plus the Supported Systems badge underneath.
+import Default from '@astrojs/starlight/components/Footer.astro';
+import JointBadge from './JointBadge.astro';
+---
+
+<Default><slot /></Default>
+<JointBadge />

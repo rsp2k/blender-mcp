@@ -87,9 +87,10 @@ a.card:hover {
 	border-radius: 0.5rem;
 }
 
-/* Sidebar — currently-active link gets the accent color */
+/* Sidebar: the current page is bold. Starlight already sets it on an accent
+ * background with a contrasting text colour; an accent text colour here made
+ * the label vanish in the light theme. */
 .sidebar-content a[aria-current='page'] {
-	color: var(--sl-color-accent);
 	font-weight: 600;
 }
 
