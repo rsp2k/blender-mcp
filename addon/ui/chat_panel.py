@@ -21,10 +21,13 @@ from ..chat.state import (
     KEY_URL,
     approval_preview,
     chat_state,
+    key_box_changes_key,
     key_prompt_heading,
+    own_key_row_text,
     trial_exhausted,
     trial_low,
     trial_row_text,
+    uses_own_key,
     wrap_text,
 )
 from .icons import ensure_thinking_timer, icon_id, think_frame
@@ -105,23 +108,45 @@ def _draw_model_chip(layout, snap) -> None:
                  text=label or "Choose a model", **kwargs)
 
 
-def _draw_trial(layout, context, snap) -> None:
-    """One quiet row under the model chip while some free trial remains."""
-    trial = snap["trial"]
-    if not trial or trial_exhausted(trial) or snap["needs_key"]:
-        return
+def _row_chars(context) -> int:
     width = context.region.width if context.region else 300
     scale = _ui_scale(context)
-    chars = int((width - 20 * scale) / (7 * scale))
-    label, button = trial_row_text(trial, chars)
+    return int((width - 20 * scale) / (7 * scale))
+
+
+def _split_row(layout, label: str, button: str):
     # Split by text length: a plain row halves the width and cuts the label.
     left, right = len(label) + 5, len(button) + 3
-    split = layout.split(factor=left / (left + right), align=True)
+    return layout.split(factor=left / (left + right), align=True)
+
+
+def _draw_trial(layout, context, snap) -> None:
+    """One quiet row under the model chip while some free trial remains, or,
+    once the account's own key answers, the row that changes it."""
+    trial = snap["trial"]
+    if not trial or trial_exhausted(trial) or snap["needs_key"]:
+        if not trial and not snap["needs_key"] and uses_own_key(snap):
+            _draw_own_key(layout, context, snap)
+        return
+    label, button = trial_row_text(trial, _row_chars(context))
+    split = _split_row(layout, label, button)
     low = trial_low(trial)
     text = split.row(align=True)
     text.alert = low
     text.label(text=label, icon='ERROR' if low else 'INFO')
     split.operator("blendermcp.chat_key_prompt", text=button,
+                   depress=bool(snap["key_prompt_requested"]))
+
+
+def _draw_own_key(layout, context, snap) -> None:
+    """Where the trial row was: the account's own key is in use, and
+    Change key opens the same key box the trial used."""
+    label, button = own_key_row_text(_row_chars(context))
+    split = _split_row(layout, label, button)
+    text = split.row(align=True)
+    text.enabled = False  # a quiet note, not a call to action
+    text.label(text=label, icon='KEYINGSET')
+    split.operator("blendermcp.chat_change_key", text=button,
                    depress=bool(snap["key_prompt_requested"]))
 
 
@@ -146,7 +171,8 @@ def _draw_key_prompt(layout, context, snap, wrap) -> None:
     save.operator("blendermcp.chat_save_key", text="Save key", icon='CHECKMARK')
     if checking:
         col.separator(factor=0.5)
-        col.label(text="Checking key…", icon='TIME')
+        col.label(text="Removing key…" if snap["key_removing"] else "Checking key…",
+                  icon='TIME')
     elif snap["key_error"]:
         col.separator(factor=0.5)
         _label_lines(col.column(align=True), wrap(snap["key_error"], reserve=40.0),
@@ -155,9 +181,15 @@ def _draw_key_prompt(layout, context, snap, wrap) -> None:
     note = col.column(align=True)
     note.enabled = False
     note.scale_y = 0.8
-    for line in wrap("Sent once to the server and stored encrypted; "
+    changing = key_box_changes_key(snap)
+    for line in wrap("Checked before it replaces your current key. Stored "
+                     "encrypted on the server, never in Blender." if changing else
+                     "Sent once to the server and stored encrypted; "
                      "never saved in Blender.", reserve=30.0):
         note.label(text=line)
+    if changing:
+        _draw_key_change_actions(col, snap, wrap, checking)
+        return
     # No key? Claude Desktop or Claude Code can drive this Blender on the
     # user's own Claude plan.
     col.separator(factor=0.8)
@@ -166,6 +198,31 @@ def _draw_key_prompt(layout, context, snap, wrap) -> None:
                      "your Claude plan instead.", reserve=30.0):
         alt.label(text=line)
     alt.operator("wm.url_open", text="How to connect", icon='HELP').url = CLIENTS_URL
+
+
+def _draw_key_change_actions(col, snap, wrap, checking: bool) -> None:
+    """Cancel and Remove key under a key box that replaces a saved key.
+    Remove asks first, in place: a confirm line with Remove and Keep."""
+    col.separator(factor=0.8)
+    if snap["key_remove_armed"]:
+        ask = col.column(align=True)
+        ask.alert = True
+        _label_lines(ask, wrap("Remove your key from the server? Chat goes "
+                               "back to the server default.", reserve=40.0), 'QUESTION')
+        row = col.row(align=True)
+        row.enabled = not checking
+        sure = row.row(align=True)
+        sure.alert = True
+        sure.operator("blendermcp.chat_remove_key", text="Remove",
+                      icon='TRASH').step = 'REMOVE'
+        row.operator("blendermcp.chat_remove_key", text="Keep",
+                     icon='CANCEL').step = 'KEEP'
+        return
+    row = col.row(align=True)
+    row.enabled = not checking
+    row.operator("blendermcp.chat_close_key", text="Cancel", icon='X')
+    row.operator("blendermcp.chat_remove_key", text="Remove key",
+                 icon='TRASH').step = 'ASK'
 
 
 def _draw_clip(layout, context) -> None:

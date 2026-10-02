@@ -194,6 +194,15 @@ def key_error_text(payload: Any) -> str:
     return _KEY_ERRORS.get(code, f"Couldn't save the key ({code or payload.get('status')!r}).")
 
 
+def uses_own_key(snap: dict) -> bool:
+    """Is chat answering with a Claude key this account saved? The server's
+    backend view says so (source "user", provider "anthropic", has_key); a
+    server default never counts, even when it runs on Claude."""
+    backend = snap.get("backend") or {}
+    return (backend.get("source") == "user" and backend.get("provider") == "anthropic"
+            and bool(backend.get("has_key")))
+
+
 def key_prompt_heading(snap: dict) -> str | None:
     """The key box's first line, or None when the box shouldn't show."""
     trial = snap.get("trial")
@@ -202,8 +211,31 @@ def key_prompt_heading(snap: dict) -> str | None:
     if snap.get("needs_key") or trial_exhausted(trial):
         return "Paste your Claude API key to keep chatting"
     if snap.get("key_prompt_requested") or snap.get("key_checking"):
+        if uses_own_key(snap):
+            return "Paste a new Claude API key"
         return "Paste your Claude API key"
     return None
+
+
+def key_box_changes_key(snap: dict) -> bool:
+    """True when the open key box replaces a saved key rather than adding
+    one: it then offers Cancel and Remove key instead of the trial's
+    "No API key?" note."""
+    return (uses_own_key(snap) and not snap.get("needs_key")
+            and not trial_exhausted(snap.get("trial"))
+            and key_prompt_heading(snap) is not None)
+
+
+def own_key_row_text(chars: int) -> tuple[str, str]:
+    """(label, button) for the row shown while the account's own key is in
+    use, shortened when the sidebar is narrow (see trial_row_text)."""
+    tries = (("Using your Claude key", "Change key"),
+             ("Your Claude key", "Change key"),
+             ("Your key", "Change key"))
+    for label, button in tries:
+        if len(label) + len(button) + TRIAL_ROW_PAD <= chars:
+            return label, button
+    return "Your key", "Change"
 
 
 def trial_row_text(trial: dict, chars: int) -> tuple[str, str]:
@@ -346,6 +378,9 @@ class ChatState:
         self.key_prompt_requested = False
         self.key_checking = False
         self.key_error: str | None = None
+        # Removing a saved key: the confirm step is showing, the call is out.
+        self.key_remove_armed = False
+        self.key_removing = False
         # Starter prompts from the server's prompts/list (starters.py), [] if
         # it has none. The last starter clicked, so a slow answer for an
         # earlier click can't overwrite a later one.
@@ -623,9 +658,23 @@ class ChatState:
     def toggle_key_prompt(self) -> bool:
         with self.lock:
             self.key_prompt_requested = not self.key_prompt_requested
+            self.key_remove_armed = False
             if not self.key_prompt_requested:
                 self.key_error = None
             return self.key_prompt_requested
+
+    def close_key_prompt(self) -> None:
+        """Cancel in the key box: shut it with nothing changed."""
+        with self.lock:
+            self.key_prompt_requested = False
+            self.key_remove_armed = False
+            self.key_error = None
+
+    def arm_key_remove(self, armed: bool = True) -> None:
+        """Remove key asks first: ``armed`` shows the confirm step, False backs out."""
+        with self.lock:
+            self.key_remove_armed = bool(armed) and not self.key_checking
+            self.key_error = None
 
     def begin_key_check(self) -> None:
         with self.lock:
@@ -646,12 +695,39 @@ class ChatState:
             self.key_error = error or key_error_text(payload)
             return False
 
+    def begin_key_remove(self) -> None:
+        with self.lock:
+            self.key_checking = True
+            self.key_removing = True
+            self.key_remove_armed = False
+            self.key_error = None
+
+    def finish_key_remove(self, payload: Any = None, error: str | None = None) -> bool:
+        """Close a "Remove key" call; True if the server dropped the key. The
+        box closes on success; if the account is now out of trial, the
+        key_prompt_heading rules open it again on their own."""
+        with self.lock:
+            self.key_checking = False
+            self.key_removing = False
+            if (error is None and isinstance(payload, dict) and payload.get("status") == "ok"
+                    and isinstance(payload.get("backend"), dict)):
+                self.apply_backend_result(payload, saved=True)
+                self.key_prompt_requested = False
+                self.key_error = None
+                return True
+            detail = (payload.get("detail") or payload.get("message")
+                      if isinstance(payload, dict) else None)
+            self.key_error = error or (f"Couldn't remove the key: {detail}" if detail
+                                       else "Couldn't remove the key. Try again in a moment.")
+            return False
+
     def reset_account(self) -> None:
         """A new registration may be another account: forget its key state."""
         with self.lock:
             self.trial = None
             self.needs_key = None
             self.key_error = None
+            self.key_remove_armed = False
 
     # --- registration / approval -------------------------------------------
 
@@ -697,6 +773,8 @@ class ChatState:
                 "key_prompt_requested": self.key_prompt_requested,
                 "key_checking": self.key_checking,
                 "key_error": self.key_error,
+                "key_remove_armed": self.key_remove_armed,
+                "key_removing": self.key_removing,
                 "starters": [dict(s) for s in self.starters],
             }
 

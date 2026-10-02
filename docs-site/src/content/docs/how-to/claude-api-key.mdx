@@ -88,15 +88,25 @@ The key is sent once to the BlenderMCP server and stored there encrypted. It is 
 
 ## Change or remove your key
 
-Both are in `Edit › Preferences › Add-ons › Blender MCP`, in the **Chat backend** section.
+Once your key is saved, the trial row in the Chat panel is replaced by a quieter one that reads **Using your Claude key**, with a **Change key** button beside it. On a narrow sidebar the label shortens to **Your Claude key** or **Your key**.
+
+**To use a different key**, click **Change key**. The same key box opens, this time headed **Paste a new Claude API key**. Paste the new key and click **Save key**. It goes through the same check with Anthropic, and your current key keeps working until the new one passes; if the check fails, nothing changes and the box says why.
+
+**To close the box without changing anything**, click **Cancel** at the bottom of the box, or click **Change key** again.
+
+**To remove your key**, click **Remove key** at the bottom of the box. The box asks **Remove your key from the server?** before anything happens. Click **Remove** to go ahead, or **Keep** to back out. Chat then goes back to the server default. On mcp.blender.bet that means the free trial, so once the trial is used up, chat stops working until you add a key again, and the key box opens by itself to ask for one.
+
+### In Preferences instead
+
+The same changes can be made in `Edit › Preferences › Add-ons › Blender MCP`, in the **Chat backend** section.
 
 <div class="shot-single shot-wide not-content">
   <img src="/img/chat/chat-backend.webp" width="651" height="131" alt="The Chat backend preferences: Current: Claude API, claude-haiku-4-5, server default; Escalate to: Claude Fable 5.1 (server default); Provider: Server default; an empty Model field; Save backend and Clear backend buttons." />
 </div>
 
-**To use a different key**, set **Provider** to **Claude API**, paste the new key into the **API key** field that appears, and click **Save backend**. The new key is checked with Anthropic the same way and replaces the old one once it passes. Leave **Model** blank to keep the server's pick. Once you have a key saved, the Chat panel no longer shows the trial row, so this is the place to change it.
+To use a different key there, set **Provider** to **Claude API**, paste the new key into the **API key** field that appears, and click **Save backend**. The new key is checked with Anthropic the same way and replaces the old one once it passes. Leave **Model** blank to keep the server's pick.
 
-**To remove your key**, click **Clear backend**. Chat goes back to the server default. On mcp.blender.bet that means the free trial, so once the trial is used up, chat stops working until you add a key again.
+To remove your key there, click **Clear backend**. It does the same as **Remove key** in the Chat panel, without the confirm step.
 
 <Aside type="caution">
 Clearing the key removes it from BlenderMCP only. The key itself still exists in your Anthropic account, where you manage it on the [API keys page](https://platform.claude.com/settings/keys).
@@ -114,7 +124,7 @@ The key was mistyped, cut short, or is no longer active in your Anthropic accoun
 
 **"Couldn't check the key with Anthropic… Try again."** The server couldn't reach Anthropic at that moment, so it didn't know whether the key works. Nothing was saved. Wait a minute and click **Save key** again.
 
-**The key box isn't there.** The box only shows while the add-on is connected. Check the top of the BlenderMCP tab says **Connected**, and see [Install the add-on](/how-to/install-addon/) if it doesn't. During the trial, click **Use my own key** to open it. If you already saved a key, the box stays hidden; change the key in Preferences as described in [Change or remove your key](#change-or-remove-your-key).
+**The key box isn't there.** The box only shows while the add-on is connected. Check the top of the BlenderMCP tab says **Connected**, and see [Install the add-on](/how-to/install-addon/) if it doesn't. During the trial, click **Use my own key** to open it. If you already saved a key, the box stays closed until you click **Change key** on the **Using your Claude key** row; see [Change or remove your key](#change-or-remove-your-key). If that row is missing too, open the **Chat backend** section of Preferences and click the refresh button at the end of the **Current** line so the add-on asks the server again, or make the change there.
 
 **Get a key didn't open a browser.** Go to [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys) yourself.
 
