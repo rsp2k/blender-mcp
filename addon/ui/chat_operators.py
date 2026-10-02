@@ -231,6 +231,74 @@ class BLENDERMCP_OT_ChatKeyPrompt(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BLENDERMCP_OT_ChatChangeKey(bpy.types.Operator):
+    """Show or hide the box for replacing your Claude API key"""
+
+    bl_idname = "blendermcp.chat_change_key"
+    bl_label = "Change key"
+    bl_description = (
+        "Paste a new Claude API key, or remove yours. "
+        "The current key keeps working until a new one checks out"
+    )
+
+    def execute(self, context):
+        if not chat_state.toggle_key_prompt():
+            _take_key(context.window_manager)
+        chat_client.request_redraw()
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatCloseKey(bpy.types.Operator):
+    """Close the key box without changing anything"""
+
+    bl_idname = "blendermcp.chat_close_key"
+    bl_label = "Cancel"
+    bl_description = "Close this box and keep the key you have"
+
+    def execute(self, context):
+        _take_key(context.window_manager)  # nothing half-pasted stays behind
+        chat_state.close_key_prompt()
+        chat_client.request_redraw()
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ChatRemoveKey(bpy.types.Operator):
+    """Remove your Claude API key from the server, after a confirm step"""
+
+    bl_idname = "blendermcp.chat_remove_key"
+    bl_label = "Remove key"
+
+    step: bpy.props.EnumProperty(
+        items=(
+            ('ASK', "Ask", "Show the confirm step"),
+            ('KEEP', "Keep", "Back out and keep the key"),
+            ('REMOVE', "Remove", "Remove the key now"),
+        ),
+        default='ASK',
+        options={'SKIP_SAVE'},
+    )
+
+    @classmethod
+    def description(cls, context, properties):
+        if properties.step == 'KEEP':
+            return "Keep your key and go back"
+        if properties.step == 'REMOVE':
+            return "Delete your key on the server. Chat goes back to the server default"
+        return "Stop using your own Claude API key (asks first)"
+
+    def execute(self, context):
+        if self.step == 'REMOVE':
+            _take_key(context.window_manager)
+            problem = chat_client.remove_key()
+            if problem:
+                self.report({'WARNING'}, problem)
+                return {'CANCELLED'}
+            return {'FINISHED'}
+        chat_state.arm_key_remove(self.step == 'ASK')
+        chat_client.request_redraw()
+        return {'FINISHED'}
+
+
 class BLENDERMCP_OT_ChatClear(bpy.types.Operator):
     """Delete the conversation on screen"""
 
@@ -372,6 +440,9 @@ CHAT_OPERATORS = (
     BLENDERMCP_MT_ChatAdvisor,
     BLENDERMCP_OT_ChatSaveKey,
     BLENDERMCP_OT_ChatKeyPrompt,
+    BLENDERMCP_OT_ChatChangeKey,
+    BLENDERMCP_OT_ChatCloseKey,
+    BLENDERMCP_OT_ChatRemoveKey,
     BLENDERMCP_OT_ChatClear,
     BLENDERMCP_OT_ChatAllow,
     BLENDERMCP_OT_ChatDeny,

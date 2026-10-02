@@ -382,6 +382,35 @@ def save_key(api_key: str) -> str | None:
     return problem
 
 
+def _on_remove_result(fut: Any) -> None:
+    """Done callback for "Remove key" (loop thread)."""
+    try:
+        result = fut.result()
+    except Exception as e:  # noqa: BLE001
+        chat_state.finish_key_remove(error=f"Couldn't reach the server: {str(e) or type(e).__name__}")
+    else:
+        if getattr(result, "is_error", False) or getattr(result, "isError", False):
+            chat_state.finish_key_remove(error=tool_error_text(result))
+        else:
+            chat_state.finish_key_remove(decode_tool_result(result))
+    request_redraw()
+
+
+def remove_key() -> str | None:
+    """Forget the account's own Claude key on the server, from the Chat panel
+    (what Clear backend does in Preferences). Main thread; never waits."""
+    if chat_state.key_checking:
+        return "Still working on the last key change."
+    chat_state.begin_key_remove()
+    problem = _start_backend_call(
+        SET_BACKEND_TOOL, {"provider": "anthropic", "clear": True}, _on_remove_result,
+    )
+    if problem:
+        chat_state.finish_key_remove(error=problem)
+    request_redraw()
+    return problem
+
+
 def refresh_backend() -> str | None:
     """Ask the server for the current backend. Any thread; never waits."""
     return _call_backend_tool(GET_BACKEND_TOOL, {})
