@@ -1,0 +1,127 @@
+/* B's studio: a soft sweep with a lit floor, the still and the canvas
+   sharing one square so the swap never shifts the layout. */
+.b-stage {
+  position: relative;
+  display: grid;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    radial-gradient(ellipse 60% 22% at 50% 82%, var(--stage-floor-glow), transparent 70%),
+    radial-gradient(ellipse 80% 60% at 50% 18%, var(--stage-top), transparent 75%),
+    linear-gradient(to bottom, var(--stage-mid) 0%, var(--stage-mid) 62%, var(--stage-floor) 100%);
+  isolation: isolate;
+}
+
+.b-stage > :is(img, canvas) {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+}
+
+.b-stage__still {
+  object-fit: contain;
+  padding: 9%;
+  transition: opacity 0.4s ease;
+}
+
+.b-stage__canvas {
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+
+.b-stage__canvas[hidden] { display: none; }
+.b-stage__canvas:active { cursor: grabbing; }
+
+.b-stage:has(.b-stage__canvas:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.is-live .b-stage__still { opacity: 0; pointer-events: none; }
+
+/* Loading pill, bottom centre. Only shown when scripts run (html.js). */
+.b-stage__loading {
+  display: none;
+  position: absolute;
+  inset: auto 1rem 1rem;
+  justify-self: center;
+  align-items: center;
+  gap: 0.6rem;
+  width: fit-content;
+  max-width: calc(100% - 2rem);
+  margin-inline: auto;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted);
+  font-size: 0.82rem;
+  backdrop-filter: blur(6px);
+}
+
+.js .b-stage__loading { display: flex; }
+.js .b-stage__loading[hidden] { display: none; }
+
+.b-stage__bar {
+  --b-progress: 0;
+  flex: none;
+  width: 3.5rem;
+  height: 4px;
+  border-radius: 2px;
+  background:
+    linear-gradient(var(--accent), var(--accent)) 0 0 / calc(var(--b-progress) * 100%) 100% no-repeat,
+    var(--track);
+}
+
+.b-stage__loading.is-failed {
+  border-radius: 10px;
+  text-align: left;
+}
+
+.b-stage__loading.is-failed .b-stage__bar { display: none; }
+
+.b-stage__hint {
+  position: absolute;
+  left: 0.85rem;
+  bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.b-stage__hint[hidden] { display: none; }
+
+.b-stage__reset {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.b-stage__reset:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.b-stage__reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.b-stage__reset:disabled { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .b-stage__still { transition: none; }
+}

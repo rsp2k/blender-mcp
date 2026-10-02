@@ -1,0 +1,51 @@
+---
+// How to have Claude pose B from inside Blender. The panel on the right is
+// a drawing of the Chat panel's new-chat state, not a capture.
+import BIcon from "./BIcon.astro";
+import "./b-chat.css";
+---
+
+<section class="b-chat" aria-labelledby="b-chat-title">
+  <div class="b-chat__text">
+    <p class="b-kicker">In Blender</p>
+    <h2 id="b-chat-title">Pose B with Chat</h2>
+    <p>
+      B comes rigged, so Claude can pose him for you. Ask in plain words and
+      he moves in your scene. Every change is one Ctrl+Z away.
+    </p>
+    <ol class="b-steps">
+      <li>Open <a href="/b/b-clip.blend" download="b-clip.blend">b-clip.blend</a>, or pick
+        <strong>File &gt; New &gt; B Clip</strong> if you have the template.</li>
+      <li>Connect BlenderMCP, press <kbd>N</kbd> in the 3D Viewport and open the
+        <strong>BlenderMCP</strong> tab.</li>
+      <li>Type <q>make B wave</q> in the Chat panel and press <kbd>Enter</kbd>.</li>
+    </ol>
+    <p class="b-chat__more">Then try "make B look up and to the right", or "make B blink twice".</p>
+    <div class="b-chat__links">
+      <a class="b-link" href="https://docs.blender.bet/how-to/chat-in-blender/">
+        <BIcon name="book-open" size={16} />
+        How Chat works
+      </a>
+      <a class="b-link" href="https://docs.blender.bet/tutorials/quickstart/">
+        <BIcon name="rocket" size={16} />
+        New to BlenderMCP? Quickstart
+      </a>
+    </div>
+  </div>
+
+  <div class="b-chat__panel" aria-hidden="true">
+    <div class="b-chat__bar"><span>Chat</span><span class="b-chat__tab">BlenderMCP</span></div>
+    <div class="b-chat__body">
+      <p class="b-chat__hint">Ask for a change to this scene.</p>
+      <div class="b-chat__chips">
+        <span class="b-chip is-picked">Make B wave</span>
+        <span class="b-chip">Give B a top hat</span>
+        <span class="b-chip">Put B on a desk</span>
+      </div>
+    </div>
+    <div class="b-chat__input">
+      <span class="b-chat__typed">make B wave</span>
+      <span class="b-chat__send"><BIcon name="send" size={15} /></span>
+    </div>
+  </div>
+</section>

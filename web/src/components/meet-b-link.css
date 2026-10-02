@@ -1,0 +1,23 @@
+/* A quiet pill link to /b; falls back to the site's tokens. */
+.meet-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border, #2a313a);
+  border-radius: 999px;
+  background: var(--surface, #161b22);
+  color: var(--muted, #8b949e);
+  font-size: 0.82rem;
+  text-decoration: none;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.meet-b:hover { border-color: var(--accent, #2bb3a4); color: var(--text, #d4d4d4); }
+.meet-b:focus-visible { outline: 2px solid var(--accent, #2bb3a4); outline-offset: 3px; }
+.meet-b .b-icon { color: var(--accent, #2bb3a4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .meet-b { transition: none; }
+}

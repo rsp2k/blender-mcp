@@ -1,0 +1,23 @@
+/* Model credit and licence line, quiet but easy to find. */
+.b-credits {
+  display: grid;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.b-credits p {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-wrap: pretty;
+}
+
+.b-credits a { color: var(--accent); }
+.b-credits a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+.b-credits .b-credits__small { font-size: 0.84rem; }

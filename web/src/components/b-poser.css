@@ -1,0 +1,23 @@
+/* Stage and controls: stacked on phones, side by side from tablet up, with
+   the stage staying in view while the controls scroll past it. */
+.b-poser {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+}
+
+@media (min-width: 860px) {
+  .b-poser {
+    grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 1fr);
+    gap: 1.25rem;
+    align-items: start;
+  }
+
+  .b-poser > .b-stage {
+    position: sticky;
+    top: 1rem;
+  }
+}

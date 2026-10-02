@@ -14,6 +14,7 @@ import ClipHero from '../components/ClipHero.astro';
 import InstallWalkthrough from '../components/InstallWalkthrough.astro';
 import '../styles/home.css';
 import JointBadge from '../components/JointBadge.astro';
+import MeetBLink from '../components/MeetBLink.astro';
 
 export const prerender = true;
 ---
@@ -38,6 +39,7 @@ export const prerender = true;
       <main class="hero">
         <ClipHero />
         <div class="hero-text">
+        <MeetBLink />
         <h1>BlenderMCP</h1>
         <p class="tag">
           Ask Claude for changes from Blender's own sidebar, or connect any

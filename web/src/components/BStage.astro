@@ -1,0 +1,29 @@
+---
+// The studio B stands in: his hero still first (no JavaScript, or until the
+// model arrives), then the live canvas in the same square.
+import BIcon from "./BIcon.astro";
+import "./b-stage.css";
+---
+
+<div class="b-stage">
+  <img class="b-stage__still" data-b-still src="/img/mascot/clip-512.png" width="512" height="512"
+       alt="B. Clip, a dark blue steel binder clip with big eyes and a small smile, his wire handles raised." />
+  <canvas class="b-stage__canvas" data-b-canvas hidden tabindex="0" role="img"
+          aria-label="B in 3D. Drag to turn him, or use the arrow keys. Plus and minus zoom, Home faces him again."
+          aria-describedby="b-stage-hint"></canvas>
+
+  <div class="b-stage__loading" data-b-loading role="status">
+    <span class="b-stage__bar" data-b-progress aria-hidden="true"></span>
+    <span data-b-loading-text>Loading B in 3D</span>
+  </div>
+
+  <p class="b-stage__hint" id="b-stage-hint" data-b-hint hidden>
+    <BIcon name="rotate-3d" size={16} />
+    Drag to turn him. Scroll or pinch to zoom.
+  </p>
+
+  <button type="button" class="b-stage__reset" data-b-reset-view data-b-needs-3d disabled>
+    <BIcon name="focus" size={16} />
+    <span>Face me</span>
+  </button>
+</div>
