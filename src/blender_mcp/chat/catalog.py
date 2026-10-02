@@ -70,6 +70,10 @@ DEFAULT_TOOLS: dict[str, Policy] = {
     "assign_material": _PLAIN,
     "make_pbr_material": _PLAIN,
     "set_viewport_shading": _PLAIN,
+    # Keyframing tools: each key is its own undo step and insert_keyframe
+    # refuses to overwrite an existing key, so animating needs no Python.
+    "insert_keyframe": _PLAIN,
+    "set_interpolation": _PLAIN,
     "render_view": _PLAIN,
     "mesh_health": _PLAIN,
     "world_bounds": _PLAIN,
