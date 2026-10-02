@@ -139,7 +139,8 @@ class BlenderAnalysisComponent(MCPMixin):
         pose can't be destroyed by accident. Omit ``value`` to key the
         current value. ``index`` keys one component (-1 = all). For an
         armature's bone, pass the armature as ``object`` and a data_path
-        like 'pose.bones["handle.front"].rotation_euler'.
+        like 'pose.bones["handle.front"].rotation_euler'. Rotations are
+        radians.
         """
         return await self._call(
             ctx, "insert_keyframe",
