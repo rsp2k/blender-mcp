@@ -828,4 +828,6 @@ def main() -> None:
     print(f"[clip] saved {OUT_DIR}/clip-mascot.blend")
 
 
-main()
+# Guarded so other build scripts can import the helpers above.
+if __name__ == "__main__":
+    main()
