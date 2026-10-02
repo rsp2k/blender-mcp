@@ -11,7 +11,7 @@ changes straight away.
 
 | File | What it does |
 |---|---|
-| `startup.blend` | The scene: B at the origin on the floor grid, a camera framing him, his lights. One 3D Viewport with the sidebar open and wide on the BlenderMCP tab, a small Outliner, no timeline or Properties editor, and only the Layout workspace. |
+| `startup.blend` | The scene: B at the origin on the floor grid, a camera framing him, his lights. One 3D Viewport (light and camera overlays off, so nothing is drawn across B) with the sidebar open and wide on the BlenderMCP tab, a small Outliner, no timeline or Properties editor, and only the Layout workspace. |
 | `__init__.py` | Adds a small "B. Clip" panel under the Chat. With BlenderMCP running it offers starter prompts ("Make B wave", "Give B a top hat", "Put B on a desk") that go straight into the chat. Without BlenderMCP it says how to get it. If BlenderMCP is installed but turned off, it is turned on a moment after startup. |
 | `userpref.blend` | Factory preferences with no extensions listed. Required, see below. |
 | `splash.png` | The 1000x500 splash: B and "Tell Claude what to make". |

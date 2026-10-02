@@ -164,6 +164,7 @@ def build_scene(mascot):
         space.shading.light = 'STUDIO'
         space.shading.color_type = 'MATERIAL'
         space.overlay.show_floor = True
+        space.overlay.show_extras = False  # no light or camera glyphs across B
         frame_viewport(space, pts)
 
     scene.render.film_transparent = False

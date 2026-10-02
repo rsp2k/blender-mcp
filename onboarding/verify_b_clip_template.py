@@ -142,6 +142,7 @@ def check_layout():
     check(kinds == ['OUTLINER', 'VIEW_3D'], f"only a 3D Viewport and Outliner ({kinds})")
     view = next(a for a in screen.areas if a.type == 'VIEW_3D')
     check(view.spaces.active.show_region_ui, "the sidebar is open")
+    check(not view.spaces.active.overlay.show_extras, "light and camera overlays are off")
     ui = next(r for r in view.regions if r.type == 'UI')
     check(ui.width >= 300, f"the sidebar is wide ({ui.width} px)")
     check([w.name for w in bpy.data.workspaces] == ["Layout"], "only the Layout workspace")
