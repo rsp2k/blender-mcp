@@ -64,6 +64,12 @@ RUNTIME_DEPS = [
     "requests>=2.34.2,<3",
 ]
 
+# Exact wheel versions per Blender platform, committed. pip resolves
+# RUNTIME_DEPS within these pins, so a rebuild bundles the same wheels until
+# someone runs --relock on purpose. Per platform because they differ:
+# Intel Macs get an older cryptography, the last with a macOS 11 x86 wheel.
+PINS_FILE = ROOT / "packaging" / "extension-wheels.lock.json"
+
 # Blender platform token -> pip's --platform tag. One archive is built per
 # entry, holding only the wheels pip resolves for that platform, so each
 # user downloads roughly a fifth of the old all-platforms zip.
@@ -100,19 +106,62 @@ def _read_addon_version() -> str:
     return m.group(1)
 
 
-def _download_wheels(work_dir: Path) -> dict[str, list[str]]:
+def _wheel_name_version(filename: str) -> tuple[str, str]:
+    """``websockets-17.2-cp313-...whl`` -> ("websockets", "17.2"), name
+    normalized the PEP 503 way so it matches pip's view of the project."""
+    name, version = filename.split("-")[:2]
+    return re.sub(r"[-_.]+", "-", name).lower(), version
+
+
+def pins_from_wheels(wheels_by_platform: dict[str, list[str]]) -> dict[str, dict[str, str]]:
+    """{platform: {project: version}} for a --relock. A project resolved to two
+    versions on one platform (different Pythons) is left unpinned there."""
+    pins: dict[str, dict[str, str]] = {}
+    for platform, files in sorted(wheels_by_platform.items()):
+        seen: dict[str, set[str]] = {}
+        for f in files:
+            name, version = _wheel_name_version(f)
+            seen.setdefault(name, set()).add(version)
+        for name, versions in seen.items():
+            if len(versions) > 1:
+                print(f"  WARNING: {platform}: {name} resolved to {sorted(versions)}; "
+                      "left unpinned", file=sys.stderr)
+        pins[platform] = {n: next(iter(v)) for n, v in sorted(seen.items()) if len(v) == 1}
+    return pins
+
+
+def _load_pins() -> dict[str, dict[str, str]]:
+    if not PINS_FILE.exists():
+        sys.exit(f"ERROR: {PINS_FILE.relative_to(ROOT)} is missing. Run with --relock "
+                 "to resolve fresh and write it.")
+    pins = json.loads(PINS_FILE.read_text())
+    missing = [p for p in BLENDER_PLATFORMS if p not in pins]
+    if missing:
+        sys.exit(f"ERROR: {PINS_FILE.name} has no pins for {missing}. Run with --relock.")
+    return pins
+
+
+def _download_wheels(work_dir: Path, pins: dict[str, dict[str, str]] | None
+                     ) -> dict[str, list[str]]:
     """Fetch wheels for RUNTIME_DEPS, one directory per Blender platform.
 
     Runs ``pip download`` once per (platform, python-version) pair into
     ``work_dir/<platform>/``, so the files pip resolves for a platform
     are exactly that platform's wheel set (its C extensions plus the
     pure-Python wheels, which are small and repeat in every directory).
+    ``pins`` constrains each platform to its locked versions; None (only
+    for --relock) resolves fresh.
     Returns {blender_platform: [wheel filenames]}.
     """
     result: dict[str, list[str]] = {}
     for platform, wheel_tag in PLATFORM_WHEEL_TAGS.items():
         target = work_dir / platform
         target.mkdir(parents=True, exist_ok=True)
+        constraints: list[str] = []
+        if pins is not None:
+            cfile = work_dir / f"constraints-{platform}.txt"
+            cfile.write_text("".join(f"{n}=={v}\n" for n, v in pins[platform].items()))
+            constraints = ["-c", str(cfile)]
         for py in PYTHON_VERSIONS:
             print(f"  fetching wheels for {platform} (py{py})...")
             cmd = [
@@ -121,6 +170,7 @@ def _download_wheels(work_dir: Path) -> dict[str, list[str]]:
                 "--python-version", py,
                 "--platform", wheel_tag,
                 "--dest", str(target),
+                *constraints,
                 *RUNTIME_DEPS,
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -311,9 +361,32 @@ def main() -> None:
         action="store_true",
         help="Reuse dist/wheels-work/ instead of refetching (fast iteration).",
     )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Rebuild archives that already exist for this version. Changes the "
+             "bytes behind a published version; bump the version instead.",
+    )
+    parser.add_argument(
+        "--relock",
+        action="store_true",
+        help=f"Resolve RUNTIME_DEPS fresh and rewrite {PINS_FILE.name} from the result.",
+    )
     args = parser.parse_args()
 
     version = _read_addon_version()
+
+    # A published version never changes: users and image pins hold its hash.
+    # `make prod` runs this on every deploy, so an unchanged version reuses
+    # its archives and only rewrites the index.
+    existing = [DIST_DIR / archive_name(version, p) for p in BLENDER_PLATFORMS]
+    if all(z.exists() for z in existing) and not (args.rebuild or args.relock):
+        print(f"blender_mcp extension {version} is already built; reusing its archives "
+              "(bump the version to ship changes)")
+        index_path = _write_index(existing)
+        print(f"  wrote {index_path.relative_to(ROOT)}")
+        return
+
     print(f"Building blender_mcp extension {version}")
 
     # Gate: no build proceeds if addon/ has a SyntaxError.
@@ -325,9 +398,13 @@ def main() -> None:
         print(f"  reusing existing {work_dir}")
         wheels_by_platform = {p: _wheels_in(work_dir / p) for p in BLENDER_PLATFORMS}
     else:
+        pins = None if args.relock else _load_pins()
         if work_dir.exists():
             shutil.rmtree(work_dir)
-        wheels_by_platform = _download_wheels(work_dir)
+        wheels_by_platform = _download_wheels(work_dir, pins)
+    if args.relock:
+        PINS_FILE.write_text(json.dumps(pins_from_wheels(wheels_by_platform), indent=2) + "\n")
+        print(f"  wrote {PINS_FILE.relative_to(ROOT)}")
 
     zip_paths = []
     for platform, wheel_files in wheels_by_platform.items():

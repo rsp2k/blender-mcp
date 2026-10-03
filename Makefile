@@ -21,6 +21,9 @@ extensions: ## Build the self-hosted Blender extension zip + index.json into dis
 	EXTENSIONS_BASE_URL=https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions python3 scripts/build_extension.py
 
 
+extensions-relock: ## Re-resolve the add-on's bundled wheels and rewrite packaging/extension-wheels.lock.json (then bump the version)
+	EXTENSIONS_BASE_URL=https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/extensions python3 scripts/build_extension.py --relock
+
 canary: ## GUI canary against the blender-docker container (ZIP=path to install a build first)
 	uv run scripts/canary/run_canary.py $(if $(ZIP),--zip $(ZIP),)
 
@@ -31,9 +34,9 @@ battery: ## Chat test battery against the blender-docker Blender (ARGS="--cases 
 	uv run scripts/battery/run_battery.py $(ARGS)
 
 # `prod` depends on `extensions` so the compose mount (./dist/extensions -> /srv)
-# is populated before the file-server container starts. Rebuilding on every prod
-# invocation is cheap after the first run because scripts/build_extension.py
-# reuses cached wheels for unchanged deps (pip's own resolver cache).
+# is populated before the file-server container starts. A version that is
+# already built is reused byte for byte; ship add-on changes by bumping the
+# version. Wheels come from packaging/extension-wheels.lock.json.
 prod: extensions ## Start the production stack (FastMCP server + extension repo behind caddy-docker-proxy)
 	$(COMPOSE) $(STORAGE_PROFILE) up -d --build blender-mcp blender-mcp-extensions $(STORAGE_SVC)
 	@echo "-> Server should come up at https://$$(grep '^DOMAIN=' .env | cut -d= -f2)/"
