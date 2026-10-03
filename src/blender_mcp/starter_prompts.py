@@ -39,7 +39,7 @@ STARTERS: tuple[Starter, ...] = (
         "starter_b_wave", "Make B wave", "b_clip",
         "Animate B. Clip waving hello by keying his rig's handle.front bone.",
         "Make B. Clip wave hello with his front handle: rock the handle.front "
-        "bone of his rig (the B. Clip armature) between -10 and 25 degrees "
+        "bone of his rig (the B. Clip armature) between -10 and 15 degrees "
         "around its Y axis, a few times over about two seconds. I'll press "
         "Space to play it.",
     ),

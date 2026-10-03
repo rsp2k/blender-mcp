@@ -368,10 +368,11 @@ THINK = [
 # Past the front's +98 it reaches his eyes, past its -87 it lies across the
 # top of his jaws; the back lies on his back plate past -92.
 HANDLE_CLEAR = {"front": (-87, 98), "back": (-92, 105)}
-# The wave the "Make B wave" starter asks for: about twice the hero loop's
-# swing, and the raised handle stays in the template camera's frame (it
-# leaves the top of the frame past about -15).
-WAVE = (-10, 25)
+# The wave the "Make B wave" starter asks for: a little wider than the hero
+# loop's -5..12, so it reads as a wave and not a lever dropping (+25 did).
+# The raised handle stays in the template camera's frame (it leaves the top
+# of the frame past about -15).
+WAVE = (-10, 15)
 
 # A custom property on the rig and on both handles. Chat models read it
 # through get_object_info and get_scene_info; it stops them animating the

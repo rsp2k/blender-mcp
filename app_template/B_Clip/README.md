@@ -65,7 +65,7 @@ object named `B. Clip` (hidden, so the bones don't clutter the view). That
 armature and both handles carry a `how_to_pose` custom property, which
 BlenderMCP's `get_object_info` and `get_scene_info` pass on to Claude: pose
 the bones, never the meshes, and swing `handle.front` (rotation Y) between
--10 and 25 degrees to wave. Rotating the handle mesh itself swings it about
+-10 and 15 degrees to wave. Rotating the handle mesh itself swings it about
 the wrong pivot and through B's body. `onboarding/check_b_wave.py` measures
 the clear range (front handle -87 to 98 degrees, back -92 to 105) and runs
 as part of `verify`.
