@@ -15,7 +15,7 @@ import traceback
 import bpy
 import requests  # for catching requests.exceptions.RequestException
 
-from .. import state
+from .. import stage_snapshot, state
 from ..auth import OAuthError, logout, oauth_login
 from ..client.job_reporter import submit_force_release_control, submit_job_update
 from ..constants import RODIN_FREE_TRIAL_KEY
@@ -901,6 +901,7 @@ def _resolve_pending(client, reply_payload: dict, add_to_prefs: bool = False, pr
         prefs.pre_authorized_llms = ",".join(sorted(existing))
 
     state._pending_control_request = None
+    stage_snapshot.publish()
     _tag_panel_redraw()
     return True
 
@@ -1002,6 +1003,7 @@ class BLENDERMCP_OT_TakeBackControl(bpy.types.Operator):
         state._lock_holder_label = None
         state._lock_expires_at = None
         state._lock_reason = None
+        stage_snapshot.publish()
         _tag_panel_redraw()
         self.report({'INFO'}, "Control lock released")
         return {'FINISHED'}
