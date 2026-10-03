@@ -23,7 +23,7 @@ import bmesh
 import bpy
 import mathutils
 
-from .. import state, undo_steps
+from .. import stage_snapshot, state, undo_steps
 from .job_reporter import make_progress_reporter, submit_job_update
 
 if TYPE_CHECKING:
@@ -138,6 +138,7 @@ def _record_activity(command: str, started: float, ok: bool, error: str = "") ->
         "at": time.time(),
         "error": first[0][:120] if first else "",
     })
+    stage_snapshot.publish()
     _tag_redraw()
 
 
@@ -305,6 +306,7 @@ def handle_control_request(
         state._lock_holder_label = requester_label
         state._lock_expires_at = expires_at
         state._lock_reason = reason
+        stage_snapshot.publish()
         _tag_redraw()
         submit_job_update(
             client, job_id, "completed",
@@ -325,6 +327,7 @@ def handle_control_request(
         "reason": reason,
         "duration_s": duration_s,
     }
+    stage_snapshot.publish()
     _tag_redraw()
     # NO submit_job_update here — the reply happens when the user clicks
     # Allow / Deny / Always-allow (see BLENDERMCP_OT_GrantControl etc.

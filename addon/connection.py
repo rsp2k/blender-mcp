@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from . import state
+from . import stage_snapshot, state
 
 SUPERVISOR_INTERVAL_S = 10.0
 FIRST_TICK_S = 2.0
@@ -150,6 +150,9 @@ def request_ui_redraw() -> None:
         return
 
     def _tag():
+        # Off-thread changes (connect, disconnect, chat turns, approvals) all
+        # come through here, so this main-thread hop also republishes them.
+        stage_snapshot.publish()
         try:
             for window in bpy.context.window_manager.windows:
                 for area in window.screen.areas:

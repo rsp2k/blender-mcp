@@ -68,6 +68,10 @@ _buses_fetch_started: bool = False
 # on the main thread.
 _activity: deque = deque(maxlen=20)
 
+# True between register and unregister: addon.stage_snapshot only writes
+# bpy.app.driver_namespace["blender_mcp.stage"] while this is set.
+_stage_live: bool = False
+
 # 1.5.8: OAuth in-flight indicator. Set True when the Login worker starts;
 # flipped False by the poll() timer on completion (success OR error). The
 # panel reads it to render an "Authenticating..." spinner widget and to

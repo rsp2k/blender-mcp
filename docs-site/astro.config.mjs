@@ -120,6 +120,7 @@ export default defineConfig({
                 { slug: 'reference/prompts' },
                 { slug: 'reference/auth' },
                 { slug: 'reference/chat-protocol' },
+                { slug: 'reference/stage-snapshot' },
               ],
             },
             {

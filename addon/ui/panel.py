@@ -17,7 +17,7 @@ import time as _time
 
 import bpy
 
-from .. import state
+from .. import stage_snapshot, state
 from .._version import __version__
 from ..activity_format import format_ago, format_ms
 from ..client import bus_client as _bus_client
@@ -126,6 +126,7 @@ def _draw_active_lock_header(layout) -> None:
         state._lock_holder_label = None
         state._lock_expires_at = None
         state._lock_reason = None
+        stage_snapshot.publish()
         return
     box = layout.box()
     col = box.column(align=True)

@@ -794,4 +794,22 @@ def approval_preview(prompt: str, max_lines: int = 8) -> tuple[list[str], int]:
     return lines[:max_lines], max(0, len(lines) - max_lines)
 
 
+APPROVAL_LEAD = "the assistant wants to "
+APPROVAL_ACTION_MAX = 120
+
+
+def approval_action(prompt: Any) -> str:
+    """The short "run this Python" part of an approval prompt.
+
+    The server writes "BlenderMCP approval: the assistant wants to
+    {action}.\\n\\n{preview}" (blender_mcp/chat/turn.py), where action is the
+    tool Policy's action. Anything shaped differently falls back to its first
+    line, so the result is never empty while an approval waits."""
+    text = prompt.removeprefix(APPROVAL_PREFIX) if isinstance(prompt, str) else ""
+    first = text.strip().split("\n", 1)[0].strip()
+    if first.lower().startswith(APPROVAL_LEAD):
+        first = first[len(APPROVAL_LEAD):].removesuffix(".").strip()
+    return first[:APPROVAL_ACTION_MAX] or "approve a step"
+
+
 chat_state = ChatState()

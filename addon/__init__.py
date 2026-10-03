@@ -98,8 +98,11 @@ def _on_blend_load_post(_dummy):
     2. Otherwise let the connection supervisor decide now rather than on
        its next tick (connects if Stay connected is on and logged in).
     """
-    from . import connection, state
+    from . import connection, stage_snapshot, state
     from .worker import is_worker_mode
+
+    # Loading a file empties bpy.app.driver_namespace, snapshot included.
+    stage_snapshot.publish()
 
     if is_worker_mode():
         # A worker's connection is driven by run_worker_loop, never by the
@@ -283,6 +286,10 @@ def register():
     # persistent so Blender doesn't drop it after the first .blend load.
     _install_lifecycle_handlers()
 
+    # Read-only state for other code in this Blender (addon/stage_snapshot.py).
+    from . import stage_snapshot
+    stage_snapshot.start()
+
     # Stay connected: a persistent timer that connects ~2s after startup
     # (once the initial scene has loaded) and keeps a client alive while
     # prefs.auto_connect is on and a token is stored.
@@ -317,9 +324,13 @@ def unregister():
     """Blender entry point — tear down."""
     import bpy
 
-    from . import state
+    from . import stage_snapshot, state
     from .preferences import BlenderMCPPreferences
     from .ui import CLASSES as _CLASSES
+
+    # First, so a failure further down can't leave a snapshot claiming we
+    # run. It also stops publishing, so the teardown below can't bring it back.
+    stage_snapshot.clear()
 
     # Remove our load_post handler and the supervisor timer first so
     # nothing fires against torn-down state during unregister.
