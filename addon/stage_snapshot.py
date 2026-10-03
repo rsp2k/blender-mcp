@@ -12,8 +12,8 @@ add-on. Contract v1, documented in docs-site reference/stage-snapshot:
 Main thread only: driver_namespace is a plain dict that drivers read on
 the main thread. Off-thread changes reach publish() through
 connection.request_ui_redraw, which already hops to the main thread.
-Blender empties driver_namespace on every file load, so the load_post
-handler republishes.
+Blender replaces driver_namespace with a new dict on every file load, so
+the load_post handler republishes and readers must look it up each time.
 """
 
 from __future__ import annotations

@@ -49,7 +49,7 @@ elif snap.get("v") != 1:
 - **The whole dict is replaced on every publish.** The add-on builds a new dict and assigns it; it never changes one it already published. A reference you hold is a stable snapshot, and the activity entries are copies, so changing them affects nothing.
 - **A missing key means the add-on isn't running.** The add-on removes the key when it is disabled or unregistered, so a leftover snapshot never claims to be connected.
 - **An `expires_at` in the past means no lock.** The add-on doesn't always clear an expired lock right away; compare `expires_at` with `time.time()` yourself.
-- **Ignore a higher `v` you don't know.** A change to the shape bumps `v`. Skip a snapshot whose version is newer than the one you were written for rather than guessing at it.
+- **Ignore keys you don't know, and skip a higher `v`.** New keys can appear within v1, so read only the ones you need. Only a breaking change, such as a removed or retyped key, bumps `v`; skip a snapshot whose version is newer than the one you were written for rather than guessing at it.
 - **Look the key up each time.** Blender gives `bpy.app.driver_namespace` a fresh dict whenever a file loads, and the add-on republishes into the new one. Holding on to the namespace dict itself leaves you reading the old file's.
 
 Updates arrive when a command finishes, the lock or a control request changes, the client connects or disconnects, a chat turn starts or ends, an approval starts or is answered, and after every file load. There is no change notification: read it from your draw callback or a timer. `updated_at` tells you how fresh it is.
