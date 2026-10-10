@@ -80,6 +80,15 @@ _stage_live: bool = False
 # while in flight, modulo 3 picks 1/2/3 dots.
 _auth_in_progress: bool = False
 _auth_dots: int = 0
+# Why the last Login click failed, in plain words, for the panel near the
+# Login button. Set by addon.auth.login_feedback; cleared by a new Login
+# click, the Dismiss button, or a successful login.
+_login_error: str | None = None
+# Set by addon.package_health when bundled package files vanished from disk
+# while Blender runs (the missing path, or a short reason). The panel and
+# status bar then ask for a restart, and the connection supervisor stops
+# starting clients until the files are back.
+_package_problem: str | None = None
 
 # Server-advertised latest addon version, populated from the
 # register_client response envelope. `_update_available` is set True

@@ -16,7 +16,7 @@ import bpy
 import requests  # for catching requests.exceptions.RequestException
 
 from .. import stage_snapshot, state
-from ..auth import OAuthError, logout, oauth_login
+from ..auth import OAuthError, login_feedback, logout, oauth_login
 from ..client.job_reporter import submit_force_release_control, submit_job_update
 from ..constants import RODIN_FREE_TRIAL_KEY
 from ..preferences import get_client_label, get_prefs, get_server_base_url
@@ -113,6 +113,17 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
         # Read on the main thread; the worker only gets the plain string.
         stored_client_id = prefs.oauth_client_id or None
 
+        # A new click clears the previous failure message.
+        login_feedback.clear_login_error()
+        # Bundled packages gone from disk (another process cleared Blender's
+        # shared extension folder): the flow would fail on the CA bundle
+        # before the browser opens, so say so now instead.
+        refusal = login_feedback.refuse_if_packages_missing()
+        if refusal:
+            _tag_panel_redraw()
+            self.report({'ERROR'}, refusal)
+            return {'CANCELLED'}
+
         # Thread state — stored on the module so the timer callback can read.
         state._oauth_result = None
         state._oauth_error = None
@@ -147,9 +158,14 @@ class BLENDERMCP_OT_OAuthLogin(bpy.types.Operator):
             state._auth_in_progress = False
             _tag_panel_redraw()
             if state._oauth_error:
-                print(f"[BlenderMCP] OAuth login failed: {state._oauth_error}")
+                # The operator returned long ago, so it can't report this;
+                # the panel shows it near the Login button instead.
+                login_feedback.record_login_failure(state._oauth_error)
                 state._oauth_error = None
+                _tag_panel_redraw()
                 return None  # unregister timer
+
+            login_feedback.clear_login_error()
 
             tok = state._oauth_result
             state._oauth_result = None
@@ -346,6 +362,19 @@ class BLENDERMCP_OT_DismissFatalError(bpy.types.Operator):
     def execute(self, context):
         if state._client is not None:
             state._client.fatal_error = None
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_DismissLoginError(bpy.types.Operator):
+    """Hide the message under the Login button."""
+
+    bl_idname = "blendermcp.dismiss_login_error"
+    bl_label = "Dismiss"
+    bl_description = "Hide this message"
+
+    def execute(self, context):
+        login_feedback.clear_login_error()
+        _tag_panel_redraw()
         return {'FINISHED'}
 
 

@@ -21,8 +21,10 @@ from .. import stage_snapshot, state
 from .._version import __version__
 from ..activity_format import format_ago, format_ms
 from ..client import bus_client as _bus_client
+from ..package_health import packages_missing
 from ..preferences import (
     draw_login_section,
+    draw_package_banner,
     draw_update_banner,
     get_client_label,
     get_prefs,
@@ -151,6 +153,10 @@ def _connection_status(prefs, client):
     """(icon, text, offer_retry_now) for the header and the status row."""
     from .. import connection
 
+    if packages_missing():
+        # Nothing connects or logs in until Blender restarts; say that
+        # rather than "Off" or a retry countdown that never succeeds.
+        return 'ERROR', "Restart Blender", False
     if not prefs.auto_connect:
         return 'UNLINKED', "Off", False
     if not prefs.jwt_token:
@@ -229,6 +235,10 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                 box.label(text=line)
             return  # Everything below depends on fastmcp.
 
+        # --- Bundled packages vanished from disk mid-session: only a
+        # restart helps, so this goes above everything else.
+        package_problem = draw_package_banner(layout)
+
         # --- Fatal-error banner: the bus_client gave up (e.g. 401, JWT
         # unrecoverable) and cleared the token; say why and offer re-login.
         client = state._client
@@ -273,7 +283,8 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
             active = len(client.active_jobs)
             if queued or active:
                 layout.label(text=f"Running {active} · {queued} queued", icon='SORTTIME')
-        elif client is not None and client.last_error and prefs.auto_connect:
+        elif (client is not None and client.last_error and prefs.auto_connect
+              and not package_problem):
             row = layout.row()
             row.alert = True
             row.label(text=client.last_error[:60], icon='ERROR')

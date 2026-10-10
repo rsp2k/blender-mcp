@@ -66,6 +66,20 @@ Early versions of BlenderMCP installed as a single file through `Preferences →
 
 From then on, updates arrive through the Update to button.
 
+## Troubleshooting
+
+### The panel says BlenderMCP's packages were removed
+
+A red box at the top of the panel reads *BlenderMCP's packages were removed from disk while Blender was running. Save your work and restart Blender to restore them.*, and the status bar shows **MCP: restart Blender**.
+
+Blender keeps the Python packages that extensions bundle in one shared folder. Something cleared that folder while this Blender was open, usually another program or another Blender process (for example a second Blender installing, updating or removing an extension). Everything already loaded keeps working for a while, but the add-on can no longer open new secure connections, because the certificate file those need was in that folder too. That is why reconnecting and Login both stop working at the same moment.
+
+Save your work and restart Blender. On startup Blender reinstalls the packages and the add-on reconnects from your saved login. Until then the add-on stops retrying in the background instead of failing every few seconds, and the Login button explains the problem rather than opening a browser that could not finish. The system console names the missing file, which helps if you want to find out what removed it.
+
+### Login shows a red message under the button
+
+When a login doesn't finish, the reason appears under the Login button in plain words, for example that it timed out waiting for the browser, was cancelled in the browser, or couldn't reach the server. Click Login to try again, or the small **X** to hide the message. The full error is in the system console.
+
 ## Reference
 
 - [Quickstart](/tutorials/quickstart/): your first MCP client, once the add-on is connected

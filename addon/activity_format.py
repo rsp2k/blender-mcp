@@ -33,3 +33,19 @@ def pending_prompt(control, extension, reload, merge, chat_approval=None) -> str
     if reload:
         return "worker result"
     return None
+
+
+def wrap_message(text: str, width_px: float, ui_scale: float = 1.0,
+                 reserve_px: float = 60.0, min_chars: int = 16) -> list[str]:
+    """Split a sentence into label lines that fit a panel `width_px` wide.
+
+    Blender labels truncate instead of wrapping. Its UI font averages
+    about 7 px per character at scale 1.0; `reserve_px` covers the icon,
+    the box border and the panel margins.
+    """
+    import textwrap
+
+    scale = ui_scale if ui_scale and ui_scale > 0 else 1.0
+    chars = max(min_chars, int((width_px - reserve_px * scale) / (7.0 * scale)))
+    return textwrap.wrap(text or "", width=chars, break_long_words=True,
+                         break_on_hyphens=False) or [""]
