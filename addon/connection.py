@@ -276,6 +276,11 @@ class ConnectionSupervisor:
     # --- the tick ---
 
     def _tick(self) -> float:
+        import bpy
+        if not stays_connected_in_this_process(bpy.app.background):
+            # Every route in (the timer, load_post's check_now) stops here
+            # in a background Blender; see stays_connected_in_this_process.
+            return SUPERVISOR_INTERVAL_S
         try:
             self._evaluate()
         except Exception as e:

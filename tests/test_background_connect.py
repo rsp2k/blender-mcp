@@ -23,3 +23,14 @@ def test_background_blender_connects_only_when_asked():
     assert connection.stays_connected_in_this_process(True, env=on)
     off = {connection.BACKGROUND_CONNECT_ENV: "yes"}
     assert not connection.stays_connected_in_this_process(True, env=off)
+
+
+def test_supervisor_does_nothing_in_a_background_blender(monkeypatch):
+    bpy = sys.modules["bpy"]
+    monkeypatch.setattr(bpy, "app", types.SimpleNamespace(background=True), raising=False)
+    monkeypatch.delenv(connection.BACKGROUND_CONNECT_ENV, raising=False)
+    sup = connection.ConnectionSupervisor()
+    called = []
+    monkeypatch.setattr(sup, "_evaluate", lambda: called.append(True))
+    sup.check_now()
+    assert called == []
