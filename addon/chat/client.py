@@ -37,6 +37,14 @@ PROMPT_TIMEOUT_S = 15.0
 CANCEL_TIMEOUT_S = 5.0
 
 
+
+def _not_connected() -> str:
+    """Why chat can't reach the server, naming the fix that applies."""
+    from .. import package_health
+    if package_health.packages_missing():
+        return package_health.CHAT_MESSAGE
+    return "Not connected. Turn on Connect in the BlenderMCP tab."
+
 def request_redraw() -> None:
     try:
         from ..connection import request_ui_redraw
@@ -139,7 +147,7 @@ def send_problem() -> str | None:
     except Exception:  # noqa: BLE001, S110
         pass
     if _live_client() is None:
-        return "Not connected. Turn on Connect in the BlenderMCP tab."
+        return _not_connected()
     if chat_state.available is False:
         return "This server doesn't offer chat."
     if chat_state.available is None:
@@ -509,7 +517,7 @@ def use_starter(name: str) -> str | None:
         return "No starter chosen."
     client = _live_client()
     if client is None:
-        return "Not connected. Turn on Connect in the BlenderMCP tab."
+        return _not_connected()
     click = chat_state.next_starter_click()
     try:
         fut = asyncio.run_coroutine_threadsafe(

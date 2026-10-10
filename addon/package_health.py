@@ -28,6 +28,8 @@ RESTART_MESSAGE = (
     "BlenderMCP's packages were removed from disk while Blender was running. "
     "Save your work and restart Blender to restore them."
 )
+# For the Chat panel's notice line, which wraps.
+CHAT_MESSAGE = "BlenderMCP's packages were removed. Save your work and restart Blender to chat."
 # Short form for one-line spots (connection status, last_error).
 SHORT_MESSAGE = "Packages removed from disk; restart Blender"
 

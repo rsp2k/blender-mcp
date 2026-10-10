@@ -400,3 +400,11 @@ def test_login_refused_before_browser_when_packages_missing(operators, monkeypat
     assert called == [] and operators.timers == []
     assert state._login_error == package_health.RESTART_MESSAGE
     assert reports == [({'ERROR'}, package_health.RESTART_MESSAGE)]
+
+
+def test_chat_names_the_restart_when_packages_are_missing(monkeypatch):
+    from addon.chat import client as chat_client
+    monkeypatch.setattr(state, "_package_problem", "CA bundle missing")
+    assert chat_client._not_connected() == package_health.CHAT_MESSAGE
+    monkeypatch.setattr(state, "_package_problem", None)
+    assert chat_client._not_connected().startswith("Not connected.")

@@ -57,7 +57,10 @@ def _label_lines(col, lines, icon, alert=False):
 
 
 def _notice(context, snap) -> tuple[str, str] | None:
+    from .. import package_health
     from ..preferences import get_prefs
+    if package_health.packages_missing():
+        return package_health.CHAT_MESSAGE, 'ERROR'
     if not get_prefs(context).jwt_token:
         return "Log in from the BlenderMCP tab to chat.", 'LOCKED'
     client = state._client
