@@ -38,6 +38,27 @@ BACKOFF = "backoff"
 START = "start"
 
 
+
+BACKGROUND_CONNECT_ENV = "BLENDER_MCP_BACKGROUND_CONNECT"
+
+
+def stays_connected_in_this_process(background: bool, env=None) -> bool:
+    """Whether register() should install the stay-connected supervisor.
+
+    A background Blender (``blender -b``: batch renders, CLI extension
+    commands, build scripts) loads the same preferences and stored login as
+    the desktop Blender. If it connected, a refresh there would rotate the
+    shared refresh token and leave the desktop Blender holding a retired one,
+    so its next refresh fails and asks for a new login. Workers connect
+    through their own path and never reach this. Opt in with
+    BLENDER_MCP_BACKGROUND_CONNECT=1 for a deliberately headless, connected
+    Blender.
+    """
+    import os
+    if not background:
+        return True
+    return (env if env is not None else os.environ).get(BACKGROUND_CONNECT_ENV) == "1"
+
 def client_alive(client: Any) -> bool:
     """True when the client's worker is actually running.
 

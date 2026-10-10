@@ -301,11 +301,16 @@ def register():
         # lease, no preference writes.
         print(f"[BlenderMCP] Addon v{__version__} registered (background worker mode)")
     else:
-        try:
-            connection.supervisor().install()
-        except Exception as e:
-            print(f"[BlenderMCP] Could not start connection supervisor: {e}")
-        print(f"[BlenderMCP] Addon v{__version__} registered")
+        import bpy
+        if connection.stays_connected_in_this_process(bpy.app.background):
+            try:
+                connection.supervisor().install()
+            except Exception as e:
+                print(f"[BlenderMCP] Could not start connection supervisor: {e}")
+            print(f"[BlenderMCP] Addon v{__version__} registered")
+        else:
+            print(f"[BlenderMCP] Addon v{__version__} registered (background Blender: "
+                  f"not connecting; set {connection.BACKGROUND_CONNECT_ENV}=1 to connect)")
         try:
             from . import update_marker
             state._just_updated = update_marker.consume(update_marker.folder(), __version__)
