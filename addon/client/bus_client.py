@@ -25,6 +25,8 @@ from typing import Any, Optional
 
 import bpy
 
+from .. import package_health
+
 FastMCPClient = None  # type: ignore[assignment]
 StreamableHttpTransport = None  # type: ignore[assignment]
 FASTMCP_AVAILABLE = False
@@ -482,6 +484,11 @@ class BlenderMCPClient:
         except Exception as e:
             self.last_error = f"JWT refresh crashed: {e}"
             print(f"[BlenderMCP] {self.last_error}")
+            # The CA bundle vanished with the rest of the bundled packages:
+            # record it so callers stop retrying and keep the saved login.
+            if package_health.is_missing_file_error(e) and \
+                    not package_health.update_state().ok:
+                self.last_error = package_health.SHORT_MESSAGE
             return False
 
         new_jwt = payload.get("access_token", "")
@@ -550,6 +557,14 @@ class BlenderMCPClient:
             if await self._do_refresh_once():
                 self._rotate_requested = True
                 continue
+
+            # Bundled packages gone from disk: every refresh fails the same
+            # way until Blender restarts, so stop instead of retrying every
+            # 30 s. The connection keeps working until the token expires.
+            if package_health.packages_missing():
+                print("[BlenderMCP] Token refresh paused: bundled packages are "
+                      "missing from disk; restart Blender to restore them")
+                return
 
             # Refresh failed. LoginError-class failures (refresh token itself
             # expired) are fatal — bus connection is dead in the water without
@@ -1011,6 +1026,19 @@ class BlenderMCPClient:
                     self.last_error = f"Connection failed: {str(e) or type(e).__name__}"
                     print(f"[BlenderMCP] {self.last_error}")
 
+                    # Bundled packages deleted from disk under us (certifi's
+                    # CA bundle is opened per TLS context). Every retry would
+                    # fail the same way until Blender restarts, so end this
+                    # client; the supervisor sees the problem flag and holds
+                    # off, and the panel asks for a restart.
+                    if package_health.is_missing_file_error(e) and \
+                            not package_health.update_state().ok:
+                        self.last_error = package_health.SHORT_MESSAGE
+                        print("[BlenderMCP] Not reconnecting: bundled packages are "
+                              "missing from disk; restart Blender to restore them")
+                        _request_ui_redraw()
+                        return
+
                     # 401 paths split into three cases:
                     #   (a) JWT chronologically expired — _refresh_watcher
                     #       missed the window. Refresh will succeed.
@@ -1035,6 +1063,16 @@ class BlenderMCPClient:
                             backoff = 1.0
                             self.last_error = None
                             continue  # outer while: next iteration uses new self.jwt_token
+                        # The refresh failed only because the CA bundle is
+                        # gone. The login itself may be fine, so keep it for
+                        # after the restart instead of clearing it.
+                        if package_health.packages_missing():
+                            self.last_error = package_health.SHORT_MESSAGE
+                            print("[BlenderMCP] Not reconnecting: bundled packages are "
+                                  "missing from disk; keeping the saved login for "
+                                  "after a Blender restart")
+                            _request_ui_redraw()
+                            return
                         # Refresh failed → fall through to fatal path below.
                         print("[BlenderMCP] Refresh also failed — going fatal")
 

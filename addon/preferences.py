@@ -242,6 +242,61 @@ def draw_update_banner(layout, compact: bool = False):
         col.label(text="Add the Blender MCP repository for one-click updates", icon='INFO')
 
 
+def _message_lines(text: str) -> list[str]:
+    """Wrap a message to the width of the region being drawn."""
+    from .activity_format import wrap_message
+
+    ctx = bpy.context
+    region = getattr(ctx, "region", None)
+    width = getattr(region, "width", 0) or 300
+    try:
+        scale = ctx.preferences.system.ui_scale
+    except Exception:  # noqa: BLE001 - wrapping is cosmetic
+        scale = 1.0
+    return wrap_message(text, width, scale)
+
+
+def draw_package_banner(layout) -> bool:
+    """Red restart banner when bundled packages vanished from disk.
+
+    Reads the state recorded by addon.package_health (the connection
+    supervisor re-checks every tick), so drawing never touches the disk.
+    Returns True when drawn. Shared by the sidebar and the prefs panel.
+    """
+    from . import package_health
+
+    if not package_health.packages_missing():
+        return False
+    box = layout.box()
+    box.alert = True
+    col = box.column(align=True)
+    for i, line in enumerate(_message_lines(package_health.RESTART_MESSAGE)):
+        col.label(text=line, icon='ERROR' if i == 0 else 'BLANK1')
+    return True
+
+
+def _draw_login_error(layout) -> None:
+    """Why the last Login click failed, under the Login button, with Dismiss."""
+    from . import package_health
+    from . import state as _state
+
+    message = getattr(_state, "_login_error", None)
+    if not message or getattr(_state, "_auth_in_progress", False):
+        return
+    if message == package_health.RESTART_MESSAGE and package_health.packages_missing():
+        return  # draw_package_banner already says this, in red, above
+    col = layout.column(align=True)
+    col.alert = True
+    lines = _message_lines(message)
+    for i, line in enumerate(lines):
+        if i == 0:
+            row = col.row(align=True)
+            row.label(text=line, icon='ERROR')
+            row.operator("blendermcp.dismiss_login_error", text="", icon='X', emboss=False)
+        else:
+            col.label(text=line, icon='BLANK1')
+
+
 def draw_login_section(layout, prefs, compact: bool = False):
     """Login / Logout UI block — shared by the prefs panel AND the View3D sidebar.
 
@@ -272,6 +327,7 @@ def draw_login_section(layout, prefs, compact: bool = False):
         row = layout.row(align=True)
         row.label(text=display, icon='USER')
         row.operator("blendermcp.logout", text="", icon='QUIT')
+        _draw_login_error(layout)
         return
 
     box = layout.box()
@@ -319,6 +375,7 @@ def draw_login_section(layout, prefs, compact: bool = False):
             text="Login with OAuth (browser)",
             icon='URL',
         )
+    _draw_login_error(box)
 
 
 CHAT_PROVIDERS = [
@@ -631,6 +688,7 @@ class BlenderMCPPreferences(bpy.types.AddonPreferences):
         # users see when they open Preferences. No-op when we're current
         # or when the server hasn't sent a hint yet.
         draw_update_banner(layout)
+        draw_package_banner(layout)
 
         # --- Connection ---
         col = layout.column(align=True)

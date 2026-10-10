@@ -8,6 +8,12 @@ bus_client._run already retries transient failures forever with 1 s to
 crash, refresh-watcher giving up, a stop from elsewhere) and backs off
 itself when restarts keep failing before the client ever registers.
 
+If the add-on's bundled packages vanish from disk mid-session (see
+addon.package_health), every connect fails on the missing CA bundle, so
+the supervisor stops starting clients and the panel asks for a restart.
+It re-checks the disk each tick (a few stat calls, no network) and
+resumes on its own if the files come back.
+
 bpy is imported lazily so ``decide`` can be unit-tested outside Blender.
 """
 
@@ -16,7 +22,7 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from . import stage_snapshot, state
+from . import package_health, stage_snapshot, state
 
 SUPERVISOR_INTERVAL_S = 10.0
 FIRST_TICK_S = 2.0
@@ -25,6 +31,7 @@ RESTART_BACKOFF_MAX_S = 300.0
 # decide() outcomes
 DISARMED = "disarmed"
 NO_TOKEN = "no_token"
+PACKAGES_MISSING = "packages_missing"
 AUTH_IN_PROGRESS = "auth_in_progress"
 ALIVE = "alive"
 BACKOFF = "backoff"
@@ -44,10 +51,13 @@ def client_alive(client: Any) -> bool:
 
 
 def decide(armed: bool, has_token: bool, auth_in_progress: bool,
-           alive: bool, now: float, next_attempt_at: float) -> str:
+           alive: bool, now: float, next_attempt_at: float,
+           packages_ok: bool = True) -> str:
     """Pure supervisor decision for one tick."""
     if not armed:
         return DISARMED
+    if not packages_ok:
+        return PACKAGES_MISSING
     if not has_token:
         return NO_TOKEN
     if auth_in_progress:
@@ -85,6 +95,9 @@ def start_client() -> tuple[bool, str]:
         return False, "Background workers connect through run_worker_loop, not Connect."
     if not ensure_fastmcp():
         return False, " ".join(fastmcp_problem_lines())
+    if not package_health.update_state().ok:
+        request_ui_redraw()
+        return False, package_health.RESTART_MESSAGE
     prefs = get_prefs()
     if not prefs.jwt_token:
         return False, "Not logged in. Click Login first."
@@ -267,6 +280,15 @@ class ConnectionSupervisor:
             self._watched_client = None
             self.reset_backoff()
 
+        had_problem = package_health.packages_missing()
+        packages_ok = package_health.update_state().ok
+        if packages_ok and had_problem:
+            # Files came back (another Blender reinstalled them): start fresh.
+            self.reset_backoff()
+            request_ui_redraw()
+        elif not packages_ok and not had_problem:
+            request_ui_redraw()  # show the restart banner without waiting for input
+
         now = time.time()
         decision = decide(
             armed=bool(prefs.auto_connect),
@@ -275,6 +297,7 @@ class ConnectionSupervisor:
             alive=alive,
             now=now,
             next_attempt_at=self.next_attempt_at,
+            packages_ok=packages_ok,
         )
         self._log_change(decision)
         if decision != START:
@@ -327,6 +350,8 @@ class ConnectionSupervisor:
         reasons = {
             DISARMED: "off (click Connect to stay connected)",
             NO_TOKEN: "waiting for Login",
+            PACKAGES_MISSING: "paused, bundled packages are missing from disk; "
+                              "restart Blender to restore them",
             AUTH_IN_PROGRESS: "waiting for the browser login to finish",
             ALIVE: "client running",
             BACKOFF: f"restart failed {self.consecutive_failures}x, next try in "
