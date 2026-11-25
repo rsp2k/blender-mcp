@@ -11,6 +11,8 @@ wheels/
 
 # Local environment / secrets (template lives in .env.example)
 .env
+# hand-made backups of .env (hold live secrets), at any depth
+.env.bak*
 
 # canary run logs and summaries
 artifacts/
