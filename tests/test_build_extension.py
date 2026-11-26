@@ -19,28 +19,36 @@ def test_build_index_uses_the_public_base_when_given(tmp_path, monkeypatch):
     assert be.index_entry_from_archive(z)["archive_url"] == "./x.zip"
 
 
-def test_pins_from_wheels_normalizes_names_and_skips_split_versions(capsys):
-    pins = be.pins_from_wheels({
-        "linux-x64": [
-            "jaraco.classes-3.4.0-py3-none-any.whl",
-            "pydantic_core-2.46.5-cp313-cp313-manylinux_2_17_x86_64.whl",
-            "cryptography-50.0.2-cp311-abi3-manylinux2014_x86_64.whl",
-            "foo-1.0-cp311-cp311-manylinux2014_x86_64.whl",
-            "foo-2.0-cp313-cp313-manylinux2014_x86_64.whl",
-        ],
-        "macos-x64": ["cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl"],
-    })
-    assert pins["linux-x64"] == {"cryptography": "50.0.2", "jaraco-classes": "3.4.0",
-                                 "pydantic-core": "2.46.5"}
-    assert pins["macos-x64"] == {"cryptography": "48.0.1"}
-    assert "foo resolved to ['1.0', '2.0']" in capsys.readouterr().err
+def test_parse_compiled_reads_uv_output():
+    text = """jaraco-classes==3.4.0
+    # via keyring
+pydantic_core==2.46.5 ; sys_platform == 'win32'
+pywin32==312
+"""
+    assert be.parse_compiled(text) == {
+        "jaraco-classes": "3.4.0", "pydantic-core": "2.46.5", "pywin32": "312"}
 
 
-def test_committed_pins_cover_every_platform_and_keep_fastmcp_on_3():
+def test_committed_pins_cover_every_platform_and_python():
     pins = be._load_pins()
     for platform in be.BLENDER_PLATFORMS:
-        assert pins[platform]["fastmcp"].split(".")[0] == "3", platform
-        assert "requests" in pins[platform]
+        for py in be.PYTHON_VERSIONS:
+            got = pins[platform][py]
+            assert got["fastmcp"].split(".")[0] == "3", (platform, py)
+            assert "requests" in got
+
+
+def test_windows_gets_pywin32_and_no_linux_only_packages():
+    # mcp declares pywin32 for sys_platform == 'win32'; resolving on a Linux
+    # build host used to drop it and add Linux-only keyring backends instead.
+    pins = be._load_pins()
+    for py in be.PYTHON_VERSIONS:
+        assert "pywin32" in pins["windows-x64"][py], py
+        for platform in ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64"):
+            assert "pywin32" not in pins[platform][py], (platform, py)
+        for platform in ("windows-x64", "macos-x64", "macos-arm64"):
+            assert "jeepney" not in pins[platform][py], (platform, py)
+            assert "secretstorage" not in pins[platform][py], (platform, py)
 
 
 def test_an_already_built_version_is_reused_not_rebuilt(tmp_path, monkeypatch):

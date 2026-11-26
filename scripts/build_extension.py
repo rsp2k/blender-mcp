@@ -64,11 +64,16 @@ RUNTIME_DEPS = [
     "requests>=2.34.2,<3",
 ]
 
-# Exact wheel versions per Blender platform, committed. pip resolves
-# RUNTIME_DEPS within these pins, so a rebuild bundles the same wheels until
-# someone runs --relock on purpose. Per platform because they differ:
-# Intel Macs get an older cryptography, the last with a macOS 11 x86 wheel.
+# Exact wheels per Blender platform and Python version, committed. The build
+# downloads exactly these with --no-deps; --relock (needs uv) resolves them.
+# pip download can't do the resolving: --platform changes which wheel tags it
+# accepts but markers like sys_platform == 'win32' are still evaluated on the
+# build host, so a Linux build dropped pywin32 from the Windows zip and put
+# Linux-only packages (jeepney, secretstorage) in every zip. uv resolves for
+# the target platform. Versions differ per platform too: Intel Macs get an
+# older cryptography, the last with a macOS 11 x86 wheel.
 PINS_FILE = ROOT / "packaging" / "extension-wheels.lock.json"
+PINS_FORMAT = 2
 
 # Blender platform token -> pip's --platform tag. One archive is built per
 # entry, holding only the wheels pip resolves for that platform, so each
@@ -81,6 +86,14 @@ PLATFORM_WHEEL_TAGS = {
     "macos-arm64": "macosx_11_0_arm64",
 }
 BLENDER_PLATFORMS = list(PLATFORM_WHEEL_TAGS)
+# The same platforms as uv's --python-platform targets, for --relock.
+UV_TARGETS = {
+    "linux-x64": "x86_64-manylinux_2_17",
+    "linux-arm64": "aarch64-manylinux_2_17",
+    "windows-x64": "x86_64-pc-windows-msvc",
+    "macos-x64": "x86_64-apple-darwin",
+    "macos-arm64": "aarch64-apple-darwin",
+}
 
 # Python versions Blender ships across the 4.2+ range we support:
 #   3.11 — Blender 4.2 through 4.5 LTS
@@ -113,65 +126,97 @@ def _wheel_name_version(filename: str) -> tuple[str, str]:
     return re.sub(r"[-_.]+", "-", name).lower(), version
 
 
-def pins_from_wheels(wheels_by_platform: dict[str, list[str]]) -> dict[str, dict[str, str]]:
-    """{platform: {project: version}} for a --relock. A project resolved to two
-    versions on one platform (different Pythons) is left unpinned there."""
-    pins: dict[str, dict[str, str]] = {}
-    for platform, files in sorted(wheels_by_platform.items()):
-        seen: dict[str, set[str]] = {}
-        for f in files:
-            name, version = _wheel_name_version(f)
-            seen.setdefault(name, set()).add(version)
-        for name, versions in seen.items():
-            if len(versions) > 1:
-                print(f"  WARNING: {platform}: {name} resolved to {sorted(versions)}; "
-                      "left unpinned", file=sys.stderr)
-        pins[platform] = {n: next(iter(v)) for n, v in sorted(seen.items()) if len(v) == 1}
+def parse_compiled(text: str) -> dict[str, str]:
+    """``name==version`` lines from ``uv pip compile`` -> {project: version}."""
+    pins: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].split(";", 1)[0].strip()
+        m = re.fullmatch(r"([A-Za-z0-9._-]+)==([^\s;]+)", line)
+        if m:
+            pins[re.sub(r"[-_.]+", "-", m.group(1)).lower()] = m.group(2)
     return pins
 
 
-def _load_pins() -> dict[str, dict[str, str]]:
+def _relock(previous: dict | None, upgrade: bool) -> dict:
+    """Resolve RUNTIME_DEPS for every (platform, Python) with uv.
+
+    Unless ``upgrade``, the previous pins for that platform are passed as
+    constraints, so only missing packages are added and nothing else moves.
+    """
+    if shutil.which("uv") is None:
+        sys.exit("ERROR: --relock needs uv (https://docs.astral.sh/uv/)")
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    tmp = ROOT / "dist" / "relock"
+    tmp.mkdir(parents=True, exist_ok=True)
+    reqs = tmp / "requirements.in"
+    reqs.write_text("".join(f"{d}\n" for d in RUNTIME_DEPS))
+    for platform, target in UV_TARGETS.items():
+        out[platform] = {}
+        old: dict[str, str] = {}
+        if previous and not upgrade:
+            for per_py in previous["platforms"].get(platform, {}).values():
+                old.update(per_py)
+        cfile = tmp / f"constraints-{platform}.txt"
+        cfile.write_text("".join(f"{n}=={v}\n" for n, v in sorted(old.items())))
+        for py in PYTHON_VERSIONS:
+            print(f"  resolving {platform} (py{py})...")
+            proc = subprocess.run(
+                ["uv", "pip", "compile", str(reqs), "--python-platform", target,
+                 "--python-version", py, "--only-binary", ":all:", "-c", str(cfile),
+                 "--no-header", "--no-annotate", "--quiet"],
+                capture_output=True, text=True, check=False,
+            )
+            if proc.returncode != 0:
+                print(proc.stderr, file=sys.stderr)
+                sys.exit(f"ERROR: uv could not resolve {platform} py{py}")
+            out[platform][py] = parse_compiled(proc.stdout)
+    return {"format": PINS_FORMAT, "platforms": out}
+
+
+def _upgrade_pins_format(old: dict) -> dict:
+    """Format 1 was {platform: {project: version}}; reuse it as constraints."""
+    return {"format": PINS_FORMAT,
+            "platforms": {p: {py: dict(v) for py in PYTHON_VERSIONS} for p, v in old.items()}}
+
+
+def _load_pins() -> dict[str, dict[str, dict[str, str]]]:
+    """{platform: {python: {project: version}}} from PINS_FILE."""
     if not PINS_FILE.exists():
         sys.exit(f"ERROR: {PINS_FILE.relative_to(ROOT)} is missing. Run with --relock "
-                 "to resolve fresh and write it.")
-    pins = json.loads(PINS_FILE.read_text())
-    missing = [p for p in BLENDER_PLATFORMS if p not in pins]
+                 "(needs uv) to resolve and write it.")
+    data = json.loads(PINS_FILE.read_text())
+    if data.get("format") != PINS_FORMAT:
+        sys.exit(f"ERROR: {PINS_FILE.name} is an older format. Run with --relock.")
+    pins = data["platforms"]
+    missing = [(p, py) for p in BLENDER_PLATFORMS for py in PYTHON_VERSIONS
+               if py not in pins.get(p, {})]
     if missing:
         sys.exit(f"ERROR: {PINS_FILE.name} has no pins for {missing}. Run with --relock.")
     return pins
 
 
-def _download_wheels(work_dir: Path, pins: dict[str, dict[str, str]] | None
+def _download_wheels(work_dir: Path, pins: dict[str, dict[str, dict[str, str]]]
                      ) -> dict[str, list[str]]:
-    """Fetch wheels for RUNTIME_DEPS, one directory per Blender platform.
+    """Fetch exactly the pinned wheels, one directory per Blender platform.
 
-    Runs ``pip download`` once per (platform, python-version) pair into
-    ``work_dir/<platform>/``, so the files pip resolves for a platform
-    are exactly that platform's wheel set (its C extensions plus the
-    pure-Python wheels, which are small and repeat in every directory).
-    ``pins`` constrains each platform to its locked versions; None (only
-    for --relock) resolves fresh.
-    Returns {blender_platform: [wheel filenames]}.
+    Runs ``pip download --no-deps`` once per (platform, python-version) pair
+    into ``work_dir/<platform>/``; pure-Python wheels repeat across Pythons
+    and land once. Returns {blender_platform: [wheel filenames]}.
     """
     result: dict[str, list[str]] = {}
     for platform, wheel_tag in PLATFORM_WHEEL_TAGS.items():
         target = work_dir / platform
         target.mkdir(parents=True, exist_ok=True)
-        constraints: list[str] = []
-        if pins is not None:
-            cfile = work_dir / f"constraints-{platform}.txt"
-            cfile.write_text("".join(f"{n}=={v}\n" for n, v in pins[platform].items()))
-            constraints = ["-c", str(cfile)]
         for py in PYTHON_VERSIONS:
             print(f"  fetching wheels for {platform} (py{py})...")
             cmd = [
                 sys.executable, "-m", "pip", "download",
+                "--no-deps",
                 "--only-binary=:all:",
                 "--python-version", py,
                 "--platform", wheel_tag,
                 "--dest", str(target),
-                *constraints,
-                *RUNTIME_DEPS,
+                *(f"{n}=={v}" for n, v in sorted(pins[platform][py].items())),
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if proc.returncode != 0:
@@ -370,9 +415,23 @@ def main() -> None:
     parser.add_argument(
         "--relock",
         action="store_true",
-        help=f"Resolve RUNTIME_DEPS fresh and rewrite {PINS_FILE.name} from the result.",
+        help=f"Resolve RUNTIME_DEPS per platform with uv and rewrite {PINS_FILE.name}, "
+             "keeping existing versions; then bump the version to ship it.",
+    )
+    parser.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="With --relock: ignore the existing pins and take the newest versions.",
     )
     args = parser.parse_args()
+
+    if args.relock:
+        previous = json.loads(PINS_FILE.read_text()) if PINS_FILE.exists() else None
+        if previous and previous.get("format") != PINS_FORMAT:
+            previous = _upgrade_pins_format(previous)
+        PINS_FILE.write_text(json.dumps(_relock(previous, args.upgrade), indent=2) + "\n")
+        print(f"  wrote {PINS_FILE.relative_to(ROOT)}")
+        return
 
     version = _read_addon_version()
 
@@ -380,7 +439,7 @@ def main() -> None:
     # `make prod` runs this on every deploy, so an unchanged version reuses
     # its archives and only rewrites the index.
     existing = [DIST_DIR / archive_name(version, p) for p in BLENDER_PLATFORMS]
-    if all(z.exists() for z in existing) and not (args.rebuild or args.relock):
+    if all(z.exists() for z in existing) and not args.rebuild:
         print(f"blender_mcp extension {version} is already built; reusing its archives "
               "(bump the version to ship changes)")
         index_path = _write_index(existing)
@@ -398,13 +457,10 @@ def main() -> None:
         print(f"  reusing existing {work_dir}")
         wheels_by_platform = {p: _wheels_in(work_dir / p) for p in BLENDER_PLATFORMS}
     else:
-        pins = None if args.relock else _load_pins()
+        pins = _load_pins()
         if work_dir.exists():
             shutil.rmtree(work_dir)
         wheels_by_platform = _download_wheels(work_dir, pins)
-    if args.relock:
-        PINS_FILE.write_text(json.dumps(pins_from_wheels(wheels_by_platform), indent=2) + "\n")
-        print(f"  wrote {PINS_FILE.relative_to(ROOT)}")
 
     zip_paths = []
     for platform, wheel_files in wheels_by_platform.items():
