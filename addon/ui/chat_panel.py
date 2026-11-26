@@ -208,10 +208,9 @@ def _draw_key_change_actions(col, snap, wrap, checking: bool) -> None:
     Remove asks first, in place: a confirm line with Remove and Keep."""
     col.separator(factor=0.8)
     if snap["key_remove_armed"]:
-        ask = col.column(align=True)
-        ask.alert = True
-        _label_lines(ask, wrap("Remove your key from the server? Chat goes "
-                               "back to the server default.", reserve=40.0), 'QUESTION')
+        _label_lines(col.column(align=True),
+                     wrap("Remove your key from the server? Chat goes back to "
+                          "the server default.", reserve=40.0), 'QUESTION', alert=True)
         row = col.row(align=True)
         row.enabled = not checking
         sure = row.row(align=True)
