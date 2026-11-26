@@ -90,11 +90,23 @@ The key is sent once to the BlenderMCP server and stored there encrypted. It is 
 
 Once your key is saved, the trial row in the Chat panel is replaced by a quieter one that reads **Using your Claude key**, with a **Change key** button beside it. On a narrow sidebar the label shortens to **Your Claude key** or **Your key**.
 
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-own-key-row.webp" width="283" height="239" alt="The Chat panel with a saved key: under the Claude Haiku 4.5 › Fable 5.1 model button, a grayed-out row with a key icon reads Using your Claude key, with a Change key button beside it. Below are the Ask for something in this scene hint, the message field and the Reader button." />
+</div>
+
 **To use a different key**, click **Change key**. The same key box opens, this time headed **Paste a new Claude API key**. Paste the new key and click **Save key**. It goes through the same check with Anthropic, and your current key keeps working until the new one passes; if the check fails, nothing changes and the box says why.
+
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-change-key-open.webp" width="283" height="332" alt="The Chat panel after clicking Change key, which now shows pressed. Below it, a box headed Paste a new Claude API key with an empty field, Get a key and Save key buttons, the note Checked before it replaces your current key. Stored encrypted on the server, never in Blender, and Cancel and Remove key buttons at the bottom." />
+</div>
 
 **To close the box without changing anything**, click **Cancel** at the bottom of the box, or click **Change key** again.
 
 **To remove your key**, click **Remove key** at the bottom of the box. The box asks **Remove your key from the server?** before anything happens. Click **Remove** to go ahead, or **Keep** to back out. Chat then goes back to the server default. On mcp.blender.bet that means the free trial, so once the trial is used up, chat stops working until you add a key again, and the key box opens by itself to ask for one.
+
+<div class="shot-single not-content">
+  <img src="/img/chat/chat-remove-key-confirm.webp" width="267" height="191" alt="The key box after clicking Remove key. In place of Cancel and Remove key, a question icon and the line Remove your key from the server? Chat goes back to the server default, above a red Remove button and a Keep button." />
+</div>
 
 ### In Preferences instead
 
